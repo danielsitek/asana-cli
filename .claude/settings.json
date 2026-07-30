@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(grep *)",
+      "Bash(ls *)",
+      "Bash(ls)",
+      "Bash(find *)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git show*)",
+      "Bash(glab *)",
+      "Bash(cat *)",
+      "Bash(sed *)",
+      "Bash(ollama run *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [],
+    "Stop": []
+  },
+  "enabledMcpjsonServers": [],
+  "enableAllProjectMcpServers": true
+}
