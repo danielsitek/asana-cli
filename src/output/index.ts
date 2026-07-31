@@ -173,3 +173,70 @@ export const renderTaskCreation = (
   }
   return `${lines.join("\n")}\n`;
 };
+
+const renderLeafValue = (value: unknown): string =>
+  value === null || value === undefined
+    ? "—"
+    : typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+
+const fieldValue = (
+  resource: Record<string, unknown>,
+  field: string,
+): unknown => {
+  let current: unknown = resource;
+  for (const segment of field.split(".")) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current) ||
+      !Object.hasOwn(current, segment)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+};
+
+export const renderCommentList = (
+  comments: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): string => {
+  const rows = comments.map((comment) =>
+    fields.map((field) => renderLeafValue(fieldValue(comment, field))),
+  );
+  const widths = fields.map((field, index) =>
+    Math.max(
+      field.length,
+      ...rows.map((row) =>
+        Math.max(...row[index]!.split("\n").map((line) => line.length)),
+      ),
+    ),
+  );
+  const header = fields
+    .map((field, index) => field.padEnd(widths[index]!))
+    .join("  ");
+  const body = rows.flatMap((row) => {
+    const cellLines = row.map((cell) => cell.split("\n"));
+    const height = Math.max(...cellLines.map((lines) => lines.length));
+    return Array.from({ length: height }, (_, lineIndex) =>
+      cellLines
+        .map((lines, columnIndex) =>
+          (lines[lineIndex] ?? "").padEnd(widths[columnIndex]!),
+        )
+        .join("  ")
+        .trimEnd(),
+    );
+  });
+  return [header, ...body].join("\n") + "\n";
+};
+
+export const renderCommentScanWarning = (scanTruncated: boolean): string =>
+  scanTruncated
+    ? "Warning: story scan cap reached; more comments may exist.\n"
+    : "";
+
+export const renderCommentDetail = (comment: Record<string, unknown>): string =>
+  renderTaskDetail(comment);
