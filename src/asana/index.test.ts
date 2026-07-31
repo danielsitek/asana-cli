@@ -726,4 +726,157 @@ describe("AsanaHttpClient", () => {
       expect(result.error.kind).toBe("invalid_response");
     }
   });
+
+  test("updates a task with the exact PUT request", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(request.method).toBe("PUT");
+      expect(request.headers.get("authorization")).toBe("Bearer secret-token");
+      expect(request.headers.get("content-type")).toBe("application/json");
+      expect(new URL(request.url).pathname).toBe("/api/1.0/tasks/123");
+      expect(await request.json()).toEqual({
+        data: {
+          name: "Renamed",
+          notes: "Replacement\n",
+          assignee: null,
+          due_on: "2028-02-29",
+          completed: true,
+        },
+      });
+      return Response.json({
+        data: {
+          gid: "123",
+          name: "Renamed",
+          notes: "Replacement\n",
+          assignee: null,
+          due_on: "2028-02-29",
+          completed: true,
+        },
+      });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      {
+        name: "Renamed",
+        notes: "Replacement\n",
+        assignee: null,
+        due_on: "2028-02-29",
+        completed: true,
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        gid: "123",
+        name: "Renamed",
+        notes: "Replacement\n",
+        assignee: null,
+        due_on: "2028-02-29",
+        completed: true,
+      },
+    });
+  });
+
+  test.each([429, 502, 503, 504])(
+    "retries PUT %i responses",
+    async (status) => {
+      let attempts = 0;
+      const waits: number[] = [];
+      const baseUrl = serverFor(() => {
+        attempts += 1;
+        return attempts === 1
+          ? new Response(
+              null,
+              status === 429
+                ? { status, headers: { "Retry-After": "3" } }
+                : { status },
+            )
+          : Response.json({ data: { gid: "123", name: "Updated" } });
+      });
+      const result = await new AsanaHttpClient({
+        baseUrl,
+        random: () => 0,
+        sleep: async (milliseconds) => {
+          waits.push(milliseconds);
+        },
+      }).updateTask("token", "123", { name: "Updated" });
+
+      expect(result.ok).toBe(true);
+      expect(attempts).toBe(2);
+      expect(waits).toEqual([status === 429 ? 3000 : 1000]);
+    },
+  );
+
+  test("retries a timed-out PUT network request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Promise<Response>(() => undefined)
+        : Response.json({ data: { gid: "123", completed: true } });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 1,
+      requestTimeoutMs: 1,
+      sleep: async () => undefined,
+    }).updateTask("token", "123", { completed: true });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  test("maps PUT API failures without retrying unsafe statuses", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response("unsafe response details", { status: 400 });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret",
+      "123",
+      { name: "Updated" },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "api",
+        status: 400,
+        message: "Asana API request failed (400)",
+      },
+    });
+    expect(attempts).toBe(1);
+  });
+
+  test("returns retry exhaustion and malformed PUT response failures", async () => {
+    const exhaustedUrl = serverFor(() => new Response(null, { status: 503 }));
+    const exhausted = await new AsanaHttpClient({
+      baseUrl: exhaustedUrl,
+      maxRetries: 1,
+      sleep: async () => undefined,
+    }).updateTask("token", "123", { name: "Updated" });
+    expect(exhausted).toEqual({
+      ok: false,
+      error: {
+        kind: "rate_limit",
+        status: 503,
+        message: "Asana request retries exhausted",
+      },
+    });
+
+    const malformedUrl = serverFor(() => Response.json({ data: "invalid" }));
+    const malformed = await new AsanaHttpClient({
+      baseUrl: malformedUrl,
+    }).updateTask("token", "123", { name: "Updated" });
+    expect(malformed).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
 });

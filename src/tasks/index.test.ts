@@ -1,6 +1,50 @@
 import { describe, expect, test } from "bun:test";
 
-import { DEFAULT_FIELDS, parseTaskId, validateFieldList } from "./index.ts";
+import { err, ok } from "../shared/result.ts";
+import {
+  DEFAULT_FIELDS,
+  executeTaskUpdate,
+  parseTaskId,
+  prepareTaskUpdate,
+  validateFieldList,
+  type PreparedTaskUpdate,
+  type TaskMutation,
+  type TaskMutationGateway,
+  type TaskUpdateDependencies,
+  type TaskUpdateOptions,
+} from "./index.ts";
+
+class RecordingWriter implements TaskMutationGateway {
+  calls: Array<
+    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+  > = [];
+
+  async updateTask(token: string, taskId: string, mutation: TaskMutation) {
+    this.calls.push({ token, taskId, mutation });
+    return ok({ gid: taskId });
+  }
+}
+
+const dependenciesFor = (
+  writer: RecordingWriter,
+  overrides: Partial<TaskUpdateDependencies> = {},
+): TaskUpdateDependencies => ({
+  writer,
+  resolveAuthenticatedUserGid: async () => ok("9001"),
+  readFile: async () => "file contents",
+  readStdin: async () => "stdin contents",
+  ...overrides,
+});
+
+const preparedFor = (
+  taskId: string,
+  options: TaskUpdateOptions,
+): PreparedTaskUpdate => {
+  const prepared = prepareTaskUpdate(taskId, options);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) throw new Error(prepared.error.message);
+  return prepared.value;
+};
 
 describe("DEFAULT_FIELDS", () => {
   test("selects the supported task detail fields", () => {
@@ -75,5 +119,118 @@ describe("validateFieldList", () => {
       ok: false,
       error: "Fields list cannot contain empty segments",
     });
+  });
+});
+
+describe("task update workflow", () => {
+  test.each([
+    ["invalid identifier", "not-a-gid", { name: "x" }],
+    ["no mutation", "123", {}],
+    ["conflicting notes", "123", { notes: "x", notesFile: "x.md" }],
+    ["invalid assignee", "123", { assignee: "ada@example.com" }],
+    ["invalid date shape", "123", { dueOn: "31-12-2026" }],
+    ["impossible date", "123", { dueOn: "2026-02-29" }],
+    ["invalid completed", "123", { completed: "yes" }],
+  ])("rejects %s during preparation", (_, taskId, options) => {
+    const result = prepareTaskUpdate(taskId, options);
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("builds all supported mutations and resolves me before writing", async () => {
+    const writer = new RecordingWriter();
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("https://app.asana.com/0/111/222", {
+        name: "Renamed",
+        notes: "Replacement",
+        assignee: "me",
+        dueOn: "2028-02-29",
+        completed: "false",
+      }),
+      dependenciesFor(writer),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(writer.calls).toEqual([
+      {
+        token: "secret",
+        taskId: "222",
+        mutation: {
+          name: "Renamed",
+          notes: "Replacement",
+          assignee: "9001",
+          due_on: "2028-02-29",
+          completed: false,
+        },
+      },
+    ]);
+  });
+
+  test("preserves file and stdin notes without modification", async () => {
+    for (const [notesFile, expected] of [
+      ["description.md", "file notes\n\n"],
+      ["-", "stdin notes\n"],
+    ] as const) {
+      const writer = new RecordingWriter();
+      await executeTaskUpdate(
+        "secret",
+        preparedFor("123", { notesFile }),
+        dependenciesFor(writer, {
+          readFile: async (path) => {
+            expect(path).toBe("description.md");
+            return "file notes\n\n";
+          },
+          readStdin: async () => "stdin notes\n",
+        }),
+      );
+      expect(writer.calls[0]?.mutation.notes).toBe(expected);
+    }
+  });
+
+  test("maps explicit nulls and booleans", async () => {
+    const writer = new RecordingWriter();
+    await executeTaskUpdate(
+      "secret",
+      preparedFor("123", {
+        assignee: "null",
+        dueOn: "null",
+        completed: "true",
+      }),
+      dependenciesFor(writer),
+    );
+    expect(writer.calls[0]?.mutation).toEqual({
+      assignee: null,
+      due_on: null,
+      completed: true,
+    });
+  });
+
+  test("does not write when notes or identity resolution fails", async () => {
+    const writer = new RecordingWriter();
+    const unreadable = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { notesFile: "missing.md" }),
+      dependenciesFor(writer, {
+        readFile: async () => {
+          throw new Error("sensitive path");
+        },
+      }),
+    );
+    const unresolved = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { assignee: "me" }),
+      dependenciesFor(writer, {
+        resolveAuthenticatedUserGid: async () =>
+          err({ kind: "authentication", message: "unsafe detail" }),
+      }),
+    );
+
+    expect(unreadable).toEqual({
+      ok: false,
+      error: { kind: "invalid_usage", message: "Unable to read notes file" },
+    });
+    expect(unresolved.ok).toBe(false);
+    expect(writer.calls).toHaveLength(0);
   });
 });

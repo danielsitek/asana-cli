@@ -13,6 +13,8 @@ import type {
 import {
   type Task,
   type TaskGateway,
+  type TaskMutation,
+  type TaskMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
@@ -99,7 +101,11 @@ const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
 };
 
 export class AsanaHttpClient
-  implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway
+  implements
+    IdentityGateway,
+    MyTasksDiscoveryGateway,
+    TaskGateway,
+    TaskMutationGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -117,14 +123,18 @@ export class AsanaHttpClient
     this.#now = options.now ?? Date.now;
   }
 
-  async #get<T>(
+  async #request<T>(
     token: string,
     path: string,
-    searchParams: Readonly<Record<string, string>>,
+    options: Readonly<{
+      method: "GET" | "PUT";
+      searchParams?: Readonly<Record<string, string>>;
+      body?: unknown;
+    }>,
     schema: z.ZodType<T>,
   ): Promise<Result<T, IdentityError>> {
     const url = new URL(path, `${this.#baseUrl}/`);
-    for (const [key, value] of Object.entries(searchParams)) {
+    for (const [key, value] of Object.entries(options.searchParams ?? {})) {
       url.searchParams.set(key, value);
     }
 
@@ -136,7 +146,17 @@ export class AsanaHttpClient
       );
       try {
         const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
+          method: options.method,
+          headers:
+            options.body === undefined
+              ? { Authorization: `Bearer ${token}` }
+              : {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+          ...(options.body === undefined
+            ? {}
+            : { body: JSON.stringify(options.body) }),
           signal: controller.signal,
         });
         if (!response.ok) {
@@ -183,10 +203,10 @@ export class AsanaHttpClient
     token: string,
   ): Promise<Result<Identity, IdentityError>> {
     const schema = z.object({ data: userSchema });
-    const result = await this.#get(
+    const result = await this.#request(
       token,
       "users/me",
-      { opt_fields: "gid,name" },
+      { method: "GET", searchParams: { opt_fields: "gid,name" } },
       schema,
     );
     if (!result.ok) return result;
@@ -208,12 +228,15 @@ export class AsanaHttpClient
       })
       .passthrough();
 
-    const utlResult = await this.#get(
+    const utlResult = await this.#request(
       token,
       "users/me/user_task_list",
       {
-        workspace: workspaceGid,
-        opt_fields: "gid,workspace.gid",
+        method: "GET",
+        searchParams: {
+          workspace: workspaceGid,
+          opt_fields: "gid,workspace.gid",
+        },
       },
       utlSchema,
     );
@@ -243,12 +266,12 @@ export class AsanaHttpClient
       })
       .passthrough();
 
-    const sectionsResult = await this.#get(
+    const sectionsResult = await this.#request(
       token,
       `projects/${utlGid}/sections`,
       {
-        limit: "100",
-        opt_fields: "gid,name",
+        method: "GET",
+        searchParams: { limit: "100", opt_fields: "gid,name" },
       },
       sectionsSchema,
     );
@@ -283,13 +306,16 @@ export class AsanaHttpClient
       })
       .passthrough();
 
-    const customFieldsResult = await this.#get(
+    const customFieldsResult = await this.#request(
       token,
       `projects/${utlGid}/custom_field_settings`,
       {
-        limit: "100",
-        opt_fields:
-          "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+        method: "GET",
+        searchParams: {
+          limit: "100",
+          opt_fields:
+            "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+        },
       },
       customFieldsSchema,
     );
@@ -335,10 +361,42 @@ export class AsanaHttpClient
     const taskSchema = buildTaskSchema(fields);
     const schema = z.object({ data: taskSchema });
 
-    const result = await this.#get(
+    const result = await this.#request(
       token,
       `tasks/${taskId}`,
-      { opt_fields: fields.join(",") },
+      { method: "GET", searchParams: { opt_fields: fields.join(",") } },
+      schema,
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data);
+  }
+
+  async updateTask(
+    token: string,
+    taskId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task, TaskReadError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const schema = z.object({ data: buildTaskSchema([]) });
+    const result = await this.#request(
+      token,
+      `tasks/${taskId}`,
+      { method: "PUT", body: { data: mutation } },
       schema,
     );
     if (!result.ok) {

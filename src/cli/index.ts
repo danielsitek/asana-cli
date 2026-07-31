@@ -1,4 +1,5 @@
 import { Command, CommanderError } from "commander";
+import { readFile } from "node:fs/promises";
 
 import { resolveToken } from "../auth/index.ts";
 import {
@@ -19,8 +20,11 @@ import type {
 } from "../identity/index.ts";
 import {
   type TaskGateway,
+  type TaskMutationGateway,
   type TaskReadError,
+  executeTaskUpdate,
   parseTaskId,
+  prepareTaskUpdate,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -45,6 +49,9 @@ export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
   taskReader?: TaskGateway;
+  taskWriter?: TaskMutationGateway;
+  readFile?: (path: string) => Promise<string>;
+  readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
@@ -587,6 +594,98 @@ export const execute = async (
 
   tasksGet.exitOverride();
   tasksGet.configureOutput(captureOutput);
+
+  const tasksUpdate = tasks
+    .command("update <id>")
+    .description("update a task's fields")
+    .option("--name <text>", "replace the task name")
+    .option("--notes <text>", "replace task notes")
+    .option("--notes-file <path>", "replace notes from a file or stdin with -")
+    .option("--assignee <value>", "set me, a user GID, or null")
+    .option("--due-on <date>", "set YYYY-MM-DD or null")
+    .option("--completed <boolean>", "set true or false")
+    .action(
+      async (
+        idArg: string,
+        options: Readonly<{
+          name?: string;
+          notes?: string;
+          notesFile?: string;
+          assignee?: string;
+          dueOn?: string;
+          completed?: string;
+        }>,
+      ) => {
+        invoked = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+
+        const prepared = prepareTaskUpdate(idArg, options);
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+        if (!dependencies.taskWriter) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Task writer is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+
+        const updated = await executeTaskUpdate(
+          tokenResult.value,
+          prepared.value,
+          {
+            writer: dependencies.taskWriter,
+            resolveAuthenticatedUserGid: async (token) => {
+              const identity =
+                await dependencies.identity.getAuthenticatedUser(token);
+              return identity.ok
+                ? { ok: true, value: identity.value.gid }
+                : identity;
+            },
+            readFile:
+              dependencies.readFile ??
+              ((path) => readFile(path, { encoding: "utf8" })),
+            readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
+          },
+        );
+        if (!updated.ok) {
+          result =
+            updated.error.kind === "invalid_usage"
+              ? usageError(updated.error.message)
+              : renderTaskReadFailure(updated.error.kind);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(updated.value)
+            : renderTaskDetail(updated.value),
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    );
+
+  tasksUpdate.exitOverride();
+  tasksUpdate.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);
