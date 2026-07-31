@@ -5,13 +5,181 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - run: bun run check
+
+  native-build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            uname: arm64
+            file-arch: arm64
+            macos: true
+          - target: darwin-x64
+            runner: macos-15-intel
+            uname: x86_64
+            file-arch: x86_64
+            macos: true
+          - target: linux-x64-baseline
+            runner: ubuntu-24.04
+            uname: x86_64
+            file-arch: x86-64
+            macos: false
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            uname: aarch64
+            file-arch: aarch64
+            macos: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Verify native runner
+        shell: bash
+        run: test "$(uname -m)" = "${{ matrix.uname }}"
+      - name: Build isolated executable
+        shell: bash
+        env:
+          ASANA_CLI_BUILD_CANARY: asana-cli-ci-secret-like-canary-7d51390b
+        run: |
+          bun run build:target "${{ matrix.target }}"
+          binary="dist/release/${{ matrix.target }}/asana-cli"
+          if strings "$binary" | grep -F -- "$ASANA_CLI_BUILD_CANARY"; then
+            echo "Build environment canary was embedded in $binary" >&2
+            exit 1
+          fi
+      - name: Verify binary architecture
+        shell: bash
+        run: |
+          description="$(file "dist/release/${{ matrix.target }}/asana-cli")"
+          echo "$description"
+          [[ "$description" == *"${{ matrix.file-arch }}"* ]]
+      - name: Ad-hoc sign macOS executable
+        if: matrix.macos
+        shell: bash
+        run: |
+          binary="dist/release/${{ matrix.target }}/asana-cli"
+          codesign --force --deep --sign - --timestamp=none \
+            --entitlements config/macos-entitlements.plist "$binary"
+          codesign --verify --deep --strict --verbose=2 "$binary"
+      - name: Run native packaged smoke
+        run: bun run smoke:executable --binary "dist/release/${{ matrix.target }}/asana-cli"
+      - name: Preserve executable mode and signature
+        shell: bash
+        run: |
+          mkdir -p dist/raw
+          tar -cf "dist/raw/${{ matrix.target }}.tar" \
+            -C "dist/release/${{ matrix.target }}" asana-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ matrix.target }}
+          path: dist/raw/${{ matrix.target }}.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    needs: native-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*
+          path: raw
+          merge-multiple: true
+      - name: Validate and extract native artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in darwin-arm64 darwin-x64 linux-x64-baseline linux-arm64; do
+            archive="raw/${target}.tar"
+            test -f "$archive"
+            mapfile -t members < <(tar -tf "$archive")
+            test "${#members[@]}" -eq 1
+            test "${members[0]}" = "asana-cli"
+            mkdir -p "release-input/$target"
+            tar -xf "$archive" -C "release-input/$target"
+            chmod 0755 "release-input/$target/asana-cli"
+          done
+      - name: Package release assets
+        shell: bash
+        run: |
+          version="$(bun -e 'const p=await Bun.file("package.json").json(); process.stdout.write(p.version)')"
+          bun run package:release --input release-input --output release-assets --version "$version"
+          bun run formula:generate --checksums release-assets/SHA256SUMS \
+            --output release-assets/asana-cli.rb --version "$version" \
+            --repository "${{ github.repository }}"
+          ruby -c release-assets/asana-cli.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  homebrew-install:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            uname: arm64
+          - runner: macos-15-intel
+            uname: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: test "$(uname -m)" = "${{ matrix.uname }}"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Install and test formula from current artifacts
+        shell: bash
+        run: |
+          version="$(bun -e 'const p=await Bun.file("package.json").json(); process.stdout.write(p.version)')"
+          assets="$(pwd)/release-assets"
+          bun run formula:generate --checksums release-assets/SHA256SUMS \
+            --output "$RUNNER_TEMP/asana-cli.rb" --version "$version" \
+            --base-url "file://$assets"
+          ruby -c "$RUNNER_TEMP/asana-cli.rb"
+          brew install --formula "$RUNNER_TEMP/asana-cli.rb"
+          brew test asana-cli
+      - name: Remove test formula
+        if: always()
+        run: brew uninstall asana-cli || true
