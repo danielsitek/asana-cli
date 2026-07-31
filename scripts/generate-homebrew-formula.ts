@@ -22,7 +22,7 @@ const parseChecksums = (
   const checksums = new Map<ReleaseTarget, string>();
 
   for (const line of manifest.split("\n").filter((value) => value !== "")) {
-    const match = /^([0-9a-f]+)  (\S+)$/.exec(line);
+    const match = /^([0-9a-f]+) {2}(\S+)$/.exec(line);
     if (match === null) throw new Error(`Malformed checksum line: ${line}`);
     const checksum = sha256Schema.safeParse(match[1]);
     if (!checksum.success)
