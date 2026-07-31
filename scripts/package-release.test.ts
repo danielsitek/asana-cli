@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -87,5 +87,73 @@ describe("release packaging", () => {
     await expect(
       packageRelease({ ...setup, version: "v0.1" }, async () => undefined),
     ).rejects.toThrow();
+  });
+
+  const withFakeCommandsOnPath = async (
+    exitCode: number,
+  ): Promise<Readonly<{ binDirectory: string; env: NodeJS.Dict<string> }>> => {
+    const binDirectory = await mkdtemp(`${tmpdir()}/asana-cli-fake-bin-`);
+    temporaryDirectories.push(binDirectory);
+    const tarScript = join(binDirectory, "tar");
+    await writeFile(
+      tarScript,
+      `#!/bin/sh\nfor arg in "$@"; do\n  if [ "$prev" = "-cf" ]; then touch "$arg"; fi\n  prev="$arg"\ndone\nexit ${exitCode}\n`,
+    );
+    const gzipScript = join(binDirectory, "gzip");
+    await writeFile(
+      gzipScript,
+      `#!/bin/sh\ntarget=$(eval echo \\$$#)\nif [ ${exitCode} -eq 0 ]; then mv "$target" "$target.gz"; fi\nexit ${exitCode}\n`,
+    );
+    const shaScript = join(binDirectory, "sha256sum");
+    await writeFile(shaScript, `#!/bin/sh\nexit ${exitCode}\n`);
+    for (const scriptPath of [tarScript, gzipScript, shaScript]) {
+      await chmod(scriptPath, 0o755);
+    }
+    return {
+      binDirectory,
+      env: { ...process.env, PATH: `${binDirectory}:${process.env.PATH}` },
+    };
+  };
+
+  test("packages a release end-to-end using the default command runner", async () => {
+    const setup = await fixture();
+    const fake = await withFakeCommandsOnPath(0);
+    const priorPath = process.env.PATH;
+    process.env.PATH = fake.env.PATH;
+    try {
+      const packaged = await packageRelease({ ...setup, version: "0.1.0" });
+      expect(packaged.archives).toHaveLength(4);
+    } finally {
+      process.env.PATH = priorPath;
+    }
+  });
+
+  test("surfaces a failure from the default command runner", async () => {
+    const setup = await fixture();
+    const fake = await withFakeCommandsOnPath(1);
+    const priorPath = process.env.PATH;
+    process.env.PATH = fake.env.PATH;
+    try {
+      await expect(
+        packageRelease({ ...setup, version: "0.1.0" }),
+      ).rejects.toThrow("failed with exit 1");
+    } finally {
+      process.env.PATH = priorPath;
+    }
+  });
+
+  describe("CLI entry point", () => {
+    test("fails with a usage message when required flags are missing", async () => {
+      const proc = Bun.spawn(["bun", "run", "package-release.ts"], {
+        cwd: import.meta.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited).not.toBe(0);
+      expect(stderr).toContain(
+        "Usage: package-release.ts --input <dir> --output <dir> --version <x.y.z>",
+      );
+    });
   });
 });

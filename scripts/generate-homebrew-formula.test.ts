@@ -99,4 +99,57 @@ describe("Homebrew formula generator", () => {
       "file:///tmp/current-run-assets/asana-cli-v0.1.0-darwin-arm64.tar.gz",
     );
   });
+
+  test("rejects a repository that is not owner/name", async () => {
+    const setup = await fixture();
+    await expect(
+      generateHomebrewFormula({
+        ...setup,
+        version: "0.1.0",
+        repository: "not-a-valid-repository!!",
+      }),
+    ).rejects.toThrow("Repository must use owner/name format");
+  });
+
+  describe("CLI entry point", () => {
+    test("fails with a usage message when required flags are missing", async () => {
+      const proc = Bun.spawn(["bun", "run", "generate-homebrew-formula.ts"], {
+        cwd: import.meta.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited).not.toBe(0);
+      expect(stderr).toContain(
+        "Usage: generate-homebrew-formula.ts --checksums <path> --output <path> --version <x.y.z>",
+      );
+    });
+
+    test("writes a formula file when invoked with required and optional flags", async () => {
+      const setup = await fixture();
+      const proc = Bun.spawn(
+        [
+          "bun",
+          "run",
+          "generate-homebrew-formula.ts",
+          "--checksums",
+          setup.checksumPath,
+          "--output",
+          setup.outputPath,
+          "--version",
+          "0.1.0",
+          "--repository",
+          "owner/project",
+          "--base-url",
+          "file:///tmp/current-run-assets",
+        ],
+        { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(await proc.exited).toBe(0);
+      const written = await Bun.file(setup.outputPath).text();
+      expect(written).toContain(
+        "file:///tmp/current-run-assets/asana-cli-v0.1.0-darwin-arm64.tar.gz",
+      );
+    });
+  });
 });

@@ -12,4 +12,25 @@ describe("release tag validation", () => {
       await expect(verifyReleaseTag(tag)).rejects.toThrow();
     }
   });
+
+  describe("CLI entry point", () => {
+    test("fails with a usage message when --tag is missing", async () => {
+      const proc = Bun.spawn(["bun", "run", "verify-release-tag.ts"], {
+        cwd: import.meta.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited).not.toBe(0);
+      expect(stderr).toContain("Usage: verify-release-tag.ts --tag <tag>");
+    });
+
+    test("succeeds when invoked with the matching stable tag", async () => {
+      const proc = Bun.spawn(
+        ["bun", "run", "verify-release-tag.ts", "--tag", "v0.1.0"],
+        { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(await proc.exited).toBe(0);
+    });
+  });
 });
