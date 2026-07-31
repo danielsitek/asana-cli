@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { err, ok } from "../shared/result.ts";
+import type { DiscoveredMyTasks, ResolvedConfig } from "../config/index.ts";
 import {
   DEFAULT_FIELDS,
   executeTaskUpdate,
@@ -35,6 +36,54 @@ const dependenciesFor = (
   readStdin: async () => "stdin contents",
   ...overrides,
 });
+
+const resolvedConfiguration = (
+  overrides: Partial<ResolvedConfig["value"]> = {},
+): ResolvedConfig => ({
+  value: {
+    workspace: { gid: "100" },
+    myTasks: {
+      userTaskListGid: "200",
+      sections: { in_review: "300" },
+      customFields: { estimate: "400" },
+    },
+    network: { concurrency: 4, maxRetries: 3, requestTimeoutMs: 30_000 },
+    ...overrides,
+  },
+  sources: {},
+  paths: { global: "/config.json" },
+});
+
+const discoveredMyTasks = (
+  overrides: Partial<DiscoveredMyTasks> = {},
+): DiscoveredMyTasks => ({
+  userTaskListGid: "200",
+  sections: [{ gid: "300", name: "In Review" }],
+  customFields: [
+    {
+      gid: "400",
+      name: "Estimate",
+      resourceSubtype: "number",
+      isReadOnly: false,
+    },
+  ],
+  ...overrides,
+});
+
+const myTasksDependenciesFor = (
+  writer: RecordingWriter,
+  overrides: Partial<TaskUpdateDependencies> = {},
+): TaskUpdateDependencies =>
+  dependenciesFor(writer, {
+    reader: {
+      getTask: async () => ok({ assignee: { gid: "9001" } }),
+    },
+    discovery: {
+      discoverMyTasks: async () => ok(discoveredMyTasks()),
+    },
+    resolveConfiguration: async () => ok(resolvedConfiguration()),
+    ...overrides,
+  });
 
 const preparedFor = (
   taskId: string,
@@ -126,6 +175,7 @@ describe("task update workflow", () => {
   test.each([
     ["invalid identifier", "not-a-gid", { name: "x" }],
     ["no mutation", "123", {}],
+    ["empty custom field list", "123", { customFields: [] }],
     ["conflicting notes", "123", { notes: "x", notesFile: "x.md" }],
     ["invalid assignee", "123", { assignee: "ada@example.com" }],
     ["invalid date shape", "123", { dueOn: "31-12-2026" }],
@@ -275,6 +325,236 @@ describe("task update workflow", () => {
       error: { kind: "invalid_usage", message: "Unable to read notes file" },
     });
     expect(unresolved.ok).toBe(false);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  test("resolves and validates My Tasks values before one combined write", async () => {
+    const writer = new RecordingWriter();
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", {
+        name: "Updated",
+        mySection: "@in_review",
+        customFields: ["500:2.5", "@estimate:null"],
+      }),
+      myTasksDependenciesFor(writer, {
+        discovery: {
+          discoverMyTasks: async (token, workspaceGid) => {
+            expect({ token, workspaceGid }).toEqual({
+              token: "secret",
+              workspaceGid: "100",
+            });
+            return ok(
+              discoveredMyTasks({
+                customFields: [
+                  {
+                    gid: "400",
+                    name: "Estimate",
+                    resourceSubtype: "number",
+                    isReadOnly: false,
+                  },
+                  {
+                    gid: "500",
+                    name: "Cost",
+                    resourceSubtype: "number",
+                    isReadOnly: false,
+                  },
+                ],
+              }),
+            );
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "123" },
+        applied: {
+          name: "Updated",
+          assignee_section: "300",
+          custom_fields: { "400": null, "500": 2.5 },
+        },
+      },
+    });
+    expect(writer.calls).toHaveLength(1);
+  });
+
+  test("rejects aliases resolving to the same custom field", async () => {
+    const writer = new RecordingWriter();
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", {
+        customFields: ["@estimate:1", "400:2"],
+      }),
+      myTasksDependenciesFor(writer),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--custom-field cannot update the same field more than once",
+      },
+    });
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  test.each([
+    [
+      "missing section alias",
+      { mySection: "@missing" },
+      {},
+      "is not configured",
+    ],
+    [
+      "missing field alias",
+      { customFields: ["@missing:1"] },
+      {},
+      "is not configured",
+    ],
+    [
+      "stale task list",
+      { mySection: "300" },
+      { discovery: discoveredMyTasks({ userTaskListGid: "201" }) },
+      "does not match",
+    ],
+    ["section outside My Tasks", { mySection: "301" }, {}, "is not present"],
+    [
+      "field outside My Tasks",
+      { customFields: ["401:1"] },
+      {},
+      "is not present",
+    ],
+    [
+      "wrong field type",
+      { customFields: ["400:1"] },
+      {
+        discovery: discoveredMyTasks({
+          customFields: [
+            {
+              gid: "400",
+              name: "Estimate",
+              resourceSubtype: "text",
+              isReadOnly: false,
+            },
+          ],
+        }),
+      },
+      "is not a number field",
+    ],
+    [
+      "read-only field",
+      { customFields: ["400:1"] },
+      {
+        discovery: discoveredMyTasks({
+          customFields: [
+            {
+              gid: "400",
+              name: "Estimate",
+              resourceSubtype: "number",
+              isReadOnly: true,
+            },
+          ],
+        }),
+      },
+      "is read-only",
+    ],
+  ] as const)(
+    "rejects %s before writing",
+    async (_, options, setup, message) => {
+      const writer = new RecordingWriter();
+      const dependencies = myTasksDependenciesFor(writer, {
+        ...("discovery" in setup
+          ? {
+              discovery: {
+                discoverMyTasks: async () => ok(setup.discovery),
+              },
+            }
+          : {}),
+      });
+      const result = await executeTaskUpdate(
+        "secret",
+        preparedFor("123", options),
+        dependencies,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.message).toContain(message);
+      expect(writer.calls).toHaveLength(0);
+    },
+  );
+
+  test("requires the final assignee to be the authenticated user", async () => {
+    for (const options of [
+      { mySection: "300", assignee: "9002" },
+      { customFields: ["400:1"], assignee: "null" },
+      { mySection: "300" },
+    ] as const) {
+      const writer = new RecordingWriter();
+      const result = await executeTaskUpdate(
+        "secret",
+        preparedFor("123", options),
+        myTasksDependenciesFor(writer, {
+          reader: {
+            getTask: async () => ok({ assignee: { gid: "9002" } }),
+          },
+        }),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.message).toContain("final assignee");
+      expect(writer.calls).toHaveLength(0);
+    }
+  });
+
+  test("does not read current task when explicit assignee is authenticated user", async () => {
+    const writer = new RecordingWriter();
+    let reads = 0;
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { mySection: "300", assignee: "me" }),
+      myTasksDependenciesFor(writer, {
+        reader: {
+          getTask: async () => {
+            reads += 1;
+            return ok({});
+          },
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(reads).toBe(0);
+    expect(writer.calls[0]?.mutation).toEqual({
+      assignee: "9001",
+      assignee_section: "300",
+    });
+  });
+
+  test("propagates discovery and current-task read failures without writing", async () => {
+    const writer = new RecordingWriter();
+    const discoveryFailure = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { mySection: "300" }),
+      myTasksDependenciesFor(writer, {
+        discovery: {
+          discoverMyTasks: async () =>
+            err({ kind: "network", message: "offline" }),
+        },
+      }),
+    );
+    const readFailure = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { mySection: "300" }),
+      myTasksDependenciesFor(writer, {
+        reader: {
+          getTask: async () => err({ kind: "not_found", message: "missing" }),
+        },
+      }),
+    );
+
+    expect(discoveryFailure.ok).toBe(false);
+    expect(readFailure.ok).toBe(false);
     expect(writer.calls).toHaveLength(0);
   });
 });

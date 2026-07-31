@@ -36,6 +36,7 @@ import {
   renderJson,
   renderResolvedMyTasks,
   renderTaskDetail,
+  renderTaskUpdate,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -604,6 +605,15 @@ export const execute = async (
     .option("--assignee <value>", "set me, a user GID, or null")
     .option("--due-on <date>", "set YYYY-MM-DD or null")
     .option("--completed <boolean>", "set true or false")
+    .option("--my-section <section>", "move within My Tasks by GID or @alias")
+    .option(
+      "--custom-field <field:value>",
+      "set a numeric My Tasks custom field; repeatable",
+      (value: string, previous: readonly string[] | undefined) => [
+        ...(previous ?? []),
+        value,
+      ],
+    )
     .action(
       async (
         idArg: string,
@@ -614,12 +624,17 @@ export const execute = async (
           assignee?: string;
           dueOn?: string;
           completed?: string;
+          mySection?: string;
+          customField?: readonly string[];
         }>,
       ) => {
         invoked = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
-        const prepared = prepareTaskUpdate(idArg, options);
+        const prepared = prepareTaskUpdate(idArg, {
+          ...options,
+          ...(options.customField ? { customFields: options.customField } : {}),
+        });
         if (!prepared.ok) {
           result = usageError(prepared.error.message);
           return;
@@ -654,6 +669,18 @@ export const execute = async (
           prepared.value,
           {
             writer: dependencies.taskWriter,
+            ...(dependencies.taskReader
+              ? { reader: dependencies.taskReader }
+              : {}),
+            ...(dependencies.discovery
+              ? { discovery: dependencies.discovery }
+              : {}),
+            ...(dependencies.configuration
+              ? {
+                  resolveConfiguration: () =>
+                    resolveConfig(dependencies.configuration!),
+                }
+              : {}),
             resolveAuthenticatedUserGid: async (token) => {
               const identity =
                 await dependencies.identity.getAuthenticatedUser(token);
@@ -668,16 +695,28 @@ export const execute = async (
           },
         );
         if (!updated.ok) {
-          result =
-            updated.error.kind === "invalid_usage"
-              ? usageError(updated.error.message)
-              : renderTaskReadFailure(updated.error.kind);
+          if (updated.error.kind === "invalid_usage") {
+            result = usageError(updated.error.message);
+          } else if (updated.error.kind === "configuration") {
+            result = renderConfigFailure(updated.error);
+          } else if (updated.error.kind === "internal_error") {
+            result = {
+              stdout: "",
+              stderr: renderError({
+                code: "internal_error",
+                message: updated.error.message,
+              }),
+              exitCode: 6,
+            };
+          } else {
+            result = renderTaskReadFailure(updated.error.kind);
+          }
           return;
         }
         result = {
           stdout: json
             ? renderJson(updated.value)
-            : renderTaskDetail(updated.value),
+            : renderTaskUpdate(updated.value),
           stderr: "",
           exitCode: 0,
         };

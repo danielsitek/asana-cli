@@ -138,3 +138,8 @@ export const renderTaskDetail = (task: Record<string, unknown>): string => {
   });
   return lines.join("\n") + "\n";
 };
+
+export const renderTaskUpdate = (result: {
+  task: Record<string, unknown>;
+  applied: Record<string, unknown>;
+}): string => renderTaskDetail(result);
