@@ -39,24 +39,23 @@ const sharedConfigSchema = z
     network: network.optional(),
   })
   .strict();
-const localConfigSchema = z
-  .object({
-    profile: z.string().min(1).optional(),
-    myTasks: myTasks.optional(),
-  })
-  .strict();
-const globalConfigSchema = sharedConfigSchema
-  .extend({ profile: z.string().min(1).optional() })
-  .strict();
-const effectiveConfigSchema = sharedConfigSchema
-  .extend({
-    profile: z.string().min(1).optional(),
-    myTasks: myTasks.optional(),
-  })
-  .strict();
+const localConfigSchema = sharedConfigSchema.extend({
+  myTasks: myTasks.optional(),
+});
+const globalConfigSchema = sharedConfigSchema;
+const effectiveConfigSchema = localConfigSchema;
+
+const builtInConfig = {
+  network: {
+    concurrency: 4,
+    maxRetries: 3,
+    requestTimeoutMs: 30_000,
+  },
+} satisfies Config;
 
 export type Config = z.infer<typeof effectiveConfigSchema>;
 export type ConfigLayer = "global" | "shared" | "local";
+export type ConfigSourceLayer = "built-in" | ConfigLayer;
 
 export type ConfigContext = Readonly<{
   cwd: string;
@@ -65,8 +64,8 @@ export type ConfigContext = Readonly<{
 }>;
 
 export type ConfigSource = Readonly<{
-  layer: ConfigLayer;
-  path: string;
+  layer: ConfigSourceLayer;
+  path?: string;
 }>;
 
 export type ResolvedConfig = Readonly<{
@@ -243,8 +242,9 @@ export const resolveConfig = async (
       ? ([["local", paths.local, localConfigSchema]] as const)
       : []),
   ];
-  let value: JsonObject = {};
+  let value: JsonObject = builtInConfig;
   const sources: Record<string, ConfigSource> = {};
+  recordLeafSources(builtInConfig, { layer: "built-in" }, sources);
   for (const [layer, path, schema] of layers) {
     const read = await readLayer(path, schema);
     if (!read.ok) return read;
@@ -323,12 +323,52 @@ const schemaForLayer = (layer: ConfigLayer): z.ZodType =>
 const localFileIsIgnored = async (gitRoot: string): Promise<boolean> => {
   try {
     const contents = await readFile(join(gitRoot, ".gitignore"), "utf8");
-    return contents
-      .split(/\r?\n/)
-      .some((line) => line.trim() === "/.asana-cli.local.json");
+    let ignored = false;
+    for (const rawLine of contents.split(/\r?\n/)) {
+      let rule = rawLine.trim();
+      if (!rule || rule.startsWith("#")) continue;
+      let negated = false;
+      if (rule.startsWith("\\!") || rule.startsWith("\\#")) {
+        rule = rule.slice(1);
+      } else if (rule.startsWith("!")) {
+        negated = true;
+        rule = rule.slice(1);
+      }
+      if (!rule || rule.endsWith("/")) continue;
+      if (rule.startsWith("/")) rule = rule.slice(1);
+      const target = ".asana-cli.local.json";
+      const expression = globExpression(rule);
+      const matches = new RegExp(`^${expression}$`).test(target);
+      if (matches) ignored = !negated;
+    }
+    return ignored;
   } catch {
     return false;
   }
+};
+
+const globExpression = (pattern: string): string => {
+  let expression = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    const next = pattern[index + 1];
+    if (character === "*" && next === "*") {
+      if (pattern[index + 2] === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+      } else {
+        expression += ".*";
+        index += 1;
+      }
+    } else if (character === "*") {
+      expression += "[^/]*";
+    } else if (character === "?") {
+      expression += "[^/]";
+    } else if (character) {
+      expression += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+    }
+  }
+  return expression;
 };
 
 const atomicWrite = async (
@@ -385,7 +425,7 @@ const writeLayer = async (
       return err({
         kind: "configuration",
         message:
-          "local configuration is not ignored; add exactly /.asana-cli.local.json to the repository .gitignore",
+          "local configuration is not ignored by the repository .gitignore",
       });
     }
   }
@@ -430,7 +470,36 @@ export const setConfigValue = async (
   if (!path.ok) return path;
   const existing = await readLayer(path.value, schemaForLayer(layer));
   if (!existing.ok) return existing;
-  const updated = setNestedValue(existing.value, segments.value, value);
+  const candidates: unknown[] = [value];
+  try {
+    const jsonValue: unknown = JSON.parse(value);
+    if (jsonValue !== value) candidates.push(jsonValue);
+  } catch {
+    // Plain strings such as GIDs are valid candidates themselves.
+  }
+  let updated: JsonObject | undefined;
+  let candidateError: ConfigError | undefined;
+  for (const candidate of candidates) {
+    const proposed = setNestedValue(existing.value, segments.value, candidate);
+    const validated = validationMessage(
+      path.value,
+      proposed,
+      schemaForLayer(layer),
+    );
+    if (validated.ok) {
+      updated = validated.value;
+      break;
+    }
+    candidateError ??= validated.error;
+  }
+  if (!updated) {
+    return err(
+      candidateError ?? {
+        kind: "configuration",
+        message: `${key}: invalid configuration value`,
+      },
+    );
+  }
   const written = await writeLayer(resolvedConfig.value, layer, updated);
   if (!written.ok) return written;
   return ok({ layer, path: path.value });
@@ -444,17 +513,27 @@ export const initializeSharedConfig = async (
   if (!resolvedConfig.ok) return resolvedConfig;
   const path = targetPath(resolvedConfig.value, "shared");
   if (!path.ok) return path;
-  const effectiveWorkspace =
-    workspaceGid ?? resolvedConfig.value.value.workspace?.gid;
-  if (!effectiveWorkspace) {
+  const existing = await readLayer(path.value, sharedConfigSchema);
+  if (!existing.ok) return existing;
+  const global = await readLayer(
+    resolvedConfig.value.paths.global,
+    globalConfigSchema,
+  );
+  if (!global.ok) return global;
+  const sharedWorkspace = isObject(existing.value.workspace)
+    ? existing.value.workspace.gid
+    : undefined;
+  const globalWorkspace = isObject(global.value.workspace)
+    ? global.value.workspace.gid
+    : undefined;
+  const effectiveWorkspace = workspaceGid ?? sharedWorkspace ?? globalWorkspace;
+  if (typeof effectiveWorkspace !== "string") {
     return err({
       kind: "configuration",
       message:
-        "config init --shared requires --workspace or an effective workspace.gid",
+        "config init --shared requires --workspace or a workspace.gid in shared/global config",
     });
   }
-  const existing = await readLayer(path.value, sharedConfigSchema);
-  if (!existing.ok) return existing;
   const updated = setNestedValue(
     existing.value,
     ["workspace", "gid"],

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
@@ -49,12 +49,17 @@ describe("resolveConfig", () => {
     await writeJson(join(home, ".config", "asana-cli", "config.json"), {
       workspace: { gid: "100" },
       project: { gid: "200", sections: { todo: "201", done: "202" } },
+      network: { concurrency: 2, maxRetries: 1 },
     });
     await writeJson(join(repository, ".asana-cli.json"), {
       workspace: { gid: "101" },
       project: { sections: { done: "203" } },
+      network: { maxRetries: 2 },
     });
     await writeJson(join(repository, ".asana-cli.local.json"), {
+      workspace: { gid: "102" },
+      project: { sections: { todo: "204" } },
+      network: { concurrency: 8 },
       myTasks: { sections: { review: "301" } },
     });
 
@@ -64,25 +69,30 @@ describe("resolveConfig", () => {
       ok: true,
       value: {
         value: {
-          workspace: { gid: "101" },
+          workspace: { gid: "102" },
           project: {
             gid: "200",
-            sections: { todo: "201", done: "203" },
+            sections: { todo: "204", done: "203" },
+          },
+          network: {
+            concurrency: 8,
+            maxRetries: 2,
+            requestTimeoutMs: 30000,
           },
           myTasks: { sections: { review: "301" } },
         },
         sources: {
           "workspace.gid": {
-            layer: "shared",
-            path: join(repository, ".asana-cli.json"),
+            layer: "local",
+            path: join(repository, ".asana-cli.local.json"),
           },
           "project.gid": {
             layer: "global",
             path: join(home, ".config", "asana-cli", "config.json"),
           },
           "project.sections.todo": {
-            layer: "global",
-            path: join(home, ".config", "asana-cli", "config.json"),
+            layer: "local",
+            path: join(repository, ".asana-cli.local.json"),
           },
           "project.sections.done": {
             layer: "shared",
@@ -91,6 +101,17 @@ describe("resolveConfig", () => {
           "myTasks.sections.review": {
             layer: "local",
             path: join(repository, ".asana-cli.local.json"),
+          },
+          "network.concurrency": {
+            layer: "local",
+            path: join(repository, ".asana-cli.local.json"),
+          },
+          "network.maxRetries": {
+            layer: "shared",
+            path: join(repository, ".asana-cli.json"),
+          },
+          "network.requestTimeoutMs": {
+            layer: "built-in",
           },
         },
         paths: {
@@ -148,6 +169,14 @@ describe("resolveConfig", () => {
     if (result.ok) {
       expect(result.value.value.workspace?.gid).toBe("100");
       expect(result.value.paths.gitRoot).toBeUndefined();
+      expect(result.value.value.network).toEqual({
+        concurrency: 4,
+        maxRetries: 3,
+        requestTimeoutMs: 30000,
+      });
+      expect(result.value.sources["network.concurrency"]).toEqual({
+        layer: "built-in",
+      });
     }
   });
 
@@ -171,6 +200,31 @@ describe("resolveConfig", () => {
       if (!result.ok) {
         expect(result.error.message).toContain(".asana-cli.json");
         expect(result.error.message).toContain(message);
+      }
+    }
+  });
+
+  test("rejects deferred profile configuration in every file layer", async () => {
+    for (const layer of ["global", "shared", "local"] as const) {
+      const root = await temporaryDirectory();
+      const home = join(root, "home");
+      await mkdir(join(root, ".git"));
+      const path =
+        layer === "global"
+          ? join(home, ".config", "asana-cli", "config.json")
+          : join(
+              root,
+              layer === "shared" ? ".asana-cli.json" : ".asana-cli.local.json",
+            );
+      await mkdir(dirname(path), { recursive: true });
+      await writeJson(path, { profile: "work" });
+
+      const result = await resolveConfig(context(root, home));
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain(path);
+        expect(result.error.message).toContain("profile");
       }
     }
   });
@@ -205,6 +259,9 @@ describe("configuration writes", () => {
     await mkdir(join(home, ".config", "asana-cli"), { recursive: true });
     await writeJson(join(home, ".config", "asana-cli", "config.json"), {
       workspace: { gid: "100" },
+    });
+    await writeJson(join(root, ".asana-cli.local.json"), {
+      workspace: { gid: "999" },
     });
 
     const result = await initializeSharedConfig(context(root, home));
@@ -275,6 +332,59 @@ describe("configuration writes", () => {
     );
     expect(invalid.ok).toBe(false);
     expect(await Bun.file(join(root, ".asana-cli.json")).exists()).toBe(false);
+  });
+
+  test("parses values according to the target schema", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+
+    const numeric = await setConfigValue(
+      context(root, join(root, "home")),
+      "network.concurrency",
+      "8",
+    );
+    expect(numeric.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ network: { concurrency: 8 } });
+
+    for (const invalid of ["1.5", "0", "-1", "NaN", "Infinity", "1e999"]) {
+      const result = await setConfigValue(
+        context(root, join(root, "home")),
+        "network.concurrency",
+        invalid,
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ network: { concurrency: 8 } });
+  });
+
+  test("accepts matching ignore globs and honors later negation", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    const configContext = context(root, join(root, "home"));
+    await writeFile(join(root, ".gitignore"), "**/*.local.json\n");
+
+    const ignored = await setConfigValue(
+      configContext,
+      "myTasks.sections.review",
+      "300",
+    );
+    expect(ignored.ok).toBe(true);
+
+    await writeFile(
+      join(root, ".gitignore"),
+      "**/*.local.json\n!/.asana-cli.local.json\n",
+    );
+    const unignored = await setConfigValue(
+      configContext,
+      "myTasks.sections.done",
+      "301",
+    );
+    expect(unignored.ok).toBe(false);
+    if (!unignored.ok) expect(unignored.error.message).toContain("not ignored");
   });
 
   test("does not corrupt an existing target when atomic rename fails", async () => {
