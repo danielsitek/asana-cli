@@ -15,7 +15,7 @@
     "test": "bun test",
     "test:coverage": "bun test --coverage",
     "test:smoke": "RUN_COMPILED_SMOKE=1 bun test test/smoke.test.ts",
-    "build": "bun build src/main.ts --compile --minify --sourcemap=inline --no-compile-autoload-dotenv --no-compile-autoload-bunfig --define __APP_VERSION__='\"0.1.0\"' --outfile dist/asana-cli",
+    "build": "bun run scripts/build.ts",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run test:coverage && bun run build && bun run test:smoke"
   },
   "dependencies": {

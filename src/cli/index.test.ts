@@ -102,8 +102,18 @@ describe("execute", () => {
   });
 
   test("renders version and help without authenticating", async () => {
-    const version = await execute(["-v"], { environment: {}, identity });
-    expect(version).toEqual({ stdout: "0.1.0\n", stderr: "", exitCode: 0 });
+    for (const argv of [
+      ["-v"],
+      ["--version"],
+      ["whoami", "-v"],
+      ["whoami", "--version"],
+    ]) {
+      expect(await execute(argv, { environment: {}, identity })).toEqual({
+        stdout: "0.1.0\n",
+        stderr: "",
+        exitCode: 0,
+      });
+    }
 
     const helpBefore = await execute(["--help", "whoami"], {
       environment: {},
