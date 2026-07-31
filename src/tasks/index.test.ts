@@ -1,16 +1,22 @@
 import { describe, expect, test } from "bun:test";
 
-import { err, ok } from "../shared/result.ts";
+import { err, ok, type Result } from "../shared/result.ts";
 import {
   DEFAULT_FIELDS,
+  executeTaskCreation,
   executeTaskUpdate,
   parseTaskId,
   prepareTaskUpdate,
   prepareTaskCreate,
   validateFieldList,
   type PreparedTaskUpdate,
+  type PreparedTaskCreate,
+  type Task,
+  type TaskCreationDependencies,
+  type TaskCreationGateway,
   type TaskMutation,
   type TaskMutationGateway,
+  type TaskReadError,
   type TaskUpdateDependencies,
   type TaskUpdateOptions,
 } from "./index.ts";
@@ -23,6 +29,45 @@ class RecordingWriter implements TaskMutationGateway {
   async updateTask(token: string, taskId: string, mutation: TaskMutation) {
     this.calls.push({ token, taskId, mutation });
     return ok({ gid: taskId });
+  }
+}
+
+class RecordingCreator implements TaskCreationGateway {
+  calls: Array<
+    Readonly<{ token: string; parentId: string; mutation: TaskMutation }>
+  > = [];
+
+  constructor(
+    private readonly response = ok<Task & Readonly<{ gid: string }>>({
+      gid: "456",
+      name: "Child",
+    }),
+  ) {}
+
+  async createSubtask(token: string, parentId: string, mutation: TaskMutation) {
+    this.calls.push({ token, parentId, mutation });
+    return this.response;
+  }
+}
+
+class QueuedWriter implements TaskMutationGateway {
+  calls: Array<
+    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+  > = [];
+
+  constructor(
+    private readonly responses: readonly Result<Task, TaskReadError>[],
+  ) {}
+
+  async updateTask(token: string, taskId: string, mutation: TaskMutation) {
+    this.calls.push({ token, taskId, mutation });
+    return (
+      this.responses[this.calls.length - 1] ??
+      err<TaskReadError>({
+        kind: "invalid_response",
+        message: "Missing fake response",
+      })
+    );
   }
 }
 
@@ -46,6 +91,28 @@ const preparedFor = (
   if (!prepared.ok) throw new Error(prepared.error.message);
   return prepared.value;
 };
+
+const preparedCreateFor = (
+  options: Parameters<typeof prepareTaskCreate>[0],
+): PreparedTaskCreate => {
+  const prepared = prepareTaskCreate(options);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) throw new Error(prepared.error.message);
+  return prepared.value;
+};
+
+const creationDependenciesFor = (
+  creator: RecordingCreator,
+  writer?: TaskMutationGateway,
+  overrides: Partial<TaskCreationDependencies> = {},
+): TaskCreationDependencies => ({
+  creator,
+  ...(writer ? { writer } : {}),
+  resolveAuthenticatedUserGid: async () => ok("9001"),
+  readFile: async () => "file contents",
+  readStdin: async () => "stdin contents",
+  ...overrides,
+});
 
 describe("DEFAULT_FIELDS", () => {
   test("selects the supported task detail fields", () => {
@@ -444,4 +511,249 @@ describe("task creation preparation", () => {
       ).toBe(false);
     }
   });
+});
+
+describe("task creation workflow", () => {
+  test("creates a basic subtask without a mutation writer", async () => {
+    const creator = new RecordingCreator();
+    const result = await executeTaskCreation(
+      "secret",
+      preparedCreateFor({ parent: "123", name: "Child" }),
+      creationDependenciesFor(creator),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "456", name: "Child" },
+        complete: true,
+        stages: [
+          {
+            stage: "create",
+            status: "completed",
+            applied: { name: "Child" },
+          },
+          { stage: "assignee", status: "not_run", reason: "not_requested" },
+          {
+            stage: "my_section",
+            status: "not_run",
+            reason: "not_requested",
+          },
+          {
+            stage: "custom_fields",
+            status: "not_run",
+            reason: "not_requested",
+          },
+        ],
+      },
+    });
+    expect(creator.calls).toHaveLength(1);
+  });
+
+  test("requires a writer for requested stages before the POST", async () => {
+    for (const options of [
+      { parent: "123", name: "Child", assignee: "9001" },
+      {
+        parent: "123",
+        name: "Child",
+        assignee: "9001",
+        mySection: "300",
+      },
+      {
+        parent: "123",
+        name: "Child",
+        assignee: "9001",
+        customFields: ["400:4"],
+      },
+    ]) {
+      const creator = new RecordingCreator();
+      const result = await executeTaskCreation(
+        "secret",
+        preparedCreateFor(options),
+        creationDependenciesFor(creator, undefined, {
+          myTasksMutationResolver: {
+            resolve: async (request) =>
+              ok({
+                ...(request.mySection ? { assignee_section: "300" } : {}),
+                ...(request.customFields.length > 0
+                  ? { custom_fields: { "400": 4 } }
+                  : {}),
+              }),
+          },
+        }),
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          kind: "internal_error",
+          message: "Task writer is required for staged subtask mutations",
+        },
+      });
+      expect(creator.calls).toHaveLength(0);
+    }
+  });
+
+  test("materializes all values before creating and preserves stage order", async () => {
+    const creator = new RecordingCreator();
+    const writer = new QueuedWriter([
+      ok({ gid: "456", assignee: { gid: "9001" } }),
+      ok({ gid: "456", assignee: { gid: "9001" } }),
+      ok({ gid: "456", assignee: { gid: "9001" } }),
+    ]);
+    let resolverRequest: unknown;
+    const result = await executeTaskCreation(
+      "secret",
+      preparedCreateFor({
+        parent: "123",
+        name: "Child",
+        notesFile: "notes.md",
+        assignee: "me",
+        dueOn: "2028-02-29",
+        completed: "false",
+        mySection: "@in_progress",
+        customFields: ["@estimate:4"],
+      }),
+      creationDependenciesFor(creator, writer, {
+        readFile: async (path) => {
+          expect(path).toBe("notes.md");
+          return "Prepared notes\n";
+        },
+        myTasksMutationResolver: {
+          resolve: async (request) => {
+            resolverRequest = request;
+            return ok({
+              assignee_section: "300",
+              custom_fields: { "400": 4 },
+            });
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(resolverRequest).toEqual({
+      token: "secret",
+      finalAssignee: "9001",
+      authenticatedUserGid: "9001",
+      mySection: { kind: "alias", value: "in_progress" },
+      customFields: [{ field: { kind: "alias", value: "estimate" }, value: 4 }],
+    });
+    expect(creator.calls[0]?.mutation).toEqual({
+      name: "Child",
+      notes: "Prepared notes\n",
+      due_on: "2028-02-29",
+      completed: false,
+    });
+    expect(writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+      { assignee_section: "300" },
+      { custom_fields: { "400": 4 } },
+    ]);
+  });
+
+  test("does not POST when shared materialization fails", async () => {
+    const cases: Array<
+      readonly [PreparedTaskCreate, Partial<TaskCreationDependencies>]
+    > = [
+      [
+        preparedCreateFor({
+          parent: "123",
+          name: "Child",
+          notesFile: "missing.md",
+        }),
+        {
+          readFile: async () => {
+            throw new Error("unsafe path");
+          },
+        },
+      ],
+      [
+        preparedCreateFor({
+          parent: "123",
+          name: "Child",
+          assignee: "me",
+        }),
+        {
+          resolveAuthenticatedUserGid: async () =>
+            err({ kind: "authentication", message: "unsafe identity" }),
+        },
+      ],
+      [
+        preparedCreateFor({
+          parent: "123",
+          name: "Child",
+          assignee: "me",
+          mySection: "300",
+        }),
+        {
+          myTasksMutationResolver: {
+            resolve: async () =>
+              err({ kind: "configuration", message: "stale config" }),
+          },
+        },
+      ],
+    ];
+
+    for (const [prepared, overrides] of cases) {
+      const creator = new RecordingCreator();
+      const result = await executeTaskCreation(
+        "secret",
+        prepared,
+        creationDependenciesFor(creator, new RecordingWriter(), overrides),
+      );
+      expect(result.ok).toBe(false);
+      expect(creator.calls).toHaveLength(0);
+    }
+  });
+
+  test.each([
+    [0, ["failed", "not_run", "not_run"], 1],
+    [1, ["completed", "failed", "not_run"], 2],
+    [2, ["completed", "completed", "failed"], 3],
+  ] as const)(
+    "stops after failed stage %i and redacts the error",
+    async (failureIndex, statuses, expectedWrites) => {
+      const writer = new QueuedWriter(
+        [0, 1, 2].map((index) =>
+          index === failureIndex
+            ? err<TaskReadError>({ kind: "api", message: "unsafe detail" })
+            : ok<Task>({ gid: "456", name: "Child" }),
+        ),
+      );
+      const creator = new RecordingCreator();
+      const result = await executeTaskCreation(
+        "secret",
+        preparedCreateFor({
+          parent: "123",
+          name: "Child",
+          assignee: "me",
+          mySection: "300",
+          customFields: ["400:4"],
+        }),
+        creationDependenciesFor(creator, writer, {
+          myTasksMutationResolver: {
+            resolve: async () =>
+              ok({
+                assignee_section: "300",
+                custom_fields: { "400": 4 },
+              }),
+          },
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error.message);
+      expect(result.value.complete).toBe(false);
+      expect(writer.calls).toHaveLength(expectedWrites);
+      expect(result.value.stages.slice(1).map((stage) => stage.status)).toEqual(
+        [...statuses],
+      );
+      expect(result.value.stages[failureIndex + 1]?.error).toEqual({
+        kind: "api",
+        message: "Asana API request failed",
+      });
+      expect(JSON.stringify(result)).not.toContain("unsafe detail");
+    },
+  );
 });

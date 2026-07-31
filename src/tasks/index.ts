@@ -71,8 +71,7 @@ export interface TaskCreationGateway {
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
 }
 
-export type TaskUpdateDependencies = Readonly<{
-  writer: TaskMutationGateway;
+type TaskMaterializationDependencies = Readonly<{
   myTasksMutationResolver?: MyTasksMutationResolver;
   resolveAuthenticatedUserGid: (
     token: string,
@@ -80,6 +79,9 @@ export type TaskUpdateDependencies = Readonly<{
   readFile: (path: string) => Promise<string>;
   readStdin: () => Promise<string>;
 }>;
+
+export type TaskUpdateDependencies = TaskMaterializationDependencies &
+  Readonly<{ writer: TaskMutationGateway }>;
 
 export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
@@ -135,16 +137,11 @@ export type TaskCreationResult = Readonly<{
   complete: boolean;
 }>;
 
-export type TaskCreationDependencies = Readonly<{
-  creator: TaskCreationGateway;
-  writer: TaskMutationGateway;
-  myTasksMutationResolver?: MyTasksMutationResolver;
-  resolveAuthenticatedUserGid: (
-    token: string,
-  ) => Promise<Result<string, TaskReadError>>;
-  readFile: (path: string) => Promise<string>;
-  readStdin: () => Promise<string>;
-}>;
+export type TaskCreationDependencies = TaskMaterializationDependencies &
+  Readonly<{
+    creator: TaskCreationGateway;
+    writer?: TaskMutationGateway;
+  }>;
 
 export type ResourceSelector = Readonly<
   { kind: "gid"; value: string } | { kind: "alias"; value: string }
@@ -406,11 +403,21 @@ const publicTaskError = (
   return { kind: error.kind, message: messages[error.kind] };
 };
 
-export const executeTaskCreation = async (
+type PreparedTaskMaterialization = Readonly<{
+  taskId?: string;
+  mutation: TaskMutation;
+  notesFile?: string;
+  resolveAssigneeMe: boolean;
+  mySection?: ResourceSelector;
+  customFields: readonly PreparedCustomField[];
+  workflow: "update" | "creation";
+}>;
+
+const materializeTaskMutation = async (
   token: string,
-  prepared: PreparedTaskCreate,
-  dependencies: TaskCreationDependencies,
-): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
+  prepared: PreparedTaskMaterialization,
+  dependencies: TaskMaterializationDependencies,
+): Promise<Result<TaskMutation, TaskUpdateError>> => {
   const mutation = { ...prepared.mutation };
   if (prepared.notesFile !== undefined) {
     try {
@@ -439,38 +446,80 @@ export const executeTaskCreation = async (
 
   const hasMyTasksMutation =
     prepared.mySection !== undefined || prepared.customFields.length > 0;
-  let myTasksMutation: MyTasksMutationResult = {};
-  if (hasMyTasksMutation) {
-    if (!dependencies.myTasksMutationResolver) {
-      return err({
-        kind: "internal_error",
-        message: "My Tasks creation dependencies are unavailable",
-      });
-    }
-    const resolved = await dependencies.myTasksMutationResolver.resolve({
-      token,
-      ...(mutation.assignee === undefined
-        ? {}
-        : { finalAssignee: mutation.assignee }),
-      ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
-      ...(prepared.mySection === undefined
-        ? {}
-        : { mySection: prepared.mySection }),
-      customFields: prepared.customFields,
+  if (!hasMyTasksMutation) return ok(mutation);
+  if (!dependencies.myTasksMutationResolver) {
+    return err({
+      kind: "internal_error",
+      message: `My Tasks ${prepared.workflow} dependencies are unavailable`,
     });
-    if (!resolved.ok) return resolved;
-    myTasksMutation = resolved.value;
   }
+
+  const resolved = await dependencies.myTasksMutationResolver.resolve({
+    token,
+    ...(prepared.taskId === undefined ? {} : { taskId: prepared.taskId }),
+    ...(mutation.assignee === undefined
+      ? {}
+      : { finalAssignee: mutation.assignee }),
+    ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
+    ...(prepared.mySection === undefined
+      ? {}
+      : { mySection: prepared.mySection }),
+    customFields: prepared.customFields,
+  });
+  if (!resolved.ok) return resolved;
+  Object.assign(mutation, resolved.value);
+  return ok(mutation);
+};
+
+export const executeTaskCreation = async (
+  token: string,
+  prepared: PreparedTaskCreate,
+  dependencies: TaskCreationDependencies,
+): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
+  const materialized = await materializeTaskMutation(
+    token,
+    { ...prepared, workflow: "creation" },
+    dependencies,
+  );
+  if (!materialized.ok) return materialized;
+  const mutation = materialized.value;
 
   const assignee = mutation.assignee;
   const createMutation = orderMutation({
-    name: mutation.name,
+    name: prepared.mutation.name,
     ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
     ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
     ...(mutation.completed === undefined
       ? {}
       : { completed: mutation.completed }),
   });
+  const requestedStages: ReadonlyArray<
+    readonly [TaskCreationStageName, TaskMutation | undefined]
+  > = [
+    ["assignee", assignee === undefined ? undefined : { assignee }],
+    [
+      "my_section",
+      mutation.assignee_section === undefined
+        ? undefined
+        : { assignee_section: mutation.assignee_section },
+    ],
+    [
+      "custom_fields",
+      mutation.custom_fields === undefined
+        ? undefined
+        : { custom_fields: mutation.custom_fields },
+    ],
+  ];
+  const hasStagedWrites = requestedStages.some(
+    ([, applied]) => applied !== undefined,
+  );
+  if (hasStagedWrites && dependencies.writer === undefined) {
+    return err({
+      kind: "internal_error",
+      message: "Task writer is required for staged subtask mutations",
+    });
+  }
+
   const created = await dependencies.creator.createSubtask(
     token,
     prepared.parentId,
@@ -483,23 +532,13 @@ export const executeTaskCreation = async (
   const stages: TaskCreationStage[] = [
     { stage: "create", status: "completed", applied: createMutation },
   ];
-  const requestedStages: ReadonlyArray<
-    readonly [TaskCreationStageName, TaskMutation | undefined]
-  > = [
-    ["assignee", assignee === undefined ? undefined : { assignee }],
-    [
-      "my_section",
-      myTasksMutation.assignee_section === undefined
-        ? undefined
-        : { assignee_section: myTasksMutation.assignee_section },
-    ],
-    [
-      "custom_fields",
-      myTasksMutation.custom_fields === undefined
-        ? undefined
-        : { custom_fields: myTasksMutation.custom_fields },
-    ],
-  ];
+  const writer = dependencies.writer;
+  if (writer === undefined) {
+    for (const [stage] of requestedStages) {
+      stages.push({ stage, status: "not_run", reason: "not_requested" });
+    }
+    return ok({ task, stages, complete: true });
+  }
   let stopped = false;
   for (const [stage, applied] of requestedStages) {
     if (applied === undefined) {
@@ -514,11 +553,7 @@ export const executeTaskCreation = async (
       });
       continue;
     }
-    const updated = await dependencies.writer.updateTask(
-      token,
-      taskId,
-      applied,
-    );
+    const updated = await writer.updateTask(token, taskId, applied);
     if (!updated.ok) {
       stages.push({
         stage,
@@ -540,57 +575,13 @@ export const executeTaskUpdate = async (
   prepared: PreparedTaskUpdate,
   dependencies: TaskUpdateDependencies,
 ): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
-  const mutation = { ...prepared.mutation };
-  let authenticatedUserGid: string | undefined;
-  if (prepared.notesFile !== undefined) {
-    try {
-      mutation.notes =
-        prepared.notesFile === "-"
-          ? await dependencies.readStdin()
-          : await dependencies.readFile(prepared.notesFile);
-    } catch {
-      return err({
-        kind: "invalid_usage",
-        message:
-          prepared.notesFile === "-"
-            ? "Unable to read notes from stdin"
-            : "Unable to read notes file",
-      });
-    }
-  }
-  if (prepared.resolveAssigneeMe) {
-    const identity = await dependencies.resolveAuthenticatedUserGid(token);
-    if (!identity.ok) return identity;
-    mutation.assignee = identity.value;
-    authenticatedUserGid = identity.value;
-  }
-
-  const hasMyTasksMutation =
-    prepared.mySection !== undefined || prepared.customFields.length > 0;
-  if (hasMyTasksMutation) {
-    if (!dependencies.myTasksMutationResolver) {
-      return err({
-        kind: "internal_error",
-        message: "My Tasks update dependencies are unavailable",
-      });
-    }
-    const preparedMyTasks = await dependencies.myTasksMutationResolver.resolve({
-      token,
-      taskId: prepared.taskId,
-      ...(mutation.assignee === undefined
-        ? {}
-        : { finalAssignee: mutation.assignee }),
-      ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
-      ...(prepared.mySection === undefined
-        ? {}
-        : { mySection: prepared.mySection }),
-      customFields: prepared.customFields,
-    });
-    if (!preparedMyTasks.ok) return preparedMyTasks;
-    Object.assign(mutation, preparedMyTasks.value);
-  }
-
-  const applied = orderMutation(mutation);
+  const materialized = await materializeTaskMutation(
+    token,
+    { ...prepared, workflow: "update" },
+    dependencies,
+  );
+  if (!materialized.ok) return materialized;
+  const applied = orderMutation(materialized.value);
   const updated = await dependencies.writer.updateTask(
     token,
     prepared.taskId,

@@ -773,12 +773,12 @@ export const execute = async (
         };
         return;
       }
-      if (!dependencies.taskCreator || !dependencies.taskWriter) {
+      if (!dependencies.taskCreator) {
         result = {
           stdout: "",
           stderr: renderError({
             code: "internal_error",
-            message: "Task creation dependencies are required",
+            message: "Task creator is required",
           }),
           exitCode: 6,
         };
@@ -795,7 +795,9 @@ export const execute = async (
         prepared.value,
         {
           creator: dependencies.taskCreator,
-          writer: dependencies.taskWriter,
+          ...(dependencies.taskWriter
+            ? { writer: dependencies.taskWriter }
+            : {}),
           ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
           resolveAuthenticatedUserGid,
           readFile:
