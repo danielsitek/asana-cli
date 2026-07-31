@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
+  MyTasksDiscoveryGateway,
+  DiscoveredMyTasks,
+  DiscoveryError,
+} from "../config/index.ts";
+import type {
   Identity,
   IdentityError,
   IdentityGateway,
@@ -16,6 +21,26 @@ class InMemoryIdentity implements IdentityGateway {
 
   async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
     return this.response;
+  }
+}
+
+class MockDiscoveryIdentity
+  implements IdentityGateway, MyTasksDiscoveryGateway
+{
+  constructor(
+    private readonly userResponse: Result<Identity, IdentityError>,
+    private readonly discoveryResponse: Result<
+      DiscoveredMyTasks,
+      DiscoveryError
+    >,
+  ) {}
+
+  async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
+    return this.userResponse;
+  }
+
+  async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
+    return this.discoveryResponse;
   }
 }
 
@@ -351,5 +376,117 @@ describe("config commands", () => {
     );
     expect(conflicting.exitCode).toBe(2);
     expect(conflicting.stderr).toContain("mutually exclusive");
+  });
+
+  test("init --local works with write-gitignore and token", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+    const identityMock = new MockDiscoveryIdentity(
+      ok({ gid: "123", name: "Ada Lovelace" }),
+      ok(discoveryResponse),
+    );
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: identityMock,
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      `initialized ${join(root, ".asana-cli.local.json")}\n`,
+    );
+
+    const gitignore = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignore).toBe("/.asana-cli.local.json\n");
+
+    const localConfig = JSON.parse(
+      await readFile(join(root, ".asana-cli.local.json"), "utf8"),
+    );
+    expect(localConfig.myTasks.userTaskListGid).toBe("1213894072990299");
+  });
+
+  test("init --local fails if missing workspace GID", async () => {
+    const { root, home } = await setup();
+    const identityMock = new MockDiscoveryIdentity(
+      ok({ gid: "123", name: "Ada Lovelace" }),
+      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+    );
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: identityMock,
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("workspace.gid is required");
+  });
+
+  test("resolve my-tasks fails if not ignored", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const identityMock = new MockDiscoveryIdentity(
+      ok({ gid: "123", name: "Ada Lovelace" }),
+      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+    );
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: identityMock,
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not ignored by the repository .gitignore");
+  });
+
+  test("resolve my-tasks succeeds if already ignored", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+    const identityMock = new MockDiscoveryIdentity(
+      ok({ gid: "123", name: "Ada Lovelace" }),
+      ok(discoveryResponse),
+    );
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: identityMock,
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      `resolved ${join(root, ".asana-cli.local.json")}\n`,
+    );
   });
 });

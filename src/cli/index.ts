@@ -4,11 +4,13 @@ import { resolveToken } from "../auth/index.ts";
 import {
   getConfigValue,
   initializeSharedConfig,
+  initializeLocalConfig,
   resolveConfig,
   setConfigValue,
   type ConfigContext,
   type ConfigError,
   type ConfigLayer,
+  type MyTasksDiscoveryGateway,
 } from "../config/index.ts";
 import type {
   IdentityError as AsanaError,
@@ -164,23 +166,91 @@ export const execute = async (
     .command("init")
     .description("initialize configuration")
     .option("--shared", "initialize shared repository configuration")
+    .option("--local", "initialize local repository configuration")
     .option("--workspace <gid>", "Asana workspace GID")
+    .option(
+      "--write-gitignore",
+      "automatically ignore the local configuration file",
+    )
     .action(
-      async (options: Readonly<{ shared?: boolean; workspace?: string }>) => {
+      async (
+        options: Readonly<{
+          shared?: boolean;
+          local?: boolean;
+          workspace?: string;
+          writeGitignore?: boolean;
+        }>,
+      ) => {
         const context = beginConfigCommand();
         if (!context) return;
-        if (!options.shared) {
-          result = usageError("config init currently requires --shared");
+
+        if (options.shared && options.local) {
+          result = usageError("--shared and --local are mutually exclusive");
           return;
         }
-        const initialized = await initializeSharedConfig(
+        if (!options.shared && !options.local) {
+          result = usageError(
+            "config init requires either --shared or --local",
+          );
+          return;
+        }
+        if (options.writeGitignore && !options.local) {
+          result = usageError("--write-gitignore requires --local");
+          return;
+        }
+
+        if (options.shared) {
+          const initialized = await initializeSharedConfig(
+            context,
+            options.workspace,
+          );
+          if (!initialized.ok) {
+            result = renderConfigFailure(initialized.error);
+            return;
+          }
+          result = {
+            stdout: json
+              ? renderJson(initialized.value)
+              : `initialized ${initialized.value.path}\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+          return;
+        }
+
+        // For local config init:
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+
+        const discovery =
+          dependencies.identity as unknown as MyTasksDiscoveryGateway;
+        const initialized = await initializeLocalConfig(
           context,
-          options.workspace,
+          tokenResult.value,
+          discovery,
+          options.writeGitignore !== undefined
+            ? { writeGitignore: options.writeGitignore }
+            : {},
         );
         if (!initialized.ok) {
-          result = renderConfigFailure(initialized.error);
+          if (initialized.error.kind === "configuration") {
+            result = renderConfigFailure(initialized.error);
+          } else {
+            result = renderIdentityFailure(initialized.error.kind);
+          }
           return;
         }
+
         result = {
           stdout: json
             ? renderJson(initialized.value)
@@ -190,6 +260,58 @@ export const execute = async (
         };
       },
     );
+
+  config
+    .command("resolve")
+    .description("resolve configuration resources")
+    .argument("<target>", "target to resolve (e.g. my-tasks)")
+    .action(async (target: string) => {
+      const context = beginConfigCommand();
+      if (!context) return;
+
+      if (target !== "my-tasks") {
+        result = usageError(`Unknown resolve target: ${target}`);
+        return;
+      }
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      const discovery =
+        dependencies.identity as unknown as MyTasksDiscoveryGateway;
+      const resolved = await initializeLocalConfig(
+        context,
+        tokenResult.value,
+        discovery,
+        { requireExistingIgnore: true },
+      );
+      if (!resolved.ok) {
+        if (resolved.error.kind === "configuration") {
+          result = renderConfigFailure(resolved.error);
+        } else {
+          result = renderIdentityFailure(resolved.error.kind);
+        }
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(resolved.value)
+          : `resolved ${resolved.value.path}\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+    });
 
   config
     .command("get")
