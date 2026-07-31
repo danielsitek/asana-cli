@@ -12,6 +12,12 @@ class InMemoryIdentity implements IdentityGateway {
   }
 }
 
+class ThrowingIdentity implements IdentityGateway {
+  async getAuthenticatedUser(): Promise<Result<Identity, AsanaError>> {
+    throw new Error("token=secret-value");
+  }
+}
+
 describe("execute", () => {
   const identity = new InMemoryIdentity(
     ok({ gid: "123", name: "Ada Lovelace" }),
@@ -87,5 +93,46 @@ describe("execute", () => {
     });
     expect(exhausted.exitCode).toBe(5);
     expect(exhausted.stderr).not.toContain("secret");
+  });
+
+  test("renders version and help without authenticating", async () => {
+    const version = await execute(["--version"], { environment: {}, identity });
+    expect(version).toEqual({ stdout: "0.1.0\n", stderr: "", exitCode: 0 });
+
+    const helpBefore = await execute(["--help", "whoami"], {
+      environment: {},
+      identity,
+    });
+    const helpAfter = await execute(["whoami", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(helpBefore.exitCode).toBe(0);
+    expect(helpBefore.stderr).toBe("");
+    expect(helpBefore.stdout).toContain("show the authenticated Asana user");
+    expect(helpAfter).toEqual(helpBefore);
+  });
+
+  test("normalizes unknown commands as JSON usage errors", async () => {
+    expect(await execute(["unknown"], { environment: {}, identity })).toEqual({
+      stdout: "",
+      stderr:
+        '{\n  "error": {\n    "code": "invalid_usage",\n    "message": "Invalid command usage"\n  }\n}\n',
+      exitCode: 2,
+    });
+  });
+
+  test("hides unexpected dependency errors", async () => {
+    const result = await execute(["whoami"], {
+      environment: { ASANA_CLI_TOKEN: "secret-value" },
+      identity: new ThrowingIdentity(),
+    });
+    expect(result).toEqual({
+      stdout: "",
+      stderr:
+        '{\n  "error": {\n    "code": "internal_error",\n    "message": "An unexpected internal error occurred"\n  }\n}\n',
+      exitCode: 6,
+    });
+    expect(result.stderr).not.toContain("secret-value");
   });
 });

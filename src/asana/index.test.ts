@@ -66,6 +66,21 @@ describe("AsanaHttpClient", () => {
     expect(waits).toEqual([1250]);
   });
 
+  test("uses the default retry wait for a retryable GET response", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, { status: 503 })
+        : Response.json({ data: { gid: "1", name: "Ada" } });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getAuthenticatedUser(
+      "x",
+    );
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
   test("returns safe authentication and malformed-response failures", async () => {
     const authBaseUrl = serverFor(
       () => new Response("secret", { status: 401 }),

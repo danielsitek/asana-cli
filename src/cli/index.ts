@@ -52,8 +52,6 @@ export const execute = async (
   let json = false;
   let invoked = false;
   let result: Execution | undefined;
-  let parserStdout = "";
-  let parserStderr = "";
 
   program.option("--json", "output JSON");
   program
@@ -90,34 +88,41 @@ export const execute = async (
       };
     });
 
+  if (argv.includes("--version") || argv.includes("-V")) {
+    return { stdout: `${program.version()}\n`, stderr: "", exitCode: 0 };
+  }
   if (argv.includes("--help") || argv.includes("-h")) {
-    return { stdout: program.helpInformation(), stderr: "", exitCode: 0 };
+    const whoami = program.commands.find(
+      (command) => command.name() === "whoami",
+    );
+    return {
+      stdout:
+        argv.includes("whoami") && whoami !== undefined
+          ? whoami.helpInformation()
+          : program.helpInformation(),
+      stderr: "",
+      exitCode: 0,
+    };
   }
 
   program.exitOverride();
   program.configureOutput({
-    writeOut: (text) => {
-      parserStdout += text;
-    },
-    writeErr: (text) => {
-      parserStderr += text;
-    },
+    writeOut: () => undefined,
+    writeErr: () => undefined,
   });
   try {
     await program.parseAsync(["bun", "asana-cli", ...argv], { from: "node" });
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "commander.helpDisplayed"
-    ) {
-      return { stdout: parserStdout, stderr: "", exitCode: 0 };
+    if (typeof error === "object" && error !== null && "code" in error) {
+      return usageError("Invalid command usage");
     }
-    const message = error instanceof Error ? error.message : "Invalid command";
     return {
-      ...usageError(message),
-      stderr: parserStderr || usageError(message).stderr,
+      stdout: "",
+      stderr: renderError({
+        code: "internal_error",
+        message: "An unexpected internal error occurred",
+      }),
+      exitCode: 6,
     };
   }
   return (
