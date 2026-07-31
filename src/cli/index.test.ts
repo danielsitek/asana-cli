@@ -13,7 +13,11 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
-import { type Task, type TaskGateway } from "../asana/index.ts";
+import {
+  type Task,
+  type TaskGateway,
+  type TaskReadError,
+} from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute } from "./index.ts";
 
@@ -36,9 +40,20 @@ class InMemoryDiscovery implements MyTasksDiscoveryGateway {
 }
 
 class InMemoryTaskReader implements TaskGateway {
-  constructor(private readonly response: Result<Task, IdentityError>) {}
+  public lastToken?: string;
+  public lastTaskId?: string;
+  public lastFields?: readonly string[];
 
-  async getTask(): Promise<Result<Task, IdentityError>> {
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  async getTask(
+    token: string,
+    taskId: string,
+    fields: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    this.lastToken = token;
+    this.lastTaskId = taskId;
+    this.lastFields = fields;
     return this.response;
   }
 }
@@ -820,15 +835,15 @@ describe("tasks get command", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(
       [
-        "assignee.gid: 9876",
-        "assignee.name: Ada Lovelace",
-        "completed: false",
-        "due_on: 2026-12-31",
         "gid: 1215978111726134",
         "name: Implement task reading",
         "notes:",
         "  This is a notes section",
         "  with multiple lines",
+        "completed: false",
+        "due_on: 2026-12-31",
+        "assignee.gid: 9876",
+        "assignee.name: Ada Lovelace",
       ].join("\n") + "\n",
     );
     expect(result.stderr).toBe("");
@@ -890,5 +905,130 @@ describe("tasks get command", () => {
     expect(result.stderr).toContain('"code": "not_found"');
     expect(result.stderr).toContain("Task not found");
     expect(result.stderr).not.toContain("top-secret-token");
+  });
+
+  test("records and asserts token, parsed task GID, and exact fields (URL extraction, defaults)", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      [
+        "tasks",
+        "get",
+        "https://app.asana.com/0/1201947864389005/1215978111726134",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "custom-token-123" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastToken).toBe("custom-token-123");
+    expect(reader.lastTaskId).toBe("1215978111726134");
+    expect(reader.lastFields).toEqual([
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+    ]);
+  });
+
+  test("allows fields flag before subcommand", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      ["--fields", "name,notes", "tasks", "get", "1215978111726134"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token-abc" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastFields).toEqual(["name", "notes"]);
+  });
+
+  test("allows fields flag after subcommand", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--fields", "name,notes"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token-abc" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastFields).toEqual(["name", "notes"]);
+  });
+
+  test("invalid fields list fails before reader or auth calls", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    // Pass empty SEGMENT inside --fields:
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--fields", "name,,notes"],
+      {
+        environment: {}, // No token provided, but it shouldn't even check token or reader!
+        identity: new InMemoryIdentity(
+          err({ kind: "authentication", message: "fail" }),
+        ),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain(
+      "Fields list cannot contain empty segments",
+    );
+    expect(reader.lastTaskId).toBeUndefined(); // Reader was NOT called!
+  });
+
+  test("maps task reader errors correctly for other kinds", async () => {
+    const errors: Record<TaskReadError["kind"], number> = {
+      authentication: 3,
+      api: 4,
+      not_found: 4,
+      rate_limit: 5,
+      network: 4,
+      invalid_response: 4,
+    };
+
+    for (const [kind, exitCode] of Object.entries(errors)) {
+      const failingReader = new InMemoryTaskReader(
+        err({
+          kind: kind as TaskReadError["kind"],
+          message: `error for ${kind}`,
+        }),
+      );
+      const result = await execute(["tasks", "get", "1215978111726134"], {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: failingReader,
+      });
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.stderr).toContain(kind);
+    }
+  });
+
+  test("handles thrown internal dependency error in task reader cleanly", async () => {
+    const throwingReader = {
+      getTask: async () => {
+        throw new Error("unexpected db/connection crash!");
+      },
+    };
+
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: throwingReader,
+    });
+
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain("unexpected internal error");
+    expect(result.stderr).not.toContain("unexpected db/connection crash!"); // Ensure actual error details are not leaked!
   });
 });

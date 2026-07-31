@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { execute } from "../cli/index.ts";
-import { AsanaHttpClient, parseTaskId } from "./index.ts";
+import { AsanaHttpClient } from "./index.ts";
+import { parseTaskId } from "../tasks/index.ts";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(() => servers.splice(0).forEach((server) => server.stop(true)));
@@ -473,7 +474,7 @@ describe("AsanaHttpClient", () => {
     const baseUrl = serverFor(() => {
       return Response.json({
         data: {
-          gid: "123",
+          gid: 123, // should be a string, so it's invalid!
           name: "Invalid task",
         },
       });
@@ -513,23 +514,23 @@ describe("parseTaskId", () => {
       ok: true,
       value: "1215978111726134",
     });
+  });
+
+  test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
     expect(
       parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/"),
     ).toEqual({
-      ok: true,
-      value: "1215978111726134",
+      ok: false,
+      error: "Invalid task identifier",
     });
     expect(
       parseTaskId(
         "https://app.asana.com/0/1201947864389005/1215978111726134/f/",
       ),
     ).toEqual({
-      ok: true,
-      value: "1215978111726134",
+      ok: false,
+      error: "Invalid task identifier",
     });
-  });
-
-  test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
     expect(parseTaskId("abc")).toEqual({
       ok: false,
       error: "Invalid task identifier",

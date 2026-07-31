@@ -123,7 +123,7 @@ describe("configuration output", () => {
     );
   });
 
-  test("renderTaskDetail formats task correctly with sorted keys, multiline notes, and nulls", () => {
+  test("renderTaskDetail formats task correctly with deterministic keys, multiline notes, and nulls", () => {
     const task = {
       gid: "1215978111726134",
       name: "Implement the change",
@@ -137,12 +137,12 @@ describe("configuration output", () => {
     };
     const expected =
       [
-        "assignee.gid: 12345",
-        "assignee.name: Ada Lovelace",
-        "completed: true",
-        "due_on: —",
         "gid: 1215978111726134",
         "name: Implement the change",
+        "completed: true",
+        "due_on: —",
+        "assignee.gid: 12345",
+        "assignee.name: Ada Lovelace",
         "notes:",
         "  This is line 1",
         "  This is line 2",
@@ -160,9 +160,9 @@ describe("configuration output", () => {
     };
     const expected =
       [
-        "assignee: —",
         "gid: 121",
         "name: Task without assignee",
+        "assignee: —",
         "notes: ",
       ].join("\n") + "\n";
     expect(renderTaskDetail(task)).toBe(expected);
