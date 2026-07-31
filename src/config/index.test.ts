@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, mock } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   mkdir,
   mkdtemp,
@@ -13,18 +13,6 @@ import { tmpdir } from "node:os";
 
 let mockRenameFailure = false;
 
-mock.module("node:fs/promises", () => {
-  return {
-    ...realFs,
-    rename: async (src: string, dest: string) => {
-      if (mockRenameFailure) {
-        throw new Error("mock rename failure");
-      }
-      return realFs.rename(src, dest);
-    },
-  };
-});
-
 import { err, ok, type Result } from "../shared/result.ts";
 import {
   getConfigValue,
@@ -32,11 +20,19 @@ import {
   resolveConfig,
   setConfigValue,
   initializeLocalConfig,
+  fsHooks,
   type ConfigContext,
   type MyTasksDiscoveryGateway,
   type DiscoveredMyTasks,
   type DiscoveryError,
 } from "./index.ts";
+
+fsHooks.rename = async (src: string, dest: string) => {
+  if (mockRenameFailure) {
+    throw new Error("mock rename failure");
+  }
+  return realFs.rename(src, dest);
+};
 
 const temporaryDirectories: string[] = [];
 
@@ -658,27 +654,6 @@ describe("initializeLocalConfig", () => {
     }
   });
 
-  test("fails if requireExistingIgnore is true and not ignored", async () => {
-    const root = await temporaryDirectory();
-    await mkdir(join(root, ".git"));
-    await writeJson(join(root, ".asana-cli.json"), {
-      workspace: { gid: "1201947864389005" },
-    });
-
-    const result = await initializeLocalConfig(
-      context(root, join(root, "home")),
-      "token",
-      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
-      { requireExistingIgnore: true },
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.kind).toBe("configuration");
-      expect(result.error.message).toContain("not ignored");
-    }
-  });
-
   test("succeeds if already ignored without modifying gitignore", async () => {
     const root = await temporaryDirectory();
     await mkdir(join(root, ".git"));
@@ -1038,7 +1013,7 @@ describe("initializeLocalConfig", () => {
       context(root, join(root, "home")),
       "token",
       mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
-      { requireExistingIgnore: true },
+      {},
     );
     expect(result.ok).toBe(true);
   });

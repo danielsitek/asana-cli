@@ -1,6 +1,8 @@
 export type CliError = Readonly<{
   code: string;
   message: string;
+  completed?: readonly string[];
+  failed?: readonly string[];
 }>;
 
 type ValueSource = Readonly<{
