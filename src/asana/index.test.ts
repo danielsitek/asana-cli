@@ -227,4 +227,173 @@ describe("AsanaHttpClient", () => {
       },
     });
   });
+
+  test("discoverMyTasks succeeds with all required GET requests and opt_fields", async () => {
+    let utlCalled = false;
+    let sectionsCalled = false;
+    let fieldsCalled = false;
+
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(request.headers.get("authorization")).toBe("Bearer secret-token");
+
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        expect(url.searchParams.get("workspace")).toBe("1201947864389005");
+        expect(url.searchParams.get("opt_fields")).toBe("gid,workspace.gid");
+        utlCalled = true;
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        expect(url.searchParams.get("limit")).toBe("100");
+        expect(url.searchParams.get("opt_fields")).toBe("gid,name");
+        sectionsCalled = true;
+        return Response.json({
+          data: [
+            { gid: "1213894072991394", name: "In Progress" },
+            { gid: "1213894072991395", name: "Done" },
+          ],
+        });
+      }
+
+      if (
+        url.pathname.endsWith(
+          "/projects/1213894072990299/custom_field_settings",
+        )
+      ) {
+        expect(url.searchParams.get("limit")).toBe("100");
+        expect(url.searchParams.get("opt_fields")).toBe(
+          "gid,custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+        );
+        fieldsCalled = true;
+        return Response.json({
+          data: [
+            {
+              gid: "cf-setting-1",
+              custom_field: {
+                gid: "1213894072991499",
+                name: "Hours Estimate",
+                resource_subtype: "number",
+                is_value_read_only: false,
+              },
+            },
+          ],
+        });
+      }
+
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks(
+      "secret-token",
+      "1201947864389005",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.userTaskListGid).toBe("1213894072990299");
+      expect(result.value.sections).toEqual([
+        { gid: "1213894072991394", name: "In Progress" },
+        { gid: "1213894072991395", name: "Done" },
+      ]);
+      expect(result.value.customFields).toEqual([
+        {
+          gid: "1213894072991499",
+          name: "Hours Estimate",
+          resourceSubtype: "number",
+          isReadOnly: false,
+        },
+      ]);
+    }
+    expect(utlCalled).toBe(true);
+    expect(sectionsCalled).toBe(true);
+    expect(fieldsCalled).toBe(true);
+  });
+
+  test("discoverMyTasks fails if next_page pagination is non-null for sections", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        return Response.json({
+          data: [{ gid: "1", name: "Sec" }],
+          next_page: { offset: "foo" },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks("token", "1201947864389005");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+      expect(result.error.message).toContain("sections; next_page is present");
+    }
+  });
+
+  test("discoverMyTasks fails if next_page pagination is non-null for custom fields", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        return Response.json({
+          data: [{ gid: "1", name: "Sec" }],
+        });
+      }
+      if (
+        url.pathname.endsWith(
+          "/projects/1213894072990299/custom_field_settings",
+        )
+      ) {
+        return Response.json({
+          data: [
+            {
+              gid: "cf-setting-1",
+              custom_field: {
+                gid: "1",
+                name: "CF",
+                resource_subtype: "number",
+                is_value_read_only: false,
+              },
+            },
+          ],
+          next_page: { offset: "foo" },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks("token", "1201947864389005");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+      expect(result.error.message).toContain(
+        "custom field settings; next_page is present",
+      );
+    }
+  });
 });
