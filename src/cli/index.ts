@@ -18,6 +18,7 @@ import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
+import { createMyTasksMutationResolver } from "../my-tasks/index.ts";
 import {
   type TaskGateway,
   type TaskMutationGateway,
@@ -36,6 +37,7 @@ import {
   renderJson,
   renderResolvedMyTasks,
   renderTaskDetail,
+  renderTaskUpdate,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -604,6 +606,15 @@ export const execute = async (
     .option("--assignee <value>", "set me, a user GID, or null")
     .option("--due-on <date>", "set YYYY-MM-DD or null")
     .option("--completed <boolean>", "set true or false")
+    .option("--my-section <section>", "move within My Tasks by GID or @alias")
+    .option(
+      "--custom-field <field:value>",
+      "set a numeric My Tasks custom field; repeatable",
+      (value: string, previous: readonly string[] | undefined) => [
+        ...(previous ?? []),
+        value,
+      ],
+    )
     .action(
       async (
         idArg: string,
@@ -614,12 +625,17 @@ export const execute = async (
           assignee?: string;
           dueOn?: string;
           completed?: string;
+          mySection?: string;
+          customField?: readonly string[];
         }>,
       ) => {
         invoked = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
-        const prepared = prepareTaskUpdate(idArg, options);
+        const prepared = prepareTaskUpdate(idArg, {
+          ...options,
+          ...(options.customField ? { customFields: options.customField } : {}),
+        });
         if (!prepared.ok) {
           result = usageError(prepared.error.message);
           return;
@@ -649,18 +665,38 @@ export const execute = async (
           return;
         }
 
+        const resolveAuthenticatedUserGid = async (token: string) => {
+          const identity =
+            await dependencies.identity.getAuthenticatedUser(token);
+          return identity.ok
+            ? { ok: true as const, value: identity.value.gid }
+            : identity;
+        };
+        const hasMyTasksMutation =
+          prepared.value.mySection !== undefined ||
+          prepared.value.customFields.length > 0;
+        let myTasksMutationResolver;
+        if (hasMyTasksMutation) {
+          const configuration = dependencies.configuration;
+          const discovery = dependencies.discovery;
+          const reader = dependencies.taskReader;
+          if (configuration && discovery && reader) {
+            myTasksMutationResolver = createMyTasksMutationResolver({
+              configuration,
+              discovery,
+              reader,
+              resolveAuthenticatedUserGid,
+            });
+          }
+        }
+
         const updated = await executeTaskUpdate(
           tokenResult.value,
           prepared.value,
           {
             writer: dependencies.taskWriter,
-            resolveAuthenticatedUserGid: async (token) => {
-              const identity =
-                await dependencies.identity.getAuthenticatedUser(token);
-              return identity.ok
-                ? { ok: true, value: identity.value.gid }
-                : identity;
-            },
+            ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
+            resolveAuthenticatedUserGid,
             readFile:
               dependencies.readFile ??
               ((path) => readFile(path, { encoding: "utf8" })),
@@ -668,16 +704,30 @@ export const execute = async (
           },
         );
         if (!updated.ok) {
-          result =
-            updated.error.kind === "invalid_usage"
-              ? usageError(updated.error.message)
-              : renderTaskReadFailure(updated.error.kind);
+          if (updated.error.kind === "invalid_usage") {
+            result = usageError(updated.error.message);
+          } else if (updated.error.kind === "configuration") {
+            result = renderConfigFailure(updated.error);
+          } else if (updated.error.kind === "internal_error") {
+            result = {
+              stdout: "",
+              stderr: renderError({
+                code: "internal_error",
+                message: updated.error.message,
+              }),
+              exitCode: 6,
+            };
+          } else {
+            result = renderTaskReadFailure(updated.error.kind);
+          }
           return;
         }
         result = {
           stdout: json
-            ? renderJson(updated.value)
-            : renderTaskDetail(updated.value),
+            ? renderJson(updated.value.task, {
+                applied: updated.value.applied,
+              })
+            : renderTaskUpdate(updated.value.task, updated.value.applied),
           stderr: "",
           exitCode: 0,
         };

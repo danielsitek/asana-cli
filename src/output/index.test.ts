@@ -8,6 +8,7 @@ import {
   renderConfigValue,
   renderConfig,
   renderTaskDetail,
+  renderTaskUpdate,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -166,5 +167,20 @@ describe("configuration output", () => {
         "notes: ",
       ].join("\n") + "\n";
     expect(renderTaskDetail(task)).toBe(expected);
+  });
+
+  test("renderTaskUpdate preserves task detail and appends applied changes", () => {
+    expect(
+      renderTaskUpdate(
+        { gid: "123", name: "Updated" },
+        { name: "Updated", custom_fields: { "400": null } },
+      ),
+    ).toBe(
+      "gid: 123\n" +
+        "name: Updated\n" +
+        "applied:\n" +
+        "  name: Updated\n" +
+        "  custom_fields.400: —\n",
+    );
   });
 });

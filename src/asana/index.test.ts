@@ -779,6 +779,46 @@ describe("AsanaHttpClient", () => {
     });
   });
 
+  test("combines My Tasks fields in one exact PUT request", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(async (request) => {
+      calls += 1;
+      expect(request.method).toBe("PUT");
+      expect(new URL(request.url).pathname).toBe("/api/1.0/tasks/123");
+      expect(await request.json()).toEqual({
+        data: {
+          assignee: "9001",
+          assignee_section: "300",
+          custom_fields: { "400": null, "500": 2.5 },
+        },
+      });
+      return Response.json({
+        data: {
+          gid: "123",
+          assignee: { gid: "9001", name: "Ada" },
+          assignee_section: { gid: "300", name: "In Review" },
+          custom_fields: [
+            { gid: "400", number_value: null },
+            { gid: "500", number_value: 2.5 },
+          ],
+        },
+      });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      {
+        assignee: "9001",
+        assignee_section: "300",
+        custom_fields: { "400": null, "500": 2.5 },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(1);
+  });
+
   test.each([429, 502, 503, 504])(
     "retries PUT %i responses",
     async (status) => {

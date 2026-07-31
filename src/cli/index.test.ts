@@ -1121,6 +1121,15 @@ describe("tasks update command", () => {
       get taskWriter(): never {
         throw new Error("task writer accessed");
       },
+      get taskReader(): never {
+        throw new Error("task reader accessed");
+      },
+      get discovery(): never {
+        throw new Error("discovery accessed");
+      },
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
       get readFile(): never {
         throw new Error("file reader accessed");
       },
@@ -1136,6 +1145,17 @@ describe("tasks update command", () => {
       ["tasks", "update", "123", "--assignee", "email@example.com"],
       ["tasks", "update", "123", "--due-on", "2026-02-29"],
       ["tasks", "update", "123", "--completed", "yes"],
+      ["tasks", "update", "123", "--my-section", "section"],
+      ["tasks", "update", "123", "--custom-field", "400:1e3"],
+      [
+        "tasks",
+        "update",
+        "123",
+        "--custom-field",
+        "400:1",
+        "--custom-field",
+        "400:2",
+      ],
     ]) {
       const result = await execute(argv, dependencies);
       expect(result.exitCode).toBe(2);
@@ -1185,7 +1205,15 @@ describe("tasks update command", () => {
     );
 
     expect(result).toEqual({
-      stdout: "gid: 123\nname: Updated\n",
+      stdout:
+        "gid: 123\n" +
+        "name: Updated\n" +
+        "applied:\n" +
+        "  name: Updated\n" +
+        "  notes: Replacement\n" +
+        "  assignee: 9001\n" +
+        "  due_on: 2028-02-29\n" +
+        "  completed: false\n",
       stderr: "",
       exitCode: 0,
     });
@@ -1292,7 +1320,10 @@ describe("tasks update command", () => {
         taskWriter: writer,
       },
     );
-    expect(JSON.parse(json.stdout)).toEqual({ data: updatedTask, meta: {} });
+    expect(JSON.parse(json.stdout)).toEqual({
+      data: updatedTask,
+      meta: { applied: { name: "Updated" } },
+    });
 
     const unsupported = await execute(
       ["--fields", "name", "tasks", "update", "123", "--name", "Updated"],
@@ -1303,6 +1334,166 @@ describe("tasks update command", () => {
       },
     );
     expect(unsupported.exitCode).toBe(2);
+    expect(writer.calls).toHaveLength(1);
+  });
+
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  const myTasksDependencies = async (
+    overrides: Partial<ExecuteDependencies> = {},
+    localMyTasks: Record<string, unknown> = {
+      userTaskListGid: "200",
+      sections: { in_review: "300" },
+      customFields: { estimate: "400" },
+    },
+  ): Promise<ExecuteDependencies> => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-update-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      JSON.stringify({ workspace: { gid: "100" } }),
+    );
+    await writeFile(
+      join(root, ".asana-cli.local.json"),
+      JSON.stringify({ myTasks: localMyTasks }),
+    );
+    return {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskReader: new InMemoryTaskReader(
+        ok({ gid: "123", assignee: { gid: "9001", name: "Ada" } }),
+      ),
+      taskWriter: new InMemoryTaskWriter(ok(updatedTask)),
+      discovery: new InMemoryDiscovery(
+        ok({
+          userTaskListGid: "200",
+          sections: [{ gid: "300", name: "In Review" }],
+          customFields: [
+            {
+              gid: "400",
+              name: "Estimate",
+              resourceSubtype: "number",
+              isReadOnly: false,
+            },
+            {
+              gid: "500",
+              name: "Cost",
+              resourceSubtype: "number",
+              isReadOnly: false,
+            },
+          ],
+        }),
+      ),
+      configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      ...overrides,
+    };
+  };
+
+  test("applies aliased and raw My Tasks values with deterministic output", async () => {
+    const dependencies = await myTasksDependencies();
+    const writer = dependencies.taskWriter as InMemoryTaskWriter;
+    const argv = [
+      "tasks",
+      "update",
+      "123",
+      "--name",
+      "Updated",
+      "--assignee",
+      "me",
+      "--my-section",
+      "@in_review",
+      "--custom-field",
+      "500:2.5",
+      "--custom-field",
+      "@estimate:null",
+    ];
+
+    const human = await execute(argv, dependencies);
+    expect(human).toEqual({
+      stdout:
+        "gid: 123\n" +
+        "name: Updated\n" +
+        "applied:\n" +
+        "  name: Updated\n" +
+        "  assignee: 9001\n" +
+        "  assignee_section: 300\n" +
+        "  custom_fields.400: —\n" +
+        "  custom_fields.500: 2.5\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(writer.calls).toEqual([
+      {
+        token: "secret",
+        taskId: "123",
+        mutation: {
+          name: "Updated",
+          assignee: "9001",
+          assignee_section: "300",
+          custom_fields: { "400": null, "500": 2.5 },
+        },
+      },
+    ]);
+
+    const jsonDependencies = await myTasksDependencies();
+    const json = await execute(["--json", ...argv], jsonDependencies);
+    expect(JSON.parse(json.stdout)).toEqual({
+      data: updatedTask,
+      meta: {
+        applied: {
+          name: "Updated",
+          assignee: "9001",
+          assignee_section: "300",
+          custom_fields: { "400": null, "500": 2.5 },
+        },
+      },
+    });
+  });
+
+  test("maps a My Tasks configuration failure before writing", async () => {
+    const dependencies = await myTasksDependencies();
+    const writer = dependencies.taskWriter as InMemoryTaskWriter;
+    const result = await execute(
+      ["tasks", "update", "123", "--my-section", "@missing"],
+      dependencies,
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("is not configured");
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  test("plain updates do not access My Tasks dependencies", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const dependencies: ExecuteDependencies = {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskWriter: writer,
+      get taskReader(): never {
+        throw new Error("task reader accessed");
+      },
+      get discovery(): never {
+        throw new Error("discovery accessed");
+      },
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+    };
+
+    const result = await execute(
+      ["tasks", "update", "123", "--name", "Updated"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(0);
     expect(writer.calls).toHaveLength(1);
   });
 });

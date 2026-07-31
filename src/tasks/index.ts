@@ -40,6 +40,8 @@ export type TaskMutation = Readonly<{
   assignee?: string | null;
   due_on?: string | null;
   completed?: boolean;
+  assignee_section?: string;
+  custom_fields?: Readonly<Record<string, number | null>>;
 }>;
 
 export type TaskUpdateOptions = Readonly<{
@@ -49,6 +51,8 @@ export type TaskUpdateOptions = Readonly<{
   assignee?: string;
   dueOn?: string;
   completed?: string;
+  mySection?: string;
+  customFields?: readonly string[];
 }>;
 
 export interface TaskMutationGateway {
@@ -61,6 +65,7 @@ export interface TaskMutationGateway {
 
 export type TaskUpdateDependencies = Readonly<{
   writer: TaskMutationGateway;
+  myTasksMutationResolver?: MyTasksMutationResolver;
   resolveAuthenticatedUserGid: (
     token: string,
   ) => Promise<Result<string, TaskReadError>>;
@@ -70,14 +75,93 @@ export type TaskUpdateDependencies = Readonly<{
 
 export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
+  | Readonly<{ kind: "internal_error"; message: string }>
+  | Readonly<{ kind: "configuration"; message: string }>
   | TaskReadError;
+
+export type MyTasksMutationError = TaskUpdateError;
+
+export type TaskUpdateResult = Readonly<{
+  task: Task;
+  applied: TaskMutation;
+}>;
 
 export type PreparedTaskUpdate = Readonly<{
   taskId: string;
   mutation: TaskMutation;
   notesFile?: string;
   resolveAssigneeMe: boolean;
+  mySection?: ResourceSelector;
+  customFields: readonly PreparedCustomField[];
 }>;
+
+export type ResourceSelector = Readonly<
+  { kind: "gid"; value: string } | { kind: "alias"; value: string }
+>;
+
+export type PreparedCustomField = Readonly<{
+  field: ResourceSelector;
+  value: number | null;
+}>;
+
+export type MyTasksMutationRequest = Readonly<{
+  token: string;
+  taskId: string;
+  finalAssignee?: string | null;
+  authenticatedUserGid?: string;
+  mySection?: ResourceSelector;
+  customFields: readonly PreparedCustomField[];
+}>;
+
+export type MyTasksMutationResult = Readonly<{
+  assignee_section?: string;
+  custom_fields?: Readonly<Record<string, number | null>>;
+}>;
+
+export interface MyTasksMutationResolver {
+  resolve(
+    request: MyTasksMutationRequest,
+  ): Promise<Result<MyTasksMutationResult, MyTasksMutationError>>;
+}
+
+const parseResourceSelector = (
+  input: string,
+  flag: string,
+): Result<ResourceSelector, string> => {
+  if (/^\d+$/.test(input)) return ok({ kind: "gid", value: input });
+  if (input.startsWith("@") && input.length > 1) {
+    return ok({ kind: "alias", value: input.slice(1) });
+  }
+  return err(`${flag} must use a digit-only GID or @alias`);
+};
+
+const parseNumberValue = (input: string): Result<number | null, string> => {
+  if (input === "null") return ok(null);
+  if (!/^-?\d+(?:\.\d+)?$/.test(input)) {
+    return err("Custom field value must be an integer, dot-decimal, or null");
+  }
+  const value = Number(input);
+  return Number.isFinite(value)
+    ? ok(value)
+    : err("Custom field value must be finite");
+};
+
+const parseCustomField = (
+  input: string,
+): Result<PreparedCustomField, string> => {
+  const delimiter = input.indexOf(":");
+  if (delimiter <= 0 || delimiter !== input.lastIndexOf(":")) {
+    return err("--custom-field must use <field-gid|@alias>:<value>");
+  }
+  const field = parseResourceSelector(
+    input.slice(0, delimiter),
+    "--custom-field",
+  );
+  if (!field.ok) return field;
+  const value = parseNumberValue(input.slice(delimiter + 1));
+  if (!value.ok) return value;
+  return ok({ field: field.value, value: value.value });
+};
 
 const realDate = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -103,7 +187,10 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
-  const supplied = Object.values(options).some((value) => value !== undefined);
+  const supplied = Object.entries(options).some(
+    ([key, value]) =>
+      value !== undefined && (key !== "customFields" || value.length > 0),
+  );
   if (!supplied) {
     return err({
       kind: "invalid_usage",
@@ -126,6 +213,32 @@ export const prepareTaskUpdate = (
       kind: "invalid_usage",
       message: "--assignee must be me, null, or a digit-only user GID",
     });
+  }
+
+  const mySection =
+    options.mySection === undefined
+      ? undefined
+      : parseResourceSelector(options.mySection, "--my-section");
+  if (mySection && !mySection.ok) {
+    return err({ kind: "invalid_usage", message: mySection.error });
+  }
+
+  const customFields: PreparedCustomField[] = [];
+  const seenSelectors = new Set<string>();
+  for (const input of options.customFields ?? []) {
+    const parsed = parseCustomField(input);
+    if (!parsed.ok) {
+      return err({ kind: "invalid_usage", message: parsed.error });
+    }
+    const selectorKey = `${parsed.value.field.kind}:${parsed.value.field.value}`;
+    if (seenSelectors.has(selectorKey)) {
+      return err({
+        kind: "invalid_usage",
+        message: "--custom-field cannot update the same field more than once",
+      });
+    }
+    seenSelectors.add(selectorKey);
+    customFields.push(parsed.value);
   }
   if (
     options.dueOn !== undefined &&
@@ -176,6 +289,8 @@ export const prepareTaskUpdate = (
       ? {}
       : { notesFile: options.notesFile }),
     resolveAssigneeMe: options.assignee === "me",
+    ...(mySection?.ok ? { mySection: mySection.value } : {}),
+    customFields,
   });
 };
 
@@ -183,8 +298,9 @@ export const executeTaskUpdate = async (
   token: string,
   prepared: PreparedTaskUpdate,
   dependencies: TaskUpdateDependencies,
-): Promise<Result<Task, TaskUpdateError>> => {
+): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
   const mutation = { ...prepared.mutation };
+  let authenticatedUserGid: string | undefined;
   if (prepared.notesFile !== undefined) {
     try {
       mutation.notes =
@@ -205,9 +321,58 @@ export const executeTaskUpdate = async (
     const identity = await dependencies.resolveAuthenticatedUserGid(token);
     if (!identity.ok) return identity;
     mutation.assignee = identity.value;
+    authenticatedUserGid = identity.value;
   }
-  return dependencies.writer.updateTask(token, prepared.taskId, mutation);
+
+  const hasMyTasksMutation =
+    prepared.mySection !== undefined || prepared.customFields.length > 0;
+  if (hasMyTasksMutation) {
+    if (!dependencies.myTasksMutationResolver) {
+      return err({
+        kind: "internal_error",
+        message: "My Tasks update dependencies are unavailable",
+      });
+    }
+    const preparedMyTasks = await dependencies.myTasksMutationResolver.resolve({
+      token,
+      taskId: prepared.taskId,
+      ...(mutation.assignee === undefined
+        ? {}
+        : { finalAssignee: mutation.assignee }),
+      ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
+      ...(prepared.mySection === undefined
+        ? {}
+        : { mySection: prepared.mySection }),
+      customFields: prepared.customFields,
+    });
+    if (!preparedMyTasks.ok) return preparedMyTasks;
+    Object.assign(mutation, preparedMyTasks.value);
+  }
+
+  const applied = orderMutation(mutation);
+  const updated = await dependencies.writer.updateTask(
+    token,
+    prepared.taskId,
+    applied,
+  );
+  return updated.ok ? ok({ task: updated.value, applied }) : updated;
 };
+
+const orderMutation = (mutation: TaskMutation): TaskMutation => ({
+  ...(mutation.name === undefined ? {} : { name: mutation.name }),
+  ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
+  ...(mutation.assignee === undefined ? {} : { assignee: mutation.assignee }),
+  ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
+  ...(mutation.completed === undefined
+    ? {}
+    : { completed: mutation.completed }),
+  ...(mutation.assignee_section === undefined
+    ? {}
+    : { assignee_section: mutation.assignee_section }),
+  ...(mutation.custom_fields === undefined
+    ? {}
+    : { custom_fields: mutation.custom_fields }),
+});
 
 export const DEFAULT_FIELDS = [
   "gid",
