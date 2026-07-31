@@ -131,10 +131,54 @@ describe("task update workflow", () => {
     ["invalid date shape", "123", { dueOn: "31-12-2026" }],
     ["impossible date", "123", { dueOn: "2026-02-29" }],
     ["invalid completed", "123", { completed: "yes" }],
+    ["invalid My Tasks section", "123", { mySection: "section" }],
+    ["empty My Tasks alias", "123", { mySection: "@" }],
+    ["missing custom field delimiter", "123", { customFields: ["123"] }],
+    ["empty custom field value", "123", { customFields: ["123:"] }],
+    ["multiple delimiters", "123", { customFields: ["123:1:2"] }],
+    ["empty field selector", "123", { customFields: [":1"] }],
+    ["non-GID field", "123", { customFields: ["field:1"] }],
+    ["exponent number", "123", { customFields: ["123:1e3"] }],
+    ["comma number", "123", { customFields: ["123:1,5"] }],
+    ["NaN", "123", { customFields: ["123:NaN"] }],
+    ["Infinity", "123", { customFields: ["123:Infinity"] }],
+    ["leading decimal", "123", { customFields: ["123:.5"] }],
+    ["trailing decimal", "123", { customFields: ["123:5."] }],
+    ["duplicate raw field", "123", { customFields: ["456:1", "456:2"] }],
+    [
+      "duplicate alias field",
+      "123",
+      { customFields: ["@estimate:1", "@estimate:null"] },
+    ],
   ])("rejects %s during preparation", (_, taskId, options) => {
     const result = prepareTaskUpdate(taskId, options);
 
     expect(result.ok).toBe(false);
+  });
+
+  test("prepares raw and aliased My Tasks mutations", () => {
+    expect(
+      prepareTaskUpdate("123", {
+        mySection: "@in_review",
+        customFields: ["456:-2.5", "@hours_estimate:null", "789:0"],
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        taskId: "123",
+        mutation: {},
+        resolveAssigneeMe: false,
+        mySection: { kind: "alias", value: "in_review" },
+        customFields: [
+          { field: { kind: "gid", value: "456" }, value: -2.5 },
+          {
+            field: { kind: "alias", value: "hours_estimate" },
+            value: null,
+          },
+          { field: { kind: "gid", value: "789" }, value: 0 },
+        ],
+      },
+    });
   });
 
   test("builds all supported mutations and resolves me before writing", async () => {
