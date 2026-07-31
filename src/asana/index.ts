@@ -13,6 +13,8 @@ import type {
 import {
   type Task,
   type TaskGateway,
+  type TaskMutation,
+  type TaskMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
@@ -99,7 +101,11 @@ const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
 };
 
 export class AsanaHttpClient
-  implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway
+  implements
+    IdentityGateway,
+    MyTasksDiscoveryGateway,
+    TaskGateway,
+    TaskMutationGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -352,6 +358,84 @@ export class AsanaHttpClient
       return result;
     }
     return ok(result.value.data);
+  }
+
+  async updateTask(
+    token: string,
+    taskId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task, TaskReadError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const url = new URL(`tasks/${taskId}`, `${this.#baseUrl}/`);
+    const schema = z.object({ data: buildTaskSchema([]) });
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        this.#requestTimeoutMs,
+      );
+      try {
+        const response = await fetch(url, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ data: mutation }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const retryable = [429, 502, 503, 504].includes(response.status);
+          if (retryable && attempt < this.#maxRetries) {
+            await this.#sleep(
+              this.retryDelay(attempt, response.headers.get("Retry-After")),
+            );
+            continue;
+          }
+          if (response.status === 404) {
+            return err({
+              kind: "not_found",
+              status: 404,
+              message: "Task not found",
+            });
+          }
+          return err(this.responseError(response.status, retryable));
+        }
+
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          return err({
+            kind: "invalid_response",
+            message: "Asana returned an invalid response",
+          });
+        }
+        const parsed = schema.safeParse(body);
+        if (!parsed.success) {
+          return err({
+            kind: "invalid_response",
+            message: "Asana returned an invalid response",
+          });
+        }
+        return ok(parsed.data.data);
+      } catch {
+        if (attempt < this.#maxRetries) {
+          await this.#sleep(this.retryDelay(attempt));
+          continue;
+        }
+        return err({ kind: "network", message: "Unable to reach Asana" });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    return err({ kind: "network", message: "Unable to reach Asana" });
   }
 
   private retryDelay(
