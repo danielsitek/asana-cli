@@ -1,11 +1,4 @@
 import { err, ok, type Result } from "../shared/result.ts";
-import type {
-  ConfigError,
-  DiscoveryError,
-  DiscoveredMyTasks,
-  MyTasksDiscoveryGateway,
-  ResolvedConfig,
-} from "../config/index.ts";
 
 export type Task = Readonly<{
   gid?: string;
@@ -72,9 +65,7 @@ export interface TaskMutationGateway {
 
 export type TaskUpdateDependencies = Readonly<{
   writer: TaskMutationGateway;
-  reader?: TaskGateway;
-  discovery?: MyTasksDiscoveryGateway;
-  resolveConfiguration?: () => Promise<Result<ResolvedConfig, ConfigError>>;
+  myTasksMutationResolver?: MyTasksMutationResolver;
   resolveAuthenticatedUserGid: (
     token: string,
   ) => Promise<Result<string, TaskReadError>>;
@@ -85,9 +76,10 @@ export type TaskUpdateDependencies = Readonly<{
 export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
   | Readonly<{ kind: "internal_error"; message: string }>
-  | ConfigError
-  | DiscoveryError
+  | Readonly<{ kind: "configuration"; message: string }>
   | TaskReadError;
+
+export type MyTasksMutationError = TaskUpdateError;
 
 export type TaskUpdateResult = Readonly<{
   task: Task;
@@ -111,6 +103,26 @@ export type PreparedCustomField = Readonly<{
   field: ResourceSelector;
   value: number | null;
 }>;
+
+export type MyTasksMutationRequest = Readonly<{
+  token: string;
+  taskId: string;
+  finalAssignee?: string | null;
+  authenticatedUserGid?: string;
+  mySection?: ResourceSelector;
+  customFields: readonly PreparedCustomField[];
+}>;
+
+export type MyTasksMutationResult = Readonly<{
+  assignee_section?: string;
+  custom_fields?: Readonly<Record<string, number | null>>;
+}>;
+
+export interface MyTasksMutationResolver {
+  resolve(
+    request: MyTasksMutationRequest,
+  ): Promise<Result<MyTasksMutationResult, MyTasksMutationError>>;
+}
 
 const parseResourceSelector = (
   input: string,
@@ -315,13 +327,24 @@ export const executeTaskUpdate = async (
   const hasMyTasksMutation =
     prepared.mySection !== undefined || prepared.customFields.length > 0;
   if (hasMyTasksMutation) {
-    const preparedMyTasks = await prepareMyTasksMutation(
+    if (!dependencies.myTasksMutationResolver) {
+      return err({
+        kind: "internal_error",
+        message: "My Tasks update dependencies are unavailable",
+      });
+    }
+    const preparedMyTasks = await dependencies.myTasksMutationResolver.resolve({
       token,
-      prepared,
-      mutation,
-      authenticatedUserGid,
-      dependencies,
-    );
+      taskId: prepared.taskId,
+      ...(mutation.assignee === undefined
+        ? {}
+        : { finalAssignee: mutation.assignee }),
+      ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
+      ...(prepared.mySection === undefined
+        ? {}
+        : { mySection: prepared.mySection }),
+      customFields: prepared.customFields,
+    });
     if (!preparedMyTasks.ok) return preparedMyTasks;
     Object.assign(mutation, preparedMyTasks.value);
   }
@@ -350,211 +373,6 @@ const orderMutation = (mutation: TaskMutation): TaskMutation => ({
     ? {}
     : { custom_fields: mutation.custom_fields }),
 });
-
-const configurationError = (message: string): ConfigError => ({
-  kind: "configuration",
-  message,
-});
-
-const resolveAlias = (
-  selector: ResourceSelector,
-  aliases: Readonly<Record<string, string>> | undefined,
-  resource: string,
-): Result<string, ConfigError> => {
-  if (selector.kind === "gid") return ok(selector.value);
-  const gid = aliases?.[selector.value];
-  return gid
-    ? ok(gid)
-    : err(
-        configurationError(
-          `${resource} alias @${selector.value} is not configured`,
-        ),
-      );
-};
-
-const requireMyTasksDependencies = (
-  dependencies: TaskUpdateDependencies,
-): Result<
-  Readonly<{
-    reader: TaskGateway;
-    discovery: MyTasksDiscoveryGateway;
-    resolveConfiguration: () => Promise<Result<ResolvedConfig, ConfigError>>;
-  }>,
-  Readonly<{ kind: "internal_error"; message: string }>
-> => {
-  if (
-    !dependencies.reader ||
-    !dependencies.discovery ||
-    !dependencies.resolveConfiguration
-  ) {
-    return err({
-      kind: "internal_error",
-      message: "My Tasks update dependencies are unavailable",
-    });
-  }
-  return ok({
-    reader: dependencies.reader,
-    discovery: dependencies.discovery,
-    resolveConfiguration: dependencies.resolveConfiguration,
-  });
-};
-
-const validateDiscoveredResources = (
-  discovered: DiscoveredMyTasks,
-  configuredUserTaskListGid: string,
-  sectionGid: string | undefined,
-  customFieldGids: readonly string[],
-): Result<void, ConfigError> => {
-  if (discovered.userTaskListGid !== configuredUserTaskListGid) {
-    return err(
-      configurationError(
-        "Configured My Tasks list does not match the authenticated user's list",
-      ),
-    );
-  }
-  if (
-    sectionGid !== undefined &&
-    !discovered.sections.some((section) => section.gid === sectionGid)
-  ) {
-    return err(
-      configurationError(
-        `My Tasks section ${sectionGid} is not present in the configured list`,
-      ),
-    );
-  }
-  for (const gid of customFieldGids) {
-    const field = discovered.customFields.find(
-      (candidate) => candidate.gid === gid,
-    );
-    if (!field) {
-      return err(
-        configurationError(
-          `Custom field ${gid} is not present in the configured My Tasks list`,
-        ),
-      );
-    }
-    if (field.resourceSubtype !== "number") {
-      return err(
-        configurationError(`Custom field ${gid} is not a number field`),
-      );
-    }
-    if (field.isReadOnly) {
-      return err(configurationError(`Custom field ${gid} is read-only`));
-    }
-  }
-  return ok(undefined);
-};
-
-const prepareMyTasksMutation = async (
-  token: string,
-  prepared: PreparedTaskUpdate,
-  mutation: TaskMutation,
-  knownAuthenticatedUserGid: string | undefined,
-  dependencies: TaskUpdateDependencies,
-): Promise<
-  Result<
-    Readonly<{
-      assignee_section?: string;
-      custom_fields?: Readonly<Record<string, number | null>>;
-    }>,
-    TaskUpdateError
-  >
-> => {
-  const required = requireMyTasksDependencies(dependencies);
-  if (!required.ok) return required;
-
-  const resolved = await required.value.resolveConfiguration();
-  if (!resolved.ok) return resolved;
-  const workspaceGid = resolved.value.value.workspace?.gid;
-  const configuredMyTasks = resolved.value.value.myTasks;
-  if (!workspaceGid) {
-    return err(
-      configurationError("workspace.gid is required in configuration"),
-    );
-  }
-  if (!configuredMyTasks?.userTaskListGid) {
-    return err(
-      configurationError(
-        "myTasks.userTaskListGid is required in local configuration",
-      ),
-    );
-  }
-
-  const sectionGid = prepared.mySection
-    ? resolveAlias(
-        prepared.mySection,
-        configuredMyTasks.sections,
-        "My Tasks section",
-      )
-    : ok(undefined);
-  if (!sectionGid.ok) return sectionGid;
-
-  const customFields: Record<string, number | null> = {};
-  for (const customField of prepared.customFields) {
-    const gid = resolveAlias(
-      customField.field,
-      configuredMyTasks.customFields,
-      "Custom field",
-    );
-    if (!gid.ok) return gid;
-    if (Object.hasOwn(customFields, gid.value)) {
-      return err({
-        kind: "invalid_usage",
-        message: "--custom-field cannot update the same field more than once",
-      });
-    }
-    customFields[gid.value] = customField.value;
-  }
-
-  const discovered = await required.value.discovery.discoverMyTasks(
-    token,
-    workspaceGid,
-  );
-  if (!discovered.ok) return discovered;
-  const validated = validateDiscoveredResources(
-    discovered.value,
-    configuredMyTasks.userTaskListGid,
-    sectionGid.value,
-    Object.keys(customFields),
-  );
-  if (!validated.ok) return validated;
-
-  const identity = knownAuthenticatedUserGid
-    ? ok(knownAuthenticatedUserGid)
-    : await dependencies.resolveAuthenticatedUserGid(token);
-  if (!identity.ok) return identity;
-  let finalAssignee = mutation.assignee;
-  if (finalAssignee === undefined) {
-    const current = await required.value.reader.getTask(
-      token,
-      prepared.taskId,
-      ["assignee.gid"],
-    );
-    if (!current.ok) return current;
-    finalAssignee = current.value.assignee?.gid;
-  }
-  if (finalAssignee !== identity.value) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "My Tasks mutations require the final assignee to be the authenticated user",
-    });
-  }
-
-  const sortedCustomFields = Object.fromEntries(
-    Object.entries(customFields).sort(([left], [right]) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    ),
-  );
-  return ok({
-    ...(sectionGid.value === undefined
-      ? {}
-      : { assignee_section: sectionGid.value }),
-    ...(Object.keys(sortedCustomFields).length === 0
-      ? {}
-      : { custom_fields: sortedCustomFields }),
-  });
-};
 
 export const DEFAULT_FIELDS = [
   "gid",

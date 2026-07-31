@@ -18,6 +18,7 @@ import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
+import { createMyTasksMutationResolver } from "../my-tasks/index.ts";
 import {
   type TaskGateway,
   type TaskMutationGateway,
@@ -663,30 +664,38 @@ export const execute = async (
           return;
         }
 
+        const resolveAuthenticatedUserGid = async (token: string) => {
+          const identity =
+            await dependencies.identity.getAuthenticatedUser(token);
+          return identity.ok
+            ? { ok: true as const, value: identity.value.gid }
+            : identity;
+        };
+        const hasMyTasksMutation =
+          prepared.value.mySection !== undefined ||
+          prepared.value.customFields.length > 0;
+        let myTasksMutationResolver;
+        if (hasMyTasksMutation) {
+          const configuration = dependencies.configuration;
+          const discovery = dependencies.discovery;
+          const reader = dependencies.taskReader;
+          if (configuration && discovery && reader) {
+            myTasksMutationResolver = createMyTasksMutationResolver({
+              configuration,
+              discovery,
+              reader,
+              resolveAuthenticatedUserGid,
+            });
+          }
+        }
+
         const updated = await executeTaskUpdate(
           tokenResult.value,
           prepared.value,
           {
             writer: dependencies.taskWriter,
-            ...(dependencies.taskReader
-              ? { reader: dependencies.taskReader }
-              : {}),
-            ...(dependencies.discovery
-              ? { discovery: dependencies.discovery }
-              : {}),
-            ...(dependencies.configuration
-              ? {
-                  resolveConfiguration: () =>
-                    resolveConfig(dependencies.configuration!),
-                }
-              : {}),
-            resolveAuthenticatedUserGid: async (token) => {
-              const identity =
-                await dependencies.identity.getAuthenticatedUser(token);
-              return identity.ok
-                ? { ok: true, value: identity.value.gid }
-                : identity;
-            },
+            ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
+            resolveAuthenticatedUserGid,
             readFile:
               dependencies.readFile ??
               ((path) => readFile(path, { encoding: "utf8" })),
