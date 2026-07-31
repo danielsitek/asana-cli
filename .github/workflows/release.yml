@@ -198,11 +198,17 @@ jobs:
             --version "${{ needs.validate.outputs.version }}" \
             --base-url "file://$assets"
           ruby -c "$RUNNER_TEMP/asana-cli.rb"
-          brew install --formula "$RUNNER_TEMP/asana-cli.rb"
-          brew test asana-cli
+          tap="asana-cli/ci"
+          brew tap-new --no-git "$tap"
+          formula_dir="$(brew --repository "$tap")/Formula"
+          cp "$RUNNER_TEMP/asana-cli.rb" "$formula_dir/asana-cli.rb"
+          brew install "$tap/asana-cli"
+          brew test "$tap/asana-cli"
       - name: Remove test formula
         if: always()
-        run: brew uninstall asana-cli || true
+        run: |
+          brew uninstall asana-cli || true
+          brew untap asana-cli/ci || true
 
   release:
     needs: [validate, package, homebrew-install]

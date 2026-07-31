@@ -15,12 +15,17 @@ honest reporting of partial writes.
 Available only after the `v0.1.0` draft release is published:
 
 ```sh
-curl -LO https://github.com/danielsitek/asana-cli/releases/download/v0.1.0/asana-cli.rb
-brew install --formula ./asana-cli.rb
+brew tap-new --no-git danielsitek/asana-cli-local
+formula_dir="$(brew --repository danielsitek/asana-cli-local)/Formula"
+curl -L https://github.com/danielsitek/asana-cli/releases/download/v0.1.0/asana-cli.rb \
+  -o "$formula_dir/asana-cli.rb"
+brew install danielsitek/asana-cli-local/asana-cli
 ```
 
 The formula is generated per release and points at architecture-specific
-archives (`darwin-arm64`, `darwin-x64`) with embedded SHA-256 checksums.
+archives (`darwin-arm64`, `darwin-x64`) with embedded SHA-256 checksums. The
+local tap is necessary because Homebrew 6 no longer installs a standalone
+Formula file directly. A dedicated public tap may replace this step later.
 
 ### Direct archive (macOS, Linux, WSL2)
 
@@ -55,20 +60,22 @@ notarization yet); Gatekeeper may require an explicit approval on first run.
 
 ### Upgrade
 
-Download the newer archive or versioned Formula asset and repeat its install
-steps. A standalone Formula is not a tap, so it cannot discover a newer
-release by itself. To replace a Homebrew installation explicitly:
+Download the newer archive or overwrite the Formula in the local tap. Then
+upgrade the Homebrew installation explicitly:
 
 ```sh
-brew uninstall asana-cli
-brew install --formula ./asana-cli.rb
+formula_dir="$(brew --repository danielsitek/asana-cli-local)/Formula"
+curl -L https://github.com/danielsitek/asana-cli/releases/download/v0.2.0/asana-cli.rb \
+  -o "$formula_dir/asana-cli.rb"
+brew upgrade danielsitek/asana-cli-local/asana-cli
 ```
 
 ### Uninstall
 
 ```sh
-brew uninstall asana-cli          # Homebrew
-sudo rm /usr/local/bin/asana-cli  # direct archive install
+brew uninstall asana-cli                         # Homebrew package
+brew untap danielsitek/asana-cli-local           # optional local tap cleanup
+sudo rm /usr/local/bin/asana-cli                 # direct archive install
 ```
 
 ## Authentication
