@@ -17,6 +17,7 @@ import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
+import { type TaskGateway, parseTaskId } from "../asana/index.ts";
 import {
   renderConfig,
   renderConfigValue,
@@ -24,6 +25,7 @@ import {
   renderIdentity,
   renderJson,
   renderResolvedMyTasks,
+  renderTaskDetail,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -36,6 +38,7 @@ export type Execution = Readonly<{
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
+  taskReader?: TaskGateway;
   discovery?: MyTasksDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
@@ -152,12 +155,20 @@ export const execute = async (
   };
 
   program.option("--json", "output JSON");
+  program.option("--fields <fields>", "additional Asana fields");
+  program.option("--debug", "enable debug logging");
   const whoami = program
     .command("whoami")
     .description("show the authenticated Asana user")
     .action(async () => {
       invoked = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
+      if (program.opts<{ fields?: string }>().fields !== undefined) {
+        result = usageError(
+          "Option --fields is not supported for this command",
+        );
+        return;
+      }
       const token = resolveToken(dependencies.environment);
       if (!token.ok) {
         result = {
@@ -212,6 +223,13 @@ export const execute = async (
       ) => {
         const context = beginConfigCommand();
         if (!context) return;
+
+        if (program.opts<{ fields?: string }>().fields !== undefined) {
+          result = usageError(
+            "Option --fields is not supported for this command",
+          );
+          return;
+        }
 
         if (options.shared && options.local) {
           result = usageError("--shared and --local are mutually exclusive");
@@ -316,6 +334,13 @@ export const execute = async (
       const context = beginConfigCommand();
       if (!context) return;
 
+      if (program.opts<{ fields?: string }>().fields !== undefined) {
+        result = usageError(
+          "Option --fields is not supported for this command",
+        );
+        return;
+      }
+
       const tokenResult = resolveToken(dependencies.environment);
       if (!tokenResult.ok) {
         result = {
@@ -375,6 +400,14 @@ export const execute = async (
     .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
       const context = beginConfigCommand();
       if (!context) return;
+
+      if (program.opts<{ fields?: string }>().fields !== undefined) {
+        result = usageError(
+          "Option --fields is not supported for this command",
+        );
+        return;
+      }
+
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -417,6 +450,14 @@ export const execute = async (
       ) => {
         const context = beginConfigCommand();
         if (!context) return;
+
+        if (program.opts<{ fields?: string }>().fields !== undefined) {
+          result = usageError(
+            "Option --fields is not supported for this command",
+          );
+          return;
+        }
+
         const layer = selectedLayer(options);
         if (!layer.ok) {
           result = usageError(layer.error);
@@ -444,6 +485,14 @@ export const execute = async (
     .action(async (options: Readonly<{ sources?: boolean }>) => {
       const context = beginConfigCommand();
       if (!context) return;
+
+      if (program.opts<{ fields?: string }>().fields !== undefined) {
+        result = usageError(
+          "Option --fields is not supported for this command",
+        );
+        return;
+      }
+
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -460,6 +509,89 @@ export const execute = async (
         exitCode: 0,
       };
     });
+
+  const tasks = program.command("tasks").description("manage tasks");
+
+  const tasksGet = tasks
+    .command("get <id>")
+    .description("read a task's details")
+    .action(async (idArg: string) => {
+      invoked = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      const parsedId = parseTaskId(idArg);
+      if (!parsedId.ok) {
+        result = usageError("Invalid task identifier");
+        return;
+      }
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      if (!dependencies.taskReader) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Task reader is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const DEFAULT_FIELDS = [
+        "gid",
+        "name",
+        "notes",
+        "completed",
+        "due_on",
+        "assignee.gid",
+        "assignee.name",
+      ];
+      const customFieldsOpt = program.opts<{ fields?: string }>().fields;
+      const requestedFields = customFieldsOpt
+        ? customFieldsOpt
+            .split(",")
+            .map((f) => f.trim())
+            .filter(Boolean)
+        : [];
+      const fields = Array.from(
+        new Set([...DEFAULT_FIELDS, ...requestedFields]),
+      );
+
+      const taskResult = await dependencies.taskReader.getTask(
+        tokenResult.value,
+        parsedId.value,
+        fields,
+      );
+
+      if (!taskResult.ok) {
+        result = renderIdentityFailure(taskResult.error.kind);
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(taskResult.value)
+          : renderTaskDetail(taskResult.value),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+
+  tasksGet.exitOverride();
+  tasksGet.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);
