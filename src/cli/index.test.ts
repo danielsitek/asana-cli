@@ -1206,13 +1206,14 @@ describe("tasks update command", () => {
 
     expect(result).toEqual({
       stdout:
-        "task.gid: 123\n" +
-        "task.name: Updated\n" +
-        "applied.name: Updated\n" +
-        "applied.notes: Replacement\n" +
-        "applied.assignee: 9001\n" +
-        "applied.due_on: 2028-02-29\n" +
-        "applied.completed: false\n",
+        "gid: 123\n" +
+        "name: Updated\n" +
+        "applied:\n" +
+        "  name: Updated\n" +
+        "  notes: Replacement\n" +
+        "  assignee: 9001\n" +
+        "  due_on: 2028-02-29\n" +
+        "  completed: false\n",
       stderr: "",
       exitCode: 0,
     });
@@ -1320,8 +1321,8 @@ describe("tasks update command", () => {
       },
     );
     expect(JSON.parse(json.stdout)).toEqual({
-      data: { task: updatedTask, applied: { name: "Updated" } },
-      meta: {},
+      data: updatedTask,
+      meta: { applied: { name: "Updated" } },
     });
 
     const unsupported = await execute(
@@ -1419,13 +1420,14 @@ describe("tasks update command", () => {
     const human = await execute(argv, dependencies);
     expect(human).toEqual({
       stdout:
-        "task.gid: 123\n" +
-        "task.name: Updated\n" +
-        "applied.name: Updated\n" +
-        "applied.assignee: 9001\n" +
-        "applied.assignee_section: 300\n" +
-        "applied.custom_fields.400: —\n" +
-        "applied.custom_fields.500: 2.5\n",
+        "gid: 123\n" +
+        "name: Updated\n" +
+        "applied:\n" +
+        "  name: Updated\n" +
+        "  assignee: 9001\n" +
+        "  assignee_section: 300\n" +
+        "  custom_fields.400: —\n" +
+        "  custom_fields.500: 2.5\n",
       stderr: "",
       exitCode: 0,
     });
@@ -1445,8 +1447,8 @@ describe("tasks update command", () => {
     const jsonDependencies = await myTasksDependencies();
     const json = await execute(["--json", ...argv], jsonDependencies);
     expect(JSON.parse(json.stdout)).toEqual({
-      data: {
-        task: updatedTask,
+      data: updatedTask,
+      meta: {
         applied: {
           name: "Updated",
           assignee: "9001",
@@ -1454,7 +1456,6 @@ describe("tasks update command", () => {
           custom_fields: { "400": null, "500": 2.5 },
         },
       },
-      meta: {},
     });
   });
 

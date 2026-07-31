@@ -138,3 +138,16 @@ export const renderTaskDetail = (task: Record<string, unknown>): string => {
   });
   return lines.join("\n") + "\n";
 };
+
+export const renderTaskUpdate = (
+  task: Record<string, unknown>,
+  applied: Record<string, unknown>,
+): string => {
+  const renderedApplied = renderTaskDetail(applied);
+  const appliedDetail = renderedApplied
+    .slice(0, -1)
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `${renderTaskDetail(task)}applied:\n${appliedDetail}\n`;
+};
