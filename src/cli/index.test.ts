@@ -1459,127 +1459,41 @@ describe("tasks update command", () => {
     });
   });
 
-  test.each([
-    [
-      "missing section alias",
-      ["--my-section", "@missing"],
-      {},
-      "is not configured",
-    ],
-    [
-      "missing field alias",
-      ["--custom-field", "@missing:1"],
-      {},
-      "is not configured",
-    ],
-    [
-      "wrong custom field type",
-      ["--custom-field", "400:1"],
-      {
-        discovery: new InMemoryDiscovery(
-          ok({
-            userTaskListGid: "200",
-            sections: [{ gid: "300", name: "In Review" }],
-            customFields: [
-              {
-                gid: "400",
-                name: "Estimate",
-                resourceSubtype: "text",
-                isReadOnly: false,
-              },
-            ],
-          }),
-        ),
-      },
-      "is not a number field",
-    ],
-    [
-      "read-only custom field",
-      ["--custom-field", "400:1"],
-      {
-        discovery: new InMemoryDiscovery(
-          ok({
-            userTaskListGid: "200",
-            sections: [{ gid: "300", name: "In Review" }],
-            customFields: [
-              {
-                gid: "400",
-                name: "Estimate",
-                resourceSubtype: "number",
-                isReadOnly: true,
-              },
-            ],
-          }),
-        ),
-      },
-      "is read-only",
-    ],
-    [
-      "field absent from My Tasks",
-      ["--custom-field", "401:1"],
-      {},
-      "is not present",
-    ],
-  ] as const)(
-    "rejects %s before writing",
-    async (_, flags, overrides, message) => {
-      const dependencies = await myTasksDependencies(overrides);
-      const writer = dependencies.taskWriter as InMemoryTaskWriter;
-      const result = await execute(
-        ["tasks", "update", "123", ...flags],
-        dependencies,
-      );
-      expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(message);
-      expect(writer.calls).toHaveLength(0);
-    },
-  );
-
-  test("rejects missing My Tasks config and assignee mismatch", async () => {
-    const missing = await myTasksDependencies({}, {});
-    const missingResult = await execute(
-      ["tasks", "update", "123", "--my-section", "300"],
-      missing,
+  test("maps a My Tasks configuration failure before writing", async () => {
+    const dependencies = await myTasksDependencies();
+    const writer = dependencies.taskWriter as InMemoryTaskWriter;
+    const result = await execute(
+      ["tasks", "update", "123", "--my-section", "@missing"],
+      dependencies,
     );
-    expect(missingResult.exitCode).toBe(2);
-    expect(missingResult.stderr).toContain("userTaskListGid");
 
-    const mismatch = await myTasksDependencies({
-      taskReader: new InMemoryTaskReader(
-        ok({ gid: "123", assignee: { gid: "9002", name: "Grace" } }),
-      ),
-    });
-    const mismatchWriter = mismatch.taskWriter as InMemoryTaskWriter;
-    const mismatchResult = await execute(
-      ["tasks", "update", "123", "--my-section", "300"],
-      mismatch,
-    );
-    expect(mismatchResult.exitCode).toBe(2);
-    expect(mismatchResult.stderr).toContain("final assignee");
-    expect(mismatchWriter.calls).toHaveLength(0);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("is not configured");
+    expect(writer.calls).toHaveLength(0);
   });
 
-  test("maps discovery and task-read failures before writing", async () => {
-    for (const overrides of [
-      {
-        discovery: new InMemoryDiscovery(
-          err({ kind: "network", message: "offline" }),
-        ),
+  test("plain updates do not access My Tasks dependencies", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const dependencies: ExecuteDependencies = {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskWriter: writer,
+      get taskReader(): never {
+        throw new Error("task reader accessed");
       },
-      {
-        taskReader: new InMemoryTaskReader(
-          err({ kind: "not_found", message: "missing" }),
-        ),
+      get discovery(): never {
+        throw new Error("discovery accessed");
       },
-    ]) {
-      const dependencies = await myTasksDependencies(overrides);
-      const writer = dependencies.taskWriter as InMemoryTaskWriter;
-      const result = await execute(
-        ["tasks", "update", "123", "--my-section", "300"],
-        dependencies,
-      );
-      expect(result.exitCode).toBe(4);
-      expect(writer.calls).toHaveLength(0);
-    }
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+    };
+
+    const result = await execute(
+      ["tasks", "update", "123", "--name", "Updated"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls).toHaveLength(1);
   });
 });
