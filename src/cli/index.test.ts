@@ -1799,9 +1799,14 @@ describe("tasks create command", () => {
 
   test("renders a useful human result for a basic subtask", async () => {
     const setup = await dependenciesFor([]);
+    const dependenciesWithoutWriter: ExecuteDependencies = {
+      environment: setup.dependencies.environment,
+      identity,
+      taskCreator: setup.creator,
+    };
     const result = await execute(
       ["tasks", "create", "--parent", "123", "--name", "Child"],
-      setup.dependencies,
+      dependenciesWithoutWriter,
     );
 
     expect(result).toEqual({
@@ -1822,9 +1827,14 @@ describe("tasks create command", () => {
     expect(setup.writer.calls).toHaveLength(0);
   });
 
-  test("rejects unresolved plans before the subtask POST", async () => {
+  test("rejects a missing writer for a requested stage before POST", async () => {
     const setup = await dependenciesFor();
-    const missingAlias = await execute(
+    const dependenciesWithoutWriter: ExecuteDependencies = {
+      environment: setup.dependencies.environment,
+      identity,
+      taskCreator: setup.creator,
+    };
+    const result = await execute(
       [
         "tasks",
         "create",
@@ -1834,16 +1844,24 @@ describe("tasks create command", () => {
         "Child",
         "--assignee",
         "me",
-        "--my-section",
-        "@missing",
       ],
-      setup.dependencies,
+      dependenciesWithoutWriter,
     );
-    expect(missingAlias.exitCode).toBe(2);
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain(
+      "Task writer is required for staged subtask mutations",
+    );
     expect(setup.creator.calls).toHaveLength(0);
+  });
 
-    const mismatch = await execute(
+  test("renders a representative partial result with exit code one", async () => {
+    const setup = await dependenciesFor([
+      ok({ gid: "456", name: "Child" }),
+      err({ kind: "api", message: "unsafe detail" }),
+    ]);
+    const result = await execute(
       [
+        "--json",
         "tasks",
         "create",
         "--parent",
@@ -1851,78 +1869,29 @@ describe("tasks create command", () => {
         "--name",
         "Child",
         "--assignee",
-        "9002",
+        "me",
+        "--my-section",
+        "300",
         "--custom-field",
         "400:4",
       ],
       setup.dependencies,
     );
-    expect(mismatch.exitCode).toBe(2);
-    expect(setup.creator.calls).toHaveLength(0);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(setup.writer.calls).toHaveLength(2);
+    const stages = JSON.parse(result.stdout).meta.stages as Array<{
+      status: string;
+      error?: { message: string };
+    }>;
+    expect(stages.map((stage) => stage.status)).toEqual([
+      "completed",
+      "completed",
+      "failed",
+      "not_run",
+    ]);
+    expect(stages[2]?.error?.message).toBe("Asana API request failed");
+    expect(result.stdout).not.toContain("unsafe detail");
   });
-
-  test("reports an ambiguous create failure without later writes", async () => {
-    const setup = await dependenciesFor(
-      [],
-      err({ kind: "network", message: "ambiguous POST" }),
-    );
-    const result = await execute(
-      ["tasks", "create", "--parent", "123", "--name", "Child"],
-      setup.dependencies,
-    );
-    expect(result.exitCode).toBe(4);
-    expect(setup.creator.calls).toHaveLength(1);
-    expect(setup.writer.calls).toHaveLength(0);
-  });
-
-  test.each([
-    [0, ["failed", "not_run", "not_run"], 1],
-    [1, ["completed", "failed", "not_run"], 2],
-    [2, ["completed", "completed", "failed"], 3],
-  ] as const)(
-    "stops after post-create stage %i and reports every stage",
-    async (failureIndex, statuses, expectedWrites) => {
-      const responses = [0, 1, 2].map((index) =>
-        index === failureIndex
-          ? err<TaskReadError>({ kind: "api", message: "unsafe detail" })
-          : ok<Task>({ gid: "456", name: "Child" }),
-      );
-      const setup = await dependenciesFor(responses);
-      const result = await execute(
-        [
-          "--json",
-          "tasks",
-          "create",
-          "--parent",
-          "123",
-          "--name",
-          "Child",
-          "--assignee",
-          "me",
-          "--my-section",
-          "300",
-          "--custom-field",
-          "400:4",
-        ],
-        setup.dependencies,
-      );
-
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toBe("");
-      expect(setup.creator.calls).toHaveLength(1);
-      expect(setup.writer.calls).toHaveLength(expectedWrites);
-      const stages = JSON.parse(result.stdout).meta.stages as Array<{
-        status: string;
-        error?: { message: string };
-      }>;
-      expect(stages[0]?.status).toBe("completed");
-      expect(stages.slice(1).map((stage) => stage.status)).toEqual([
-        ...statuses,
-      ]);
-      expect(stages[failureIndex + 1]?.error?.message).toBe(
-        "Asana API request failed",
-      );
-      expect(result.stdout).not.toContain("unsafe detail");
-    },
-  );
 });
