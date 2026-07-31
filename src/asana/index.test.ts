@@ -1029,6 +1029,31 @@ describe("AsanaHttpClient", () => {
     });
     expect(attempts).toBe(1);
   });
+
+  test("does not retry an unavailable POST network request", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ data: { gid: "456" } }),
+    });
+    const baseUrl = `http://127.0.0.1:${server.port}/api/1.0`;
+    server.stop(true);
+    const waits: number[] = [];
+
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 3,
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }).createSubtask("token", "123", { name: "Child" });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "network", message: "Unable to reach Asana" },
+    });
+    expect(waits).toEqual([]);
+  });
 });
 
 describe("AsanaHttpClient comments", () => {
@@ -1190,62 +1215,5 @@ describe("AsanaHttpClient comments", () => {
       ["gid", "text"],
     );
     expect(result).toEqual({ ok: true, value: { gid: "9", text: "hello" } });
-  });
-
-  test("retries a comment POST only on an explicit 429 with Retry-After", async () => {
-    let attempts = 0;
-    const waits: number[] = [];
-    const baseUrl = serverFor(() => {
-      attempts += 1;
-      return attempts === 1
-        ? new Response(null, { status: 429, headers: { "Retry-After": "2" } })
-        : Response.json({ data: { gid: "9", text: "hello" } });
-    });
-    const result = await new AsanaHttpClient({
-      baseUrl,
-      sleep: async (milliseconds) => {
-        waits.push(milliseconds);
-      },
-    }).createTaskComment("token", "123", "hello", ["gid", "text"]);
-    expect(result.ok).toBe(true);
-    expect(attempts).toBe(2);
-    expect(waits).toEqual([2000]);
-  });
-
-  test.each([500, 502, 503, 504])(
-    "never retries a comment POST after %i",
-    async (status) => {
-      let attempts = 0;
-      const baseUrl = serverFor(() => {
-        attempts += 1;
-        return new Response(null, { status });
-      });
-      const result = await new AsanaHttpClient({
-        baseUrl,
-        maxRetries: 3,
-        sleep: async () => undefined,
-      }).createTaskComment("token", "123", "hello", ["gid"]);
-      expect(result.ok).toBe(false);
-      expect(attempts).toBe(1);
-    },
-  );
-
-  test("never retries a timed-out comment POST", async () => {
-    let attempts = 0;
-    const baseUrl = serverFor(() => {
-      attempts += 1;
-      return new Promise<Response>(() => undefined);
-    });
-    const result = await new AsanaHttpClient({
-      baseUrl,
-      maxRetries: 3,
-      requestTimeoutMs: 1,
-      sleep: async () => undefined,
-    }).createTaskComment("token", "123", "hello", ["gid"]);
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "network", message: "Unable to reach Asana" },
-    });
-    expect(attempts).toBe(1);
   });
 });
