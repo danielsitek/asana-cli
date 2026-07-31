@@ -9,13 +9,18 @@ import {
   type ConfigContext,
   type ConfigError,
   type ConfigLayer,
-  type ConfigSource,
 } from "../config/index.ts";
 import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
-import { renderError, renderIdentity, renderJson } from "../output/index.ts";
+import {
+  renderConfig,
+  renderConfigValue,
+  renderError,
+  renderIdentity,
+  renderJson,
+} from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
 export type Execution = Readonly<{
@@ -69,64 +74,6 @@ const configContext = (
   dependencies: ExecuteDependencies,
 ): ConfigContext | undefined => dependencies.configuration;
 
-const renderValue = (value: unknown): string =>
-  typeof value === "string" ? value : JSON.stringify(value);
-
-const renderConfigValue = (
-  value: unknown,
-  source: ConfigSource | undefined,
-  sources: Readonly<Record<string, ConfigSource>>,
-  json: boolean,
-): string => {
-  if (json) {
-    return renderJson(
-      value,
-      source ? { source } : Object.keys(sources).length > 0 ? { sources } : {},
-    );
-  }
-  const sourceLines = source
-    ? `\nsource: ${source.path}`
-    : Object.entries(sources)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => `\nsource ${key}: ${item.path}`)
-        .join("");
-  return `${renderValue(value)}${sourceLines}\n`;
-};
-
-const configLeaves = (
-  value: unknown,
-  prefix = "",
-): ReadonlyArray<readonly [string, unknown]> => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return [[prefix, value]];
-  }
-  return Object.entries(value).flatMap(([key, child]) =>
-    configLeaves(child, prefix ? `${prefix}.${key}` : key),
-  );
-};
-
-const renderConfig = (
-  value: unknown,
-  sources: Readonly<Record<string, ConfigSource>>,
-  includeSources: boolean,
-  json: boolean,
-): string => {
-  if (json) {
-    return renderJson(value, includeSources ? { sources } : {});
-  }
-  return (
-    configLeaves(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(
-        ([key, child]) =>
-          `${key}: ${renderValue(child)}${
-            includeSources && sources[key] ? ` (${sources[key].path})` : ""
-          }`,
-      )
-      .join("\n") + "\n"
-  );
-};
-
 const selectedLayer = (
   options: Readonly<{
     shared?: boolean;
@@ -161,6 +108,14 @@ export const execute = async (
   let invoked = false;
   let result: Execution | undefined;
   let parserStdout = "";
+
+  const beginConfigCommand = (): ConfigContext | undefined => {
+    invoked = true;
+    json = program.opts<{ json?: boolean }>().json ?? false;
+    const context = configContext(dependencies);
+    if (!context) result = usageError("Configuration context is unavailable");
+    return context;
+  };
 
   const captureOutput = {
     writeOut: (text: string) => {
@@ -216,15 +171,10 @@ export const execute = async (
     .option("--workspace <gid>", "Asana workspace GID")
     .action(
       async (options: Readonly<{ shared?: boolean; workspace?: string }>) => {
-        invoked = true;
-        json = program.opts<{ json?: boolean }>().json ?? false;
+        const context = beginConfigCommand();
+        if (!context) return;
         if (!options.shared) {
           result = usageError("config init currently requires --shared");
-          return;
-        }
-        const context = configContext(dependencies);
-        if (!context) {
-          result = usageError("Configuration context is unavailable");
           return;
         }
         const initialized = await initializeSharedConfig(
@@ -251,13 +201,8 @@ export const execute = async (
     .argument("<key>", "dotted configuration key")
     .option("--source", "include the winning source")
     .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
-      invoked = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
-      const context = configContext(dependencies);
-      if (!context) {
-        result = usageError("Configuration context is unavailable");
-        return;
-      }
+      const context = beginConfigCommand();
+      if (!context) return;
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -298,16 +243,11 @@ export const execute = async (
           global?: boolean;
         }>,
       ) => {
-        invoked = true;
-        json = program.opts<{ json?: boolean }>().json ?? false;
+        const context = beginConfigCommand();
+        if (!context) return;
         const layer = selectedLayer(options);
         if (!layer.ok) {
           result = usageError(layer.error);
-          return;
-        }
-        const context = configContext(dependencies);
-        if (!context) {
-          result = usageError("Configuration context is unavailable");
           return;
         }
         const written = await setConfigValue(context, key, value, layer.value);
@@ -330,13 +270,8 @@ export const execute = async (
     .description("show effective configuration")
     .option("--sources", "include the winning source for every value")
     .action(async (options: Readonly<{ sources?: boolean }>) => {
-      invoked = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
-      const context = configContext(dependencies);
-      if (!context) {
-        result = usageError("Configuration context is unavailable");
-        return;
-      }
+      const context = beginConfigCommand();
+      if (!context) return;
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);

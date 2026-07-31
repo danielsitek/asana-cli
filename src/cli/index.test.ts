@@ -211,7 +211,9 @@ describe("config commands", () => {
         dependencies,
       ),
     ).toEqual({
-      stdout: `100\nsource: ${join(root, ".asana-cli.json")}\n`,
+      stdout:
+        `100\nsource layer: shared\n` +
+        `source path: ${join(root, ".asana-cli.json")}\n`,
       stderr: "",
       exitCode: 0,
     });
@@ -227,8 +229,11 @@ describe("config commands", () => {
     const human = await execute(["config", "show", "--sources"], dependencies);
     expect(human).toEqual({
       stdout:
-        `team.gid: 200 (${join(root, ".asana-cli.json")})\n` +
-        `workspace.gid: 100 (${join(root, ".asana-cli.json")})\n`,
+        "network.concurrency: 4 [built-in]\n" +
+        "network.maxRetries: 3 [built-in]\n" +
+        "network.requestTimeoutMs: 30000 [built-in]\n" +
+        `team.gid: 200 [shared (${join(root, ".asana-cli.json")})]\n` +
+        `workspace.gid: 100 [shared (${join(root, ".asana-cli.json")})]\n`,
       stderr: "",
       exitCode: 0,
     });
@@ -244,9 +249,20 @@ describe("config commands", () => {
     expect(jsonAfter).toEqual(jsonBefore);
     expect(jsonAfter.exitCode).toBe(0);
     expect(JSON.parse(jsonAfter.stdout)).toEqual({
-      data: { workspace: { gid: "100" }, team: { gid: "200" } },
+      data: {
+        network: {
+          concurrency: 4,
+          maxRetries: 3,
+          requestTimeoutMs: 30000,
+        },
+        workspace: { gid: "100" },
+        team: { gid: "200" },
+      },
       meta: {
         sources: {
+          "network.concurrency": { layer: "built-in" },
+          "network.maxRetries": { layer: "built-in" },
+          "network.requestTimeoutMs": { layer: "built-in" },
           "workspace.gid": {
             layer: "shared",
             path: join(root, ".asana-cli.json"),
@@ -296,6 +312,27 @@ describe("config commands", () => {
       dependencies,
     );
     expect(safeLocal.exitCode).toBe(0);
+  });
+
+  test("sets schema-typed network values and rejects malformed values", async () => {
+    const { root, dependencies } = await setup();
+
+    const valid = await execute(
+      ["config", "set", "network.concurrency", "8"],
+      dependencies,
+    );
+    expect(valid.exitCode).toBe(0);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ network: { concurrency: 8 } });
+
+    const invalid = await execute(
+      ["config", "set", "network.maxRetries", "NaN"],
+      dependencies,
+    );
+    expect(invalid.exitCode).toBe(2);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toContain("network.maxRetries");
   });
 
   test("returns configuration and usage errors with exit code two", async () => {
