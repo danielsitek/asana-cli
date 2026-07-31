@@ -11,6 +11,7 @@ import {
   type ConfigError,
   type ConfigLayer,
   type MyTasksDiscoveryGateway,
+  type StageFailureError,
 } from "../config/index.ts";
 import type {
   IdentityError as AsanaError,
@@ -72,6 +73,17 @@ const renderConfigFailure = (error: ConfigError): Execution => ({
   stdout: "",
   stderr: renderError({ code: "configuration", message: error.message }),
   exitCode: 2,
+});
+
+const renderStageFailure = (error: StageFailureError): Execution => ({
+  stdout: "",
+  stderr: renderError({
+    code: "stage_failure",
+    message: error.message,
+    completed: error.completed,
+    failed: error.failed,
+  }),
+  exitCode: 1,
 });
 
 const selectedLayer = (
@@ -260,6 +272,8 @@ export const execute = async (
         if (!initialized.ok) {
           if (initialized.error.kind === "configuration") {
             result = renderConfigFailure(initialized.error);
+          } else if (initialized.error.kind === "stage_failure") {
+            result = renderStageFailure(initialized.error);
           } else {
             result = renderIdentityFailure(initialized.error.kind);
           }
@@ -316,11 +330,13 @@ export const execute = async (
         context,
         tokenResult.value,
         dependencies.discovery,
-        { requireExistingIgnore: true },
+        {},
       );
       if (!resolved.ok) {
         if (resolved.error.kind === "configuration") {
           result = renderConfigFailure(resolved.error);
+        } else if (resolved.error.kind === "stage_failure") {
+          result = renderStageFailure(resolved.error);
         } else {
           result = renderIdentityFailure(resolved.error.kind);
         }
