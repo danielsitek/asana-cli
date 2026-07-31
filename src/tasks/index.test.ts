@@ -3,11 +3,15 @@ import { describe, expect, test } from "bun:test";
 import { err, ok } from "../shared/result.ts";
 import {
   DEFAULT_FIELDS,
+  executeTaskUpdate,
   parseTaskId,
-  updateTask,
+  prepareTaskUpdate,
   validateFieldList,
+  type PreparedTaskUpdate,
   type TaskMutation,
   type TaskMutationGateway,
+  type TaskUpdateDependencies,
+  type TaskUpdateOptions,
 } from "./index.ts";
 
 class RecordingWriter implements TaskMutationGateway {
@@ -23,14 +27,24 @@ class RecordingWriter implements TaskMutationGateway {
 
 const dependenciesFor = (
   writer: RecordingWriter,
-  overrides: Partial<Parameters<typeof updateTask>[3]> = {},
-): Parameters<typeof updateTask>[3] => ({
+  overrides: Partial<TaskUpdateDependencies> = {},
+): TaskUpdateDependencies => ({
   writer,
   resolveAuthenticatedUserGid: async () => ok("9001"),
   readFile: async () => "file contents",
   readStdin: async () => "stdin contents",
   ...overrides,
 });
+
+const preparedFor = (
+  taskId: string,
+  options: TaskUpdateOptions,
+): PreparedTaskUpdate => {
+  const prepared = prepareTaskUpdate(taskId, options);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) throw new Error(prepared.error.message);
+  return prepared.value;
+};
 
 describe("DEFAULT_FIELDS", () => {
   test("selects the supported task detail fields", () => {
@@ -108,7 +122,7 @@ describe("validateFieldList", () => {
   });
 });
 
-describe("updateTask", () => {
+describe("task update workflow", () => {
   test.each([
     ["invalid identifier", "not-a-gid", { name: "x" }],
     ["no mutation", "123", {}],
@@ -119,12 +133,7 @@ describe("updateTask", () => {
     ["invalid completed", "123", { completed: "yes" }],
   ])("rejects %s without a write", async (_, taskId, options) => {
     const writer = new RecordingWriter();
-    const result = await updateTask(
-      "secret",
-      taskId,
-      options,
-      dependenciesFor(writer),
-    );
+    const result = prepareTaskUpdate(taskId, options);
 
     expect(result.ok).toBe(false);
     expect(writer.calls).toHaveLength(0);
@@ -132,16 +141,15 @@ describe("updateTask", () => {
 
   test("builds all supported mutations and resolves me before writing", async () => {
     const writer = new RecordingWriter();
-    const result = await updateTask(
+    const result = await executeTaskUpdate(
       "secret",
-      "https://app.asana.com/0/111/222",
-      {
+      preparedFor("https://app.asana.com/0/111/222", {
         name: "Renamed",
         notes: "Replacement",
         assignee: "me",
         dueOn: "2028-02-29",
         completed: "false",
-      },
+      }),
       dependenciesFor(writer),
     );
 
@@ -167,10 +175,9 @@ describe("updateTask", () => {
       ["-", "stdin notes\n"],
     ] as const) {
       const writer = new RecordingWriter();
-      await updateTask(
+      await executeTaskUpdate(
         "secret",
-        "123",
-        { notesFile },
+        preparedFor("123", { notesFile }),
         dependenciesFor(writer, {
           readFile: async (path) => {
             expect(path).toBe("description.md");
@@ -185,10 +192,13 @@ describe("updateTask", () => {
 
   test("maps explicit nulls and booleans", async () => {
     const writer = new RecordingWriter();
-    await updateTask(
+    await executeTaskUpdate(
       "secret",
-      "123",
-      { assignee: "null", dueOn: "null", completed: "true" },
+      preparedFor("123", {
+        assignee: "null",
+        dueOn: "null",
+        completed: "true",
+      }),
       dependenciesFor(writer),
     );
     expect(writer.calls[0]?.mutation).toEqual({
@@ -200,20 +210,18 @@ describe("updateTask", () => {
 
   test("does not write when notes or identity resolution fails", async () => {
     const writer = new RecordingWriter();
-    const unreadable = await updateTask(
+    const unreadable = await executeTaskUpdate(
       "secret",
-      "123",
-      { notesFile: "missing.md" },
+      preparedFor("123", { notesFile: "missing.md" }),
       dependenciesFor(writer, {
         readFile: async () => {
           throw new Error("sensitive path");
         },
       }),
     );
-    const unresolved = await updateTask(
+    const unresolved = await executeTaskUpdate(
       "secret",
-      "123",
-      { assignee: "me" },
+      preparedFor("123", { assignee: "me" }),
       dependenciesFor(writer, {
         resolveAuthenticatedUserGid: async () =>
           err({ kind: "authentication", message: "unsafe detail" }),

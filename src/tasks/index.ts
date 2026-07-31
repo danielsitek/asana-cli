@@ -209,18 +209,6 @@ export const executeTaskUpdate = async (
   return dependencies.writer.updateTask(token, prepared.taskId, mutation);
 };
 
-export const updateTask = async (
-  token: string,
-  taskIdInput: string,
-  options: TaskUpdateOptions,
-  dependencies: TaskUpdateDependencies,
-): Promise<Result<Task, TaskUpdateError>> => {
-  const prepared = prepareTaskUpdate(taskIdInput, options);
-  return prepared.ok
-    ? executeTaskUpdate(token, prepared.value, dependencies)
-    : prepared;
-};
-
 export const DEFAULT_FIELDS = [
   "gid",
   "name",
