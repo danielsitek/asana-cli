@@ -13,6 +13,8 @@ const result = await execute(Bun.argv.slice(2), {
   taskReader: client,
   taskCreator: client,
   taskWriter: client,
+  commentReader: client,
+  commentWriter: client,
   discovery: client,
   configuration: {
     cwd: process.cwd(),

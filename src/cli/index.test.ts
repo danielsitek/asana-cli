@@ -13,6 +13,7 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import type { TaskStoryGateway } from "../comments/index.ts";
 import {
   type Task,
   type TaskCreationGateway,
@@ -1893,5 +1894,193 @@ describe("tasks create command", () => {
     ]);
     expect(stages[2]?.error?.message).toBe("Asana API request failed");
     expect(result.stdout).not.toContain("unsafe detail");
+  });
+});
+
+class InMemoryCommentReader {
+  calls = 0;
+  async getTaskStories() {
+    this.calls += 1;
+    return ok({
+      stories: [
+        {
+          gid: "1",
+          created_at: "2024-01-01T00:00:00.000Z",
+          text: "hi",
+          created_by: { gid: "1001", name: "Ada" },
+          resource_subtype: "comment_added",
+        },
+      ],
+    });
+  }
+}
+
+class InMemoryCommentWriter {
+  lastText?: string;
+  async createTaskComment(_token: string, _taskId: string, text: string) {
+    this.lastText = text;
+    return ok({
+      gid: "9",
+      created_at: "2024-01-01T00:00:00.000Z",
+      text,
+      created_by: { gid: "1001", name: "Ada" },
+    });
+  }
+}
+
+describe("tasks comments command", () => {
+  test("reads comments and outputs a human-readable table", async () => {
+    const result = await execute(["tasks", "comments", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      commentReader: new InMemoryCommentReader(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("gid");
+    expect(result.stdout).toContain("hi");
+    expect(result.stderr).toBe("");
+  });
+
+  test("warns in human output when the story scan cap is reached", async () => {
+    const reader: TaskStoryGateway = {
+      getTaskStories: async () =>
+        ok({
+          stories: [
+            {
+              gid: "1",
+              resource_subtype: "assigned",
+            },
+          ],
+          nextOffset: "page-2",
+        }),
+    };
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--max", "1"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("Warning:");
+    expect(result.stderr).toBe(
+      "Warning: story scan cap reached; more comments may exist.\n",
+    );
+  });
+
+  test("outputs stable JSON data and pagination metadata", async () => {
+    const result = await execute(
+      ["--json", "tasks", "comments", "1215978111726134"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: new InMemoryCommentReader(),
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: [
+        {
+          gid: "1",
+          created_at: "2024-01-01T00:00:00.000Z",
+          text: "hi",
+          created_by: { gid: "1001", name: "Ada" },
+        },
+      ],
+      meta: { scanned: 1, returned: 1, scan_truncated: false },
+    });
+  });
+
+  test("rejects invalid --max before any reader call", async () => {
+    const reader = new InMemoryCommentReader();
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--max", "0"],
+      {
+        environment: new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("authentication must not be read");
+            },
+          },
+        ),
+        identity: new InMemoryIdentity(
+          err({ kind: "authentication", message: "fail" }),
+        ),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toBe(0);
+  });
+
+  test("maps a not_found comment reader error", async () => {
+    const failingReader: TaskStoryGateway = {
+      getTaskStories: async () =>
+        err<TaskReadError>({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        }),
+    };
+    const result = await execute(["tasks", "comments", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      commentReader: failingReader,
+    });
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("not_found");
+  });
+});
+
+describe("tasks comment command", () => {
+  test("creates a comment from positional text", async () => {
+    const writer = new InMemoryCommentWriter();
+    const result = await execute(
+      ["tasks", "comment", "1215978111726134", "Ready for review"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentWriter: writer,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(writer.lastText).toBe("Ready for review");
+    expect(result.stdout).toContain("Ready for review");
+  });
+
+  test("creates a comment from stdin via --file=-", async () => {
+    const writer = new InMemoryCommentWriter();
+    const result = await execute(
+      ["tasks", "comment", "1215978111726134", "--file", "-"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentWriter: writer,
+        readStdin: async () => "from stdin",
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(writer.lastText).toBe("from stdin");
+  });
+
+  test("rejects empty positional text before any writer call", async () => {
+    const writer = new InMemoryCommentWriter();
+    const result = await execute(["tasks", "comment", "1215978111726134", ""], {
+      environment: new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("authentication must not be read");
+          },
+        },
+      ),
+      identity: new InMemoryIdentity(
+        err({ kind: "authentication", message: "fail" }),
+      ),
+      commentWriter: writer,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(writer.lastText).toBeUndefined();
   });
 });
