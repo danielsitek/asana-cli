@@ -17,7 +17,13 @@ import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
-import { type TaskGateway, parseTaskId } from "../asana/index.ts";
+import {
+  type TaskGateway,
+  type TaskReadError,
+  parseTaskId,
+  validateFieldList,
+  DEFAULT_FIELDS,
+} from "../tasks/index.ts";
 import {
   renderConfig,
   renderConfigValue,
@@ -55,7 +61,6 @@ const identityFailures: Readonly<
 > = {
   authentication: { exitCode: 3, message: "Asana authentication failed" },
   api: { exitCode: 4, message: "Asana API request failed" },
-  not_found: { exitCode: 4, message: "Task not found" },
   rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
   network: { exitCode: 4, message: "Unable to reach Asana" },
   invalid_response: {
@@ -66,6 +71,29 @@ const identityFailures: Readonly<
 
 const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
   const mapped = identityFailures[kind];
+  return {
+    stdout: "",
+    stderr: renderError({ code: kind, message: mapped.message }),
+    exitCode: mapped.exitCode,
+  };
+};
+
+const taskReadFailures: Readonly<
+  Record<TaskReadError["kind"], Readonly<{ exitCode: number; message: string }>>
+> = {
+  authentication: { exitCode: 3, message: "Asana authentication failed" },
+  api: { exitCode: 4, message: "Asana API request failed" },
+  not_found: { exitCode: 4, message: "Task not found" },
+  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
+  network: { exitCode: 4, message: "Unable to reach Asana" },
+  invalid_response: {
+    exitCode: 4,
+    message: "Asana returned an invalid response",
+  },
+};
+
+const renderTaskReadFailure = (kind: TaskReadError["kind"]): Execution => {
+  const mapped = taskReadFailures[kind];
   return {
     stdout: "",
     stderr: renderError({ code: kind, message: mapped.message }),
@@ -156,19 +184,28 @@ export const execute = async (
 
   program.option("--json", "output JSON");
   program.option("--fields <fields>", "additional Asana fields");
-  program.option("--debug", "enable debug logging");
+
+  program.hook("preAction", (thisCommand, actionCommand) => {
+    if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
+      const isTasksGet =
+        actionCommand.name() === "get" &&
+        actionCommand.parent?.name() === "tasks";
+      if (!isTasksGet) {
+        throw new CommanderError(
+          2,
+          "commander.fieldsNotSupported",
+          "Option --fields is not supported for this command",
+        );
+      }
+    }
+  });
+
   const whoami = program
     .command("whoami")
     .description("show the authenticated Asana user")
     .action(async () => {
       invoked = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
-      if (program.opts<{ fields?: string }>().fields !== undefined) {
-        result = usageError(
-          "Option --fields is not supported for this command",
-        );
-        return;
-      }
       const token = resolveToken(dependencies.environment);
       if (!token.ok) {
         result = {
@@ -223,13 +260,6 @@ export const execute = async (
       ) => {
         const context = beginConfigCommand();
         if (!context) return;
-
-        if (program.opts<{ fields?: string }>().fields !== undefined) {
-          result = usageError(
-            "Option --fields is not supported for this command",
-          );
-          return;
-        }
 
         if (options.shared && options.local) {
           result = usageError("--shared and --local are mutually exclusive");
@@ -334,13 +364,6 @@ export const execute = async (
       const context = beginConfigCommand();
       if (!context) return;
 
-      if (program.opts<{ fields?: string }>().fields !== undefined) {
-        result = usageError(
-          "Option --fields is not supported for this command",
-        );
-        return;
-      }
-
       const tokenResult = resolveToken(dependencies.environment);
       if (!tokenResult.ok) {
         result = {
@@ -401,13 +424,6 @@ export const execute = async (
       const context = beginConfigCommand();
       if (!context) return;
 
-      if (program.opts<{ fields?: string }>().fields !== undefined) {
-        result = usageError(
-          "Option --fields is not supported for this command",
-        );
-        return;
-      }
-
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -451,13 +467,6 @@ export const execute = async (
         const context = beginConfigCommand();
         if (!context) return;
 
-        if (program.opts<{ fields?: string }>().fields !== undefined) {
-          result = usageError(
-            "Option --fields is not supported for this command",
-          );
-          return;
-        }
-
         const layer = selectedLayer(options);
         if (!layer.ok) {
           result = usageError(layer.error);
@@ -485,13 +494,6 @@ export const execute = async (
     .action(async (options: Readonly<{ sources?: boolean }>) => {
       const context = beginConfigCommand();
       if (!context) return;
-
-      if (program.opts<{ fields?: string }>().fields !== undefined) {
-        result = usageError(
-          "Option --fields is not supported for this command",
-        );
-        return;
-      }
 
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
@@ -525,6 +527,19 @@ export const execute = async (
         return;
       }
 
+      const customFieldsOpt = program.opts<{ fields?: string }>().fields;
+      let fields: readonly string[];
+      if (customFieldsOpt !== undefined) {
+        const validated = validateFieldList(customFieldsOpt);
+        if (!validated.ok) {
+          result = usageError(validated.error);
+          return;
+        }
+        fields = validated.value;
+      } else {
+        fields = DEFAULT_FIELDS;
+      }
+
       const tokenResult = resolveToken(dependencies.environment);
       if (!tokenResult.ok) {
         result = {
@@ -550,26 +565,6 @@ export const execute = async (
         return;
       }
 
-      const DEFAULT_FIELDS = [
-        "gid",
-        "name",
-        "notes",
-        "completed",
-        "due_on",
-        "assignee.gid",
-        "assignee.name",
-      ];
-      const customFieldsOpt = program.opts<{ fields?: string }>().fields;
-      const requestedFields = customFieldsOpt
-        ? customFieldsOpt
-            .split(",")
-            .map((f) => f.trim())
-            .filter(Boolean)
-        : [];
-      const fields = Array.from(
-        new Set([...DEFAULT_FIELDS, ...requestedFields]),
-      );
-
       const taskResult = await dependencies.taskReader.getTask(
         tokenResult.value,
         parsedId.value,
@@ -577,7 +572,7 @@ export const execute = async (
       );
 
       if (!taskResult.ok) {
-        result = renderIdentityFailure(taskResult.error.kind);
+        result = renderTaskReadFailure(taskResult.error.kind);
         return;
       }
 
@@ -606,6 +601,9 @@ export const execute = async (
         error.code === "commander.version"
       ) {
         return { stdout: parserStdout, stderr: "", exitCode: 0 };
+      }
+      if (error.code === "commander.fieldsNotSupported") {
+        return usageError(error.message);
       }
       return usageError("Invalid command usage");
     }

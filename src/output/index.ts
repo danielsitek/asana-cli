@@ -120,10 +120,7 @@ export const renderConfig = (
 
 export const renderTaskDetail = (task: Record<string, unknown>): string => {
   const leaves = configLeaves(task);
-  const sortedLeaves = [...leaves].sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  const lines = sortedLeaves.map(([key, value]) => {
+  const lines = leaves.map(([key, value]) => {
     if (value === null) {
       return `${key}: —`;
     }
