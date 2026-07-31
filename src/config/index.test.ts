@@ -7,11 +7,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { promises as realFs } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-
-let mockRenameFailure = false;
 
 import { err, ok, type Result } from "../shared/result.ts";
 import {
@@ -20,19 +17,11 @@ import {
   resolveConfig,
   setConfigValue,
   initializeLocalConfig,
-  fsHooks,
   type ConfigContext,
   type MyTasksDiscoveryGateway,
   type DiscoveredMyTasks,
   type DiscoveryError,
 } from "./index.ts";
-
-fsHooks.rename = async (src: string, dest: string) => {
-  if (mockRenameFailure) {
-    throw new Error("mock rename failure");
-  }
-  return realFs.rename(src, dest);
-};
 
 const temporaryDirectories: string[] = [];
 
@@ -1111,21 +1100,27 @@ describe("initializeLocalConfig", () => {
     const gitignorePath = join(root, ".gitignore");
     await writeFile(gitignorePath, "some-content\n");
 
-    mockRenameFailure = true;
-    try {
-      const result = await initializeLocalConfig(
-        context(root, join(root, "home")),
-        "token",
-        mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
-        { writeGitignore: true },
-      );
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.kind).toBe("configuration");
-        expect(result.error.message).toContain("could not be renamed");
-      }
-    } finally {
-      mockRenameFailure = false;
+    const ctx: ConfigContext = {
+      cwd: root,
+      home: join(root, "home"),
+      environment: {},
+      fileOperations: {
+        rename: async () => {
+          throw new Error("mock rename failure");
+        },
+      },
+    };
+
+    const result = await initializeLocalConfig(
+      ctx,
+      "token",
+      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
+      { writeGitignore: true },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("configuration");
+      expect(result.error.message).toContain("could not be renamed");
     }
   });
 
@@ -1137,21 +1132,27 @@ describe("initializeLocalConfig", () => {
     });
     await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
 
-    mockRenameFailure = true;
-    try {
-      const result = await initializeLocalConfig(
-        context(root, join(root, "home")),
-        "token",
-        mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
-        {},
-      );
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.kind).toBe("configuration");
-        expect(result.error.message).toContain("could not be renamed");
-      }
-    } finally {
-      mockRenameFailure = false;
+    const ctx: ConfigContext = {
+      cwd: root,
+      home: join(root, "home"),
+      environment: {},
+      fileOperations: {
+        rename: async () => {
+          throw new Error("mock rename failure");
+        },
+      },
+    };
+
+    const result = await initializeLocalConfig(
+      ctx,
+      "token",
+      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
+      {},
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("configuration");
+      expect(result.error.message).toContain("could not be renamed");
     }
   });
 });

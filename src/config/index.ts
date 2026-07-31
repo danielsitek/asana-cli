@@ -6,10 +6,6 @@ import { z } from "zod";
 
 import { err, ok, type Result } from "../shared/result.ts";
 
-export const fsHooks = {
-  rename: (oldPath: string, newPath: string) => rename(oldPath, newPath),
-};
-
 const gid = z.string().regex(/^\d+$/, "must be a digit-only GID");
 const gidMap = z.record(z.string().min(1), gid);
 const workspace = z.object({ gid }).strict();
@@ -65,6 +61,9 @@ export type ConfigContext = Readonly<{
   cwd: string;
   home: string;
   environment: Readonly<Record<string, string | undefined>>;
+  readonly fileOperations?: Readonly<{
+    rename: (oldPath: string, newPath: string) => Promise<void>;
+  }>;
 }>;
 
 export type ConfigSource = Readonly<{
@@ -391,11 +390,7 @@ const stageWrite = async (path: string, content: string): Promise<void> => {
 
 const cleanupTempFiles = async (paths: readonly string[]): Promise<void> => {
   for (const path of paths) {
-    try {
-      await rm(path, { force: true });
-    } catch {
-      // Intentionally ignored
-    }
+    await rm(path, { force: true }).catch(() => undefined);
   }
 };
 
@@ -407,7 +402,7 @@ const atomicWrite = async (
   const temporary = join(directory, `.${randomUUID()}.tmp`);
   try {
     await stageWrite(temporary, `${JSON.stringify(value, null, 2)}\n`);
-    await fsHooks.rename(temporary, path);
+    await rename(temporary, path);
     return ok(undefined);
   } catch {
     await cleanupTempFiles([temporary]);
@@ -641,6 +636,7 @@ export const initializeLocalConfig = async (
     ConfigError | DiscoveryError | StageFailureError
   >
 > => {
+  const renameFn = context.fileOperations?.rename ?? rename;
   const resolvedConfigResult = await resolveConfig(context);
   if (!resolvedConfigResult.ok) return resolvedConfigResult;
   const resolvedConfig = resolvedConfigResult.value;
@@ -803,7 +799,7 @@ export const initializeLocalConfig = async (
 
   if (shouldWriteGitignore && tempGitignorePath) {
     try {
-      await fsHooks.rename(tempGitignorePath, gitignorePath);
+      await renameFn(tempGitignorePath, gitignorePath);
       const idx = tempFilesToCleanup.indexOf(tempGitignorePath);
       if (idx !== -1) tempFilesToCleanup.splice(idx, 1);
     } catch {
@@ -816,7 +812,7 @@ export const initializeLocalConfig = async (
   }
 
   try {
-    await fsHooks.rename(tempLocalConfigPath, localConfigPath);
+    await renameFn(tempLocalConfigPath, localConfigPath);
     const idx = tempFilesToCleanup.indexOf(tempLocalConfigPath);
     if (idx !== -1) tempFilesToCleanup.splice(idx, 1);
   } catch {
