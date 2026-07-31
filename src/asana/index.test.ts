@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { execute } from "../cli/index.ts";
 import { AsanaHttpClient } from "./index.ts";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
-afterEach(() => servers.splice(0).forEach((server) => server.stop()));
+afterEach(() => servers.splice(0).forEach((server) => server.stop(true)));
 
-const serverFor = (fetcher: (request: Request) => Response): string => {
+const serverFor = (
+  fetcher: (request: Request) => Response | Promise<Response>,
+): string => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: fetcher });
   servers.push(server);
   return `http://127.0.0.1:${server.port}/api/1.0`;
@@ -88,6 +91,97 @@ describe("AsanaHttpClient", () => {
     }).getAuthenticatedUser("x");
     expect(result.ok).toBe(true);
     expect(waits).toEqual([1250]);
+  });
+
+  test.each([502, 503, 504])("retries GET %i responses", async (status) => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, { status })
+        : Response.json({ data: { gid: "1", name: "Ada" } });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      sleep: async () => undefined,
+    }).getAuthenticatedUser("x");
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  test("returns rate-limit failure after the maximum retry count", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 503 });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 2,
+      sleep: async () => undefined,
+    }).getAuthenticatedUser("x");
+    expect(attempts).toBe(3);
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "rate_limit",
+        status: 503,
+        message: "Asana request retries exhausted",
+      },
+    });
+  });
+
+  test("aborts a request at the configured timeout", async () => {
+    const baseUrl = serverFor(() => new Promise<Response>(() => undefined));
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 0,
+      requestTimeoutMs: 1,
+    }).getAuthenticatedUser("x");
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "network", message: "Unable to reach Asana" },
+    });
+  });
+
+  test("returns a network failure when the server is unavailable", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ data: { gid: "1", name: "Ada" } }),
+    });
+    const baseUrl = `http://127.0.0.1:${server.port}/api/1.0`;
+    server.stop(true);
+
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 0,
+    }).getAuthenticatedUser("x");
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "network", message: "Unable to reach Asana" },
+    });
+  });
+
+  test("execute maps real adapter retry exhaustion to exit code 5", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 429 });
+    });
+    const result = await execute(["whoami"], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity: new AsanaHttpClient({
+        baseUrl,
+        maxRetries: 1,
+        sleep: async () => undefined,
+      }),
+    });
+    expect(attempts).toBe(2);
+    expect(result.exitCode).toBe(5);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('"code": "rate_limit"');
+    expect(result.stderr).not.toContain("secret");
   });
 
   test("uses the default retry wait for a retryable GET response", async () => {

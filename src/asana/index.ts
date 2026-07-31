@@ -73,8 +73,7 @@ export class AsanaHttpClient implements IdentityGateway {
           const retryable = [429, 502, 503, 504].includes(response.status);
           if (retryable && attempt < this.#maxRetries) {
             await this.#sleep(
-              retryAfterMs(response.headers.get("Retry-After"), this.#now()) ??
-                1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000),
+              this.retryDelay(attempt, response.headers.get("Retry-After")),
             );
             continue;
           }
@@ -98,9 +97,7 @@ export class AsanaHttpClient implements IdentityGateway {
             });
       } catch {
         if (attempt < this.#maxRetries) {
-          await this.#sleep(
-            1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000),
-          );
+          await this.#sleep(this.retryDelay(attempt));
           continue;
         }
         return err({ kind: "network", message: "Unable to reach Asana" });
@@ -109,6 +106,16 @@ export class AsanaHttpClient implements IdentityGateway {
       }
     }
     return err({ kind: "network", message: "Unable to reach Asana" });
+  }
+
+  private retryDelay(
+    attempt: number,
+    retryAfter: string | null = null,
+  ): number {
+    return (
+      retryAfterMs(retryAfter, this.#now()) ??
+      1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000)
+    );
   }
 
   private responseError(status: number, retryable: boolean): IdentityError {
