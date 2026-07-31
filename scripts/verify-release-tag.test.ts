@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { verifyReleaseTag } from "./verify-release-tag.ts";
+import {
+  runVerifyReleaseTagCli,
+  verifyReleaseTag,
+} from "./verify-release-tag.ts";
 
 describe("release tag validation", () => {
   test("accepts the exact stable package version", async () => {
@@ -14,6 +17,15 @@ describe("release tag validation", () => {
   });
 
   describe("CLI entry point", () => {
+    test("validates and verifies parsed arguments", async () => {
+      await expect(runVerifyReleaseTagCli([])).rejects.toThrow(
+        "Usage: verify-release-tag.ts --tag <tag>",
+      );
+      await expect(runVerifyReleaseTagCli(["--tag", "v0.1.0"])).resolves.toBe(
+        undefined,
+      );
+    });
+
     test("fails with a usage message when --tag is missing", async () => {
       const proc = Bun.spawn(["bun", "run", "verify-release-tag.ts"], {
         cwd: import.meta.dir,

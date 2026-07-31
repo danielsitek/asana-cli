@@ -98,14 +98,20 @@ end
   return formula;
 };
 
-if (import.meta.main) {
-  const valueAfter = (flag: string): string | undefined => {
-    const index = Bun.argv.indexOf(flag);
-    return index === -1 ? undefined : Bun.argv[index + 1];
-  };
-  const checksumPath = valueAfter("--checksums");
-  const outputPath = valueAfter("--output");
-  const version = valueAfter("--version");
+const valueAfter = (
+  args: readonly string[],
+  flag: string,
+): string | undefined => {
+  const index = args.indexOf(flag);
+  return index === -1 ? undefined : args[index + 1];
+};
+
+export const runGenerateHomebrewFormulaCli = async (
+  args: readonly string[],
+): Promise<void> => {
+  const checksumPath = valueAfter(args, "--checksums");
+  const outputPath = valueAfter(args, "--output");
+  const version = valueAfter(args, "--version");
   if (
     checksumPath === undefined ||
     outputPath === undefined ||
@@ -115,8 +121,8 @@ if (import.meta.main) {
       "Usage: generate-homebrew-formula.ts --checksums <path> --output <path> --version <x.y.z>",
     );
   }
-  const repository = valueAfter("--repository");
-  const baseUrl = valueAfter("--base-url");
+  const repository = valueAfter(args, "--repository");
+  const baseUrl = valueAfter(args, "--base-url");
   await generateHomebrewFormula({
     checksumPath,
     outputPath,
@@ -124,4 +130,6 @@ if (import.meta.main) {
     ...(repository === undefined ? {} : { repository }),
     ...(baseUrl === undefined ? {} : { baseUrl }),
   });
-}
+};
+
+if (import.meta.main) await runGenerateHomebrewFormulaCli(Bun.argv.slice(2));

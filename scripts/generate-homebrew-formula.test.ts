@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { releaseTargets } from "./build.ts";
-import { generateHomebrewFormula } from "./generate-homebrew-formula.ts";
+import {
+  generateHomebrewFormula,
+  runGenerateHomebrewFormulaCli,
+} from "./generate-homebrew-formula.ts";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
@@ -112,6 +115,31 @@ describe("Homebrew formula generator", () => {
   });
 
   describe("CLI entry point", () => {
+    test("validates required arguments without starting generation", async () => {
+      await expect(runGenerateHomebrewFormulaCli([])).rejects.toThrow(
+        "Usage: generate-homebrew-formula.ts",
+      );
+    });
+
+    test("generates a formula from parsed arguments", async () => {
+      const setup = await fixture();
+      await runGenerateHomebrewFormulaCli([
+        "--checksums",
+        setup.checksumPath,
+        "--output",
+        setup.outputPath,
+        "--version",
+        "0.1.0",
+        "--repository",
+        "owner/project",
+        "--base-url",
+        "file:///tmp/current-run-assets",
+      ]);
+      expect(await Bun.file(setup.outputPath).text()).toContain(
+        "file:///tmp/current-run-assets/asana-cli-v0.1.0-darwin-arm64.tar.gz",
+      );
+    });
+
     test("fails with a usage message when required flags are missing", async () => {
       const proc = Bun.spawn(["bun", "run", "generate-homebrew-formula.ts"], {
         cwd: import.meta.dir,
