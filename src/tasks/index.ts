@@ -69,7 +69,8 @@ export type TaskUpdateDependencies = Readonly<{
 }>;
 
 export type TaskUpdateError =
-  Readonly<{ kind: "invalid_usage"; message: string }> | TaskReadError;
+  | Readonly<{ kind: "invalid_usage"; message: string }>
+  | TaskReadError;
 
 const realDate = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
