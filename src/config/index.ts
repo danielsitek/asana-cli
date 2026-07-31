@@ -549,3 +549,229 @@ export const initializeSharedConfig = async (
   if (!written.ok) return written;
   return ok({ layer: "shared", path: path.value });
 };
+
+export const generateAlias = (name: string): string => {
+  return name
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "_")
+    .replace(/^_+|_+$/g, "");
+};
+
+export type DiscoveredSection = Readonly<{
+  gid: string;
+  name: string;
+}>;
+
+export type DiscoveredCustomField = Readonly<{
+  gid: string;
+  name: string;
+  resourceSubtype: string;
+  isReadOnly: boolean;
+}>;
+
+export type DiscoveredMyTasks = Readonly<{
+  userTaskListGid: string;
+  sections: readonly DiscoveredSection[];
+  customFields: readonly DiscoveredCustomField[];
+}>;
+
+export type DiscoveryError = Readonly<{
+  kind:
+    | "authentication"
+    | "api"
+    | "rate_limit"
+    | "network"
+    | "invalid_response";
+  message: string;
+  status?: number;
+}>;
+
+export interface MyTasksDiscoveryGateway {
+  discoverMyTasks(
+    token: string,
+    workspaceGid: string,
+  ): Promise<Result<DiscoveredMyTasks, DiscoveryError>>;
+}
+
+export const initializeLocalConfig = async (
+  context: ConfigContext,
+  token: string,
+  discovery: MyTasksDiscoveryGateway,
+  options: { writeGitignore?: boolean; requireExistingIgnore?: boolean },
+): Promise<Result<ConfigSource, ConfigError | DiscoveryError>> => {
+  const resolvedConfigResult = await resolveConfig(context);
+  if (!resolvedConfigResult.ok) return resolvedConfigResult;
+  const resolvedConfig = resolvedConfigResult.value;
+
+  const gitRoot = resolvedConfig.paths.gitRoot;
+  if (!gitRoot) {
+    return err({
+      kind: "configuration",
+      message: "local configuration requires a git repository",
+    });
+  }
+
+  const isIgnored = await localFileIsIgnored(gitRoot);
+  if (!isIgnored) {
+    if (options.requireExistingIgnore) {
+      return err({
+        kind: "configuration",
+        message:
+          "local configuration is not ignored by the repository .gitignore",
+      });
+    }
+    if (!options.writeGitignore) {
+      return err({
+        kind: "configuration",
+        message:
+          "local configuration is not ignored by the repository .gitignore",
+      });
+    }
+  }
+
+  const workspaceGid = resolvedConfig.value.workspace?.gid;
+  if (!workspaceGid) {
+    return err({
+      kind: "configuration",
+      message:
+        "workspace.gid is required in configuration before initialization",
+    });
+  }
+
+  const discoveryResult = await discovery.discoverMyTasks(token, workspaceGid);
+  if (!discoveryResult.ok) return discoveryResult;
+
+  const discovered = discoveryResult.value;
+
+  // Generate and validate section aliases
+  const sectionsMap: Record<string, string> = {};
+  for (const section of discovered.sections) {
+    const alias = generateAlias(section.name);
+    if (!alias) {
+      return err({
+        kind: "configuration",
+        message: `Generated alias is empty for section "${section.name}"`,
+      });
+    }
+    if (
+      sectionsMap[alias] !== undefined &&
+      sectionsMap[alias] !== section.gid
+    ) {
+      return err({
+        kind: "configuration",
+        message: `Colliding alias "${alias}" generated for section "${section.name}"`,
+      });
+    }
+    sectionsMap[alias] = section.gid;
+  }
+
+  // Filter, generate, and validate custom field aliases (import only writable number fields)
+  const customFieldsMap: Record<string, string> = {};
+  const writableNumberFields = discovered.customFields.filter(
+    (cf) => cf.resourceSubtype === "number" && !cf.isReadOnly,
+  );
+  for (const field of writableNumberFields) {
+    const alias = generateAlias(field.name);
+    if (!alias) {
+      return err({
+        kind: "configuration",
+        message: `Generated alias is empty for custom field "${field.name}"`,
+      });
+    }
+    if (
+      customFieldsMap[alias] !== undefined &&
+      customFieldsMap[alias] !== field.gid
+    ) {
+      return err({
+        kind: "configuration",
+        message: `Colliding alias "${alias}" generated for custom field "${field.name}"`,
+      });
+    }
+    customFieldsMap[alias] = field.gid;
+  }
+
+  // Sort aliases: "persist and output aliases sorted"
+  const sortedSections = Object.fromEntries(
+    Object.entries(sectionsMap).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const sortedCustomFields = Object.fromEntries(
+    Object.entries(customFieldsMap).sort(([a], [b]) => a.localeCompare(b)),
+  );
+
+  // Read existing local config to preserve unrelated values
+  const pathResult = targetPath(resolvedConfig, "local");
+  if (!pathResult.ok) return pathResult;
+  const existingLocal = await readLayer(pathResult.value, localConfigSchema);
+  if (!existingLocal.ok) return existingLocal;
+
+  const updatedLocal = {
+    ...existingLocal.value,
+    myTasks: {
+      userTaskListGid: discovered.userTaskListGid,
+      sections: sortedSections,
+      customFields: sortedCustomFields,
+    },
+  };
+
+  const validated = validationMessage(
+    pathResult.value,
+    updatedLocal,
+    localConfigSchema,
+  );
+  if (!validated.ok) return validated;
+
+  // Write .gitignore atomically first if writeGitignore is true and not ignored
+  if (!isIgnored && options.writeGitignore) {
+    const gitignorePath = join(gitRoot, ".gitignore");
+    let currentContent = "";
+    try {
+      currentContent = await readFile(gitignorePath, "utf8");
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code !== "ENOENT"
+      ) {
+        return err({
+          kind: "configuration",
+          message: `${gitignorePath}: could not be read`,
+        });
+      }
+    }
+
+    let newContent = currentContent;
+    if (
+      !currentContent.endsWith("/.asana-cli.local.json") &&
+      !currentContent.includes("\n/.asana-cli.local.json\n") &&
+      !currentContent.includes("\r\n/.asana-cli.local.json\r\n")
+    ) {
+      if (currentContent.length > 0 && !currentContent.endsWith("\n")) {
+        newContent += "\n";
+      }
+      newContent += "/.asana-cli.local.json\n";
+    }
+
+    const tempGitignore = join(gitRoot, `.${randomUUID()}.tmp`);
+    try {
+      await writeFile(tempGitignore, newContent, "utf8");
+      await rename(tempGitignore, gitignorePath);
+    } catch {
+      try {
+        await rm(tempGitignore, { force: true });
+      } catch {
+        // preserve write failure
+      }
+      return err({
+        kind: "configuration",
+        message: `${gitignorePath}: could not be written`,
+      });
+    }
+  }
+
+  // Finally, write local config layer atomically
+  const written = await atomicWrite(pathResult.value, validated.value);
+  if (!written.ok) return written;
+
+  return ok({ layer: "local", path: pathResult.value });
+};
