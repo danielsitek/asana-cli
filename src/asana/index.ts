@@ -10,41 +10,13 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import {
+  type Task,
+  type TaskGateway,
+  type TaskReadError,
+  buildTaskSchema,
+} from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
-
-export type Task = Readonly<{
-  gid: string;
-  name: string;
-  notes: string;
-  completed: boolean;
-  due_on: string | null;
-  assignee: Readonly<{
-    gid: string;
-    name: string;
-  }> | null;
-  [key: string]: unknown;
-}>;
-
-export interface TaskGateway {
-  getTask(
-    token: string,
-    taskId: string,
-    fields: readonly string[],
-  ): Promise<Result<Task, IdentityError>>;
-}
-
-export const parseTaskId = (input: string): Result<string, string> => {
-  if (/^\d+$/.test(input)) {
-    return ok(input);
-  }
-  const match = input.match(
-    /^https:\/\/app\.asana\.com\/0\/(\d+)\/(\d+)(?:\/f)?\/?$/,
-  );
-  if (match && typeof match[2] === "string") {
-    return ok(match[2]);
-  }
-  return err("Invalid task identifier");
-};
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
@@ -299,7 +271,7 @@ export class AsanaHttpClient
     token: string,
     taskId: string,
     fields: readonly string[],
-  ): Promise<Result<Task, IdentityError>> {
+  ): Promise<Result<Task, TaskReadError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
         kind: "invalid_response",
@@ -307,24 +279,7 @@ export class AsanaHttpClient
       });
     }
 
-    const assigneeSchema = z
-      .object({
-        gid: z.string(),
-        name: z.string(),
-      })
-      .passthrough();
-
-    const taskSchema = z
-      .object({
-        gid: z.string(),
-        name: z.string(),
-        notes: z.string(),
-        completed: z.boolean(),
-        due_on: z.string().nullable(),
-        assignee: assigneeSchema.nullable(),
-      })
-      .passthrough();
-
+    const taskSchema = buildTaskSchema(fields);
     const schema = z.object({ data: taskSchema });
 
     const result = await this.#get(
@@ -333,8 +288,17 @@ export class AsanaHttpClient
       { opt_fields: fields.join(",") },
       schema,
     );
-    if (!result.ok) return result;
-    return ok(result.value.data);
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data as Task);
   }
 
   private retryDelay(
@@ -353,13 +317,6 @@ export class AsanaHttpClient
         kind: "authentication",
         status,
         message: "Asana authentication failed",
-      };
-    }
-    if (status === 404) {
-      return {
-        kind: "not_found",
-        status,
-        message: "Task not found",
       };
     }
     return retryable
