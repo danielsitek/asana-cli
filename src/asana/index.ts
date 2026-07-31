@@ -138,17 +138,16 @@ export class AsanaHttpClient
     token: string,
     workspaceGid: string,
   ): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
-    // 1. Get UTL
     const utlSchema = z
       .object({
         data: z
           .object({
             gid: z.string(),
-            workspace: z.object({ gid: z.string() }).strict(),
+            workspace: z.object({ gid: z.string() }).passthrough(),
           })
-          .strict(),
+          .passthrough(),
       })
-      .strict();
+      .passthrough();
 
     const utlResult = await this.#get(
       token,
@@ -160,9 +159,17 @@ export class AsanaHttpClient
       utlSchema,
     );
     if (!utlResult.ok) return utlResult;
+
+    const returnedWorkspaceGid = utlResult.value.data.workspace.gid;
+    if (returnedWorkspaceGid !== workspaceGid) {
+      return err({
+        kind: "invalid_response",
+        message: `Returned user task list workspace GID ${returnedWorkspaceGid} does not match requested workspace GID ${workspaceGid}`,
+      });
+    }
+
     const utlGid = utlResult.value.data.gid;
 
-    // 2. Get Sections
     const sectionsSchema = z
       .object({
         data: z.array(
@@ -171,11 +178,11 @@ export class AsanaHttpClient
               gid: z.string(),
               name: z.string(),
             })
-            .strict(),
+            .passthrough(),
         ),
         next_page: z.nullable(z.unknown()).optional(),
       })
-      .strict();
+      .passthrough();
 
     const sectionsResult = await this.#get(
       token,
@@ -197,13 +204,11 @@ export class AsanaHttpClient
       });
     }
 
-    // 3. Get Custom Fields
     const customFieldsSchema = z
       .object({
         data: z.array(
           z
             .object({
-              gid: z.string(),
               custom_field: z
                 .object({
                   gid: z.string(),
@@ -211,13 +216,13 @@ export class AsanaHttpClient
                   resource_subtype: z.string(),
                   is_value_read_only: z.boolean(),
                 })
-                .strict(),
+                .passthrough(),
             })
-            .strict(),
+            .passthrough(),
         ),
         next_page: z.nullable(z.unknown()).optional(),
       })
-      .strict();
+      .passthrough();
 
     const customFieldsResult = await this.#get(
       token,
@@ -225,7 +230,7 @@ export class AsanaHttpClient
       {
         limit: "100",
         opt_fields:
-          "gid,custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+          "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
       },
       customFieldsSchema,
     );
