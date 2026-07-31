@@ -85,26 +85,57 @@ removes a meaningful amount of risky custom code.
 
 ## Architecture
 
-Use functional modules by default and deep modules where encapsulation makes
-the API materially easier to use.
+Use functional deep modules by default: substantial behavior behind a small
+interface at a deliberate seam. Organize code by owned behavior, not by
+one-to-one wrappers around CLI commands or technical layers.
 
 ```text
 src/
-  main.ts
-  cli/          Commander tree and argv-to-input parsing
-  commands/     application use cases grouped by resource
-  asana/        REST client and endpoint adapters
+  main.ts       composition root and the only process I/O
+  cli/          execute interface, Commander tree, parsing, and dispatch
+  tasks/        task workflows and the Asana ports they consume
+  config/       config resolution, validation, sources, and atomic writes
+  asana/        production HTTP adapters for consumer-owned Asana ports
   auth/         token resolution
-  config/       schemas, layers, merge, sources, and writes
   output/       JSON, detail, table, and error rendering
-  shared/       identifiers, Result, retry, pagination, and concurrency
-  utils/        helper utility functions, one utility function per file
+  shared/       stable cross-domain primitives such as identifiers and Result
+  utils/        reusable context-free leaf helpers, one function per file
 ```
 
 Use classes only for components with meaningful state, such as an HTTP client
 or rate limiter. Do not use a dependency-injection framework or global service
-locator. Command handlers receive an explicit context and return a result;
-only the entry point writes to process streams and selects the exit code.
+locator.
+
+The CLI module exposes one primary `execute` interface. It accepts arguments
+and explicit dependencies, then returns stdout, stderr, and an exit code
+without writing to process streams. `main.ts` constructs production adapters
+and performs the returned writes.
+
+Resource modules own application workflows and the ports they consume.
+Production Asana adapters implement those ports. Do not add a separate
+`commands/` layer whose handlers only forward calls, and do not expose internal
+helpers merely to test them.
+
+Classify dependencies before introducing a seam:
+
+- pure in-process behavior needs no adapter;
+- configuration uses the real filesystem in temporary directories during
+  tests, not an abstract filesystem port;
+- Asana is a true external system, so consuming modules receive narrow ports,
+  production uses HTTP adapters, and behavior tests use in-memory adapters;
+- the HTTP adapters are tested separately against a local fake Asana server.
+
+Create a port only when at least production and test adapters justify it.
+Prefer one interface per module and export it through a small local `index.ts`.
+Apply the deletion test: if removing a module makes complexity disappear, it
+was likely a pass-through; if the complexity spreads into callers, the module
+was providing useful depth and locality.
+
+Use `shared/` only for stable primitives required by multiple modules.
+Use `utils/` only for reusable, domain-free leaf helpers. Domain validation,
+workflow sequencing, retries, pagination, and concurrency remain private to
+the deep module that owns their policy unless multiple modules genuinely share
+the same contract.
 
 Expected failures use a local discriminated union:
 
@@ -117,6 +148,46 @@ type Result<T, E> =
 Exceptions are reserved for programmer errors and truly unexpected failures.
 An unexpected exception is hidden behind `internal_error`; its stack is shown
 only with debug output.
+
+## Code as the source of truth
+
+After implementation, the code and behavior-focused tests are the durable
+description of the system. Design the code so a contributor can understand a
+feature by following its public module boundary:
+
+- use domain language consistently in commands, types, functions, and files;
+- keep public module interfaces small and place complexity behind them;
+- make dependencies and side effects explicit;
+- test observable behavior through public interfaces;
+- comment reasons, invariants, and external API quirks, not what readable code
+  already says;
+- prefer executable definitions such as Zod schemas, TypeScript types,
+  Commander help, and tests over prose that duplicates them.
+
+Planning specifications such as `asana-cli.md` and `v0.1.md` are temporary.
+Remove them once their implemented behavior is discoverable in source code,
+tests, and user-facing help, and any durable decisions have been moved to the
+appropriate lasting document.
+
+Before implementing a feature, its temporary specification identifies the
+highest practical test seam, affected module interfaces, observable behavior,
+error modes, and explicit out-of-scope behavior. It does not prescribe file
+paths or copy implementation snippets. Prefer existing seams; introduce a new
+one only when behavior genuinely needs to vary there.
+
+Keep Markdown only where it adds information the implementation cannot express:
+
+- `README.md` for installation, authentication, examples, and the public CLI
+  contract;
+- short architecture decision records for consequential and non-obvious
+  trade-offs;
+- a small domain glossary or navigation guide if the codebase eventually needs
+  one.
+
+Durable documentation must not mirror implementation details, file-by-file
+structure, or code snippets that will become stale. Documentation removal is
+part of completing a feature, but happens only after the corresponding
+behavior and decisions are represented and verified elsewhere.
 
 ## CLI parsing
 
@@ -247,11 +318,18 @@ Exit code 1 takes precedence after any successful write.
 
 Use `bun:test`; do not add Vitest, Jest, MSW, or another mock framework.
 
-- Unit tests live next to source as `*.test.ts`.
-- Process and integration tests live under `test/`.
-- HTTP integration tests use a local fake Asana server built with `Bun.serve`.
+- Most workflow tests exercise the CLI `execute` interface with explicit test
+  dependencies and assert observable stdout, stderr, exit code, and external
+  state.
+- Task behavior tests use in-memory Asana adapters through the same ports used
+  by production.
+- HTTP adapter tests use a local fake Asana server built with `Bun.serve`.
+- Configuration tests use real files in isolated temporary directories.
+- Pure behavior with a meaningful stable interface may have colocated
+  `*.test.ts` tests. Do not test private helpers independently.
+- Full executable smoke tests live under `test/`; avoid duplicating every
+  workflow already covered through `execute`.
 - Golden fixtures cover human and JSON output.
-- Process tests assert stdout, stderr, and exit code independently.
 - Fault tests cover auth errors, 429, retryable 5xx, ambiguous POST failures,
   truncation, and partial multi-stage writes.
 - Live Asana tests are optional and never run in normal CI.
@@ -259,6 +337,16 @@ Use `bun:test`; do not add Vitest, Jest, MSW, or another mock framework.
 - Identifier parsing, configuration precedence, exit-code mapping, retry
   decisions, and mutation stages require explicit branch scenarios regardless
   of the global percentage.
+
+The module interface is its test surface. Tests must survive internal
+refactoring and assert outcomes rather than internal calls or state. When a
+higher interface test fully replaces lower-level tests of shallow modules,
+delete the redundant tests instead of layering both suites.
+
+For expensive, widely used interfaces such as CLI execution, Asana ports, and
+configuration resolution, design at least two materially different interfaces
+before implementation and compare their depth, locality, seam placement, and
+common-call ergonomics. Keep only the selected interface and decision rationale.
 
 Do not add repository-managed git hooks. `bun run check` and CI are
 authoritative.

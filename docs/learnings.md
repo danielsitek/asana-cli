@@ -6,4 +6,5 @@
 
 Format: one rule per entry, imperative mood, with a short reason.
 
-- Include `src/utils/` for reusable helper functions and keep one utility function per file, so small helpers remain easy to find and test.
+- Include `src/utils/` only for reusable, context-free leaf helpers and keep one utility function per file; keep domain and workflow behavior inside its owning deep module to preserve locality.
+- Treat implementation code and behavior-focused tests as the durable source of truth; keep temporary specs only while planning, and retain Markdown after implementation only for public contracts, ADRs, domain vocabulary, or navigation that code cannot express.
