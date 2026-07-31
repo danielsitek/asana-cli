@@ -1,7 +1,10 @@
 import { Command, CommanderError } from "commander";
 
 import { resolveToken } from "../auth/index.ts";
-import type { IdentityGateway } from "../identity/index.ts";
+import type {
+  IdentityError as AsanaError,
+  IdentityGateway,
+} from "../identity/index.ts";
 import { renderError, renderIdentity, renderJson } from "../output/index.ts";
 
 export type Execution = Readonly<{
@@ -22,23 +25,25 @@ const usageError = (message: string): Execution => ({
   exitCode: 2,
 });
 
-const failure = (kind: string): Execution => {
-  const exitCode =
-    kind === "authentication" ? 3 : kind === "rate_limit" ? 5 : 4;
-  const safeMessage =
-    kind === "authentication"
-      ? "Asana authentication failed"
-      : kind === "rate_limit"
-        ? "Asana request retries exhausted"
-        : kind === "network"
-          ? "Unable to reach Asana"
-          : kind === "invalid_response"
-            ? "Asana returned an invalid response"
-            : "Asana API request failed";
+const identityFailures: Readonly<
+  Record<AsanaError["kind"], Readonly<{ exitCode: number; message: string }>>
+> = {
+  authentication: { exitCode: 3, message: "Asana authentication failed" },
+  api: { exitCode: 4, message: "Asana API request failed" },
+  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
+  network: { exitCode: 4, message: "Unable to reach Asana" },
+  invalid_response: {
+    exitCode: 4,
+    message: "Asana returned an invalid response",
+  },
+};
+
+const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
+  const mapped = identityFailures[kind];
   return {
     stdout: "",
-    stderr: renderError({ code: kind, message: safeMessage }),
-    exitCode,
+    stderr: renderError({ code: kind, message: mapped.message }),
+    exitCode: mapped.exitCode,
   };
 };
 
@@ -49,6 +54,7 @@ export const execute = async (
   const program = new Command()
     .name("asana-cli")
     .version(dependencies.version ?? "0.1.0", "-v, --version");
+  const version = dependencies.version ?? "0.1.0";
   let json = false;
   let invoked = false;
   let result: Execution | undefined;
@@ -84,7 +90,7 @@ export const execute = async (
         token.value,
       );
       if (!identity.ok) {
-        result = failure(identity.error.kind);
+        result = renderIdentityFailure(identity.error.kind);
         return;
       }
       result = {
@@ -95,6 +101,7 @@ export const execute = async (
         exitCode: 0,
       };
     });
+  whoami.version(version, "-v, --version");
 
   program.exitOverride();
   program.configureOutput(captureOutput);
