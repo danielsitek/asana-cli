@@ -131,12 +131,10 @@ describe("task update workflow", () => {
     ["invalid date shape", "123", { dueOn: "31-12-2026" }],
     ["impossible date", "123", { dueOn: "2026-02-29" }],
     ["invalid completed", "123", { completed: "yes" }],
-  ])("rejects %s without a write", async (_, taskId, options) => {
-    const writer = new RecordingWriter();
+  ])("rejects %s during preparation", (_, taskId, options) => {
     const result = prepareTaskUpdate(taskId, options);
 
     expect(result.ok).toBe(false);
-    expect(writer.calls).toHaveLength(0);
   });
 
   test("builds all supported mutations and resolves me before writing", async () => {
