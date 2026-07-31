@@ -15,6 +15,7 @@ import type {
 } from "../identity/index.ts";
 import {
   type Task,
+  type TaskCreationGateway,
   type TaskGateway,
   type TaskMutation,
   type TaskMutationGateway,
@@ -84,6 +85,50 @@ class InMemoryTaskWriter implements TaskMutationGateway {
   ): Promise<Result<Task, TaskReadError>> {
     this.calls.push({ token, taskId, mutation });
     return this.response;
+  }
+}
+
+class InMemoryTaskCreator implements TaskCreationGateway {
+  public calls: Array<
+    Readonly<{ token: string; parentId: string; mutation: TaskMutation }>
+  > = [];
+
+  constructor(
+    private readonly response: Result<
+      Task & Readonly<{ gid: string }>,
+      TaskReadError
+    >,
+  ) {}
+
+  async createSubtask(
+    token: string,
+    parentId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
+    this.calls.push({ token, parentId, mutation });
+    return this.response;
+  }
+}
+
+class StagedTaskWriter implements TaskMutationGateway {
+  public calls: Array<
+    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+  > = [];
+
+  constructor(
+    private readonly responses: readonly Result<Task, TaskReadError>[],
+  ) {}
+
+  async updateTask(
+    token: string,
+    taskId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task, TaskReadError>> {
+    this.calls.push({ token, taskId, mutation });
+    return (
+      this.responses[this.calls.length - 1] ??
+      err({ kind: "invalid_response", message: "Missing fake response" })
+    );
   }
 }
 
@@ -1496,4 +1541,388 @@ describe("tasks update command", () => {
     expect(result.exitCode).toBe(0);
     expect(writer.calls).toHaveLength(1);
   });
+});
+
+describe("tasks create command", () => {
+  const temporaryDirectories: string[] = [];
+  const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  const dependenciesFor = async (
+    writerResponses: readonly Result<Task, TaskReadError>[] = [
+      ok({ gid: "456", name: "Child", assignee: { gid: "9001" } }),
+      ok({ gid: "456", name: "Child", assignee: { gid: "9001" } }),
+      ok({ gid: "456", name: "Child", assignee: { gid: "9001" } }),
+    ],
+    creatorResponse: Result<
+      Task & Readonly<{ gid: string }>,
+      TaskReadError
+    > = ok({ gid: "456", name: "Child" }),
+  ) => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-create-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      JSON.stringify({ workspace: { gid: "100" } }),
+    );
+    await writeFile(
+      join(root, ".asana-cli.local.json"),
+      JSON.stringify({
+        myTasks: {
+          userTaskListGid: "200",
+          sections: { in_progress: "300" },
+          customFields: { estimate: "400" },
+        },
+      }),
+    );
+    const creator = new InMemoryTaskCreator(creatorResponse);
+    const writer = new StagedTaskWriter(writerResponses);
+    const reader = new InMemoryTaskReader(
+      err({ kind: "api", message: "create must not read a child task" }),
+    );
+    return {
+      creator,
+      writer,
+      reader,
+      dependencies: {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskCreator: creator,
+        taskWriter: writer,
+        taskReader: reader,
+        discovery: new InMemoryDiscovery(
+          ok({
+            userTaskListGid: "200",
+            sections: [{ gid: "300", name: "In Progress" }],
+            customFields: [
+              {
+                gid: "400",
+                name: "Estimate",
+                resourceSubtype: "number",
+                isReadOnly: false,
+              },
+            ],
+          }),
+        ),
+        configuration: { cwd: root, home: join(root, "home"), environment: {} },
+        readFile: async () => "Prepared notes\n",
+      } satisfies ExecuteDependencies,
+    };
+  };
+
+  test("validates every syntactic input before accessing dependencies", async () => {
+    const dependencies: ExecuteDependencies = {
+      get environment(): never {
+        throw new Error("environment accessed");
+      },
+      identity,
+      get taskCreator(): never {
+        throw new Error("creator accessed");
+      },
+      get taskWriter(): never {
+        throw new Error("writer accessed");
+      },
+      get taskReader(): never {
+        throw new Error("reader accessed");
+      },
+      get discovery(): never {
+        throw new Error("discovery accessed");
+      },
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+      get readFile(): never {
+        throw new Error("file reader accessed");
+      },
+    };
+
+    for (const argv of [
+      ["tasks", "create", "--name", "Child"],
+      ["tasks", "create", "--parent", "123"],
+      ["tasks", "create", "--parent", "invalid", "--name", "Child"],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--notes",
+        "x",
+        "--notes-file",
+        "notes.md",
+      ],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "ada@example.com",
+      ],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--due-on",
+        "2026-02-29",
+      ],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--completed",
+        "yes",
+      ],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--my-section",
+        "@in_progress",
+      ],
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--custom-field",
+        "400:1e3",
+      ],
+    ]) {
+      const result = await execute(argv, dependencies);
+      expect(result.exitCode).toBe(2);
+    }
+  });
+
+  test("prevalidates and applies every stage in dependency order", async () => {
+    const setup = await dependenciesFor();
+    const result = await execute(
+      [
+        "--json",
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--notes-file",
+        "notes.md",
+        "--assignee",
+        "me",
+        "--due-on",
+        "2028-02-29",
+        "--completed",
+        "false",
+        "--my-section",
+        "@in_progress",
+        "--custom-field",
+        "@estimate:4",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(setup.reader.callCount).toBe(0);
+    expect(setup.creator.calls).toEqual([
+      {
+        token: "secret",
+        parentId: "123",
+        mutation: {
+          name: "Child",
+          notes: "Prepared notes\n",
+          due_on: "2028-02-29",
+          completed: false,
+        },
+      },
+    ]);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+      { assignee_section: "300" },
+      { custom_fields: { "400": 4 } },
+    ]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: { gid: "456", name: "Child", assignee: { gid: "9001" } },
+      meta: {
+        stages: [
+          {
+            stage: "create",
+            status: "completed",
+            applied: {
+              name: "Child",
+              notes: "Prepared notes\n",
+              due_on: "2028-02-29",
+              completed: false,
+            },
+          },
+          {
+            stage: "assignee",
+            status: "completed",
+            applied: { assignee: "9001" },
+          },
+          {
+            stage: "my_section",
+            status: "completed",
+            applied: { assignee_section: "300" },
+          },
+          {
+            stage: "custom_fields",
+            status: "completed",
+            applied: { custom_fields: { "400": 4 } },
+          },
+        ],
+      },
+    });
+  });
+
+  test("renders a useful human result for a basic subtask", async () => {
+    const setup = await dependenciesFor([]);
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      setup.dependencies,
+    );
+
+    expect(result).toEqual({
+      stdout:
+        "gid: 456\n" +
+        "name: Child\n" +
+        "stages:\n" +
+        "  create: completed\n" +
+        "  assignee: not_run\n" +
+        "    reason: not_requested\n" +
+        "  my_section: not_run\n" +
+        "    reason: not_requested\n" +
+        "  custom_fields: not_run\n" +
+        "    reason: not_requested\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(setup.writer.calls).toHaveLength(0);
+  });
+
+  test("rejects unresolved plans before the subtask POST", async () => {
+    const setup = await dependenciesFor();
+    const missingAlias = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "me",
+        "--my-section",
+        "@missing",
+      ],
+      setup.dependencies,
+    );
+    expect(missingAlias.exitCode).toBe(2);
+    expect(setup.creator.calls).toHaveLength(0);
+
+    const mismatch = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "9002",
+        "--custom-field",
+        "400:4",
+      ],
+      setup.dependencies,
+    );
+    expect(mismatch.exitCode).toBe(2);
+    expect(setup.creator.calls).toHaveLength(0);
+  });
+
+  test("reports an ambiguous create failure without later writes", async () => {
+    const setup = await dependenciesFor(
+      [],
+      err({ kind: "network", message: "ambiguous POST" }),
+    );
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      setup.dependencies,
+    );
+    expect(result.exitCode).toBe(4);
+    expect(setup.creator.calls).toHaveLength(1);
+    expect(setup.writer.calls).toHaveLength(0);
+  });
+
+  test.each([
+    [0, ["failed", "not_run", "not_run"], 1],
+    [1, ["completed", "failed", "not_run"], 2],
+    [2, ["completed", "completed", "failed"], 3],
+  ] as const)(
+    "stops after post-create stage %i and reports every stage",
+    async (failureIndex, statuses, expectedWrites) => {
+      const responses = [0, 1, 2].map((index) =>
+        index === failureIndex
+          ? err<TaskReadError>({ kind: "api", message: "unsafe detail" })
+          : ok<Task>({ gid: "456", name: "Child" }),
+      );
+      const setup = await dependenciesFor(responses);
+      const result = await execute(
+        [
+          "--json",
+          "tasks",
+          "create",
+          "--parent",
+          "123",
+          "--name",
+          "Child",
+          "--assignee",
+          "me",
+          "--my-section",
+          "300",
+          "--custom-field",
+          "400:4",
+        ],
+        setup.dependencies,
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(setup.creator.calls).toHaveLength(1);
+      expect(setup.writer.calls).toHaveLength(expectedWrites);
+      const stages = JSON.parse(result.stdout).meta.stages as Array<{
+        status: string;
+        error?: { message: string };
+      }>;
+      expect(stages[0]?.status).toBe("completed");
+      expect(stages.slice(1).map((stage) => stage.status)).toEqual([
+        ...statuses,
+      ]);
+      expect(stages[failureIndex + 1]?.error?.message).toBe(
+        "Asana API request failed",
+      );
+      expect(result.stdout).not.toContain("unsafe detail");
+    },
+  );
 });
