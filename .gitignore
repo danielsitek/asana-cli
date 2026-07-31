@@ -9,6 +9,7 @@ build/
 **/build/
 .next/
 **/.next/
+coverage/
 
 # Environment files — never commit secrets
 .env
