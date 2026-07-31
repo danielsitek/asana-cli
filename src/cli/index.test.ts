@@ -3,6 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  type MyTasksDiscoveryGateway,
+  type DiscoveredMyTasks,
+  type DiscoveryError,
+} from "../config/index.ts";
 import type {
   Identity,
   IdentityError,
@@ -15,6 +20,16 @@ class InMemoryIdentity implements IdentityGateway {
   constructor(private readonly response: Result<Identity, IdentityError>) {}
 
   async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
+    return this.response;
+  }
+}
+
+class InMemoryDiscovery implements MyTasksDiscoveryGateway {
+  constructor(
+    private readonly response: Result<DiscoveredMyTasks, DiscoveryError>,
+  ) {}
+
+  async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
     return this.response;
   }
 }
@@ -184,6 +199,9 @@ describe("config commands", () => {
       dependencies: {
         environment: {},
         identity,
+        discovery: new InMemoryDiscovery(
+          ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+        ),
         configuration: { cwd: root, home, environment: {} },
       },
     };
@@ -351,5 +369,421 @@ describe("config commands", () => {
     );
     expect(conflicting.exitCode).toBe(2);
     expect(conflicting.stderr).toContain("mutually exclusive");
+  });
+
+  test("init --local works with write-gitignore and token", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      `initialized ${join(root, ".asana-cli.local.json")}\n`,
+    );
+
+    const gitignore = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignore).toBe("/.asana-cli.local.json\n");
+
+    const localConfig = JSON.parse(
+      await readFile(join(root, ".asana-cli.local.json"), "utf8"),
+    );
+    expect(localConfig.myTasks.userTaskListGid).toBe("1213894072990299");
+  });
+
+  test("init --local handles partial write where gitignore rename succeeds and local-config rename fails (human mode)", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+        configuration: {
+          cwd: root,
+          home,
+          environment: {},
+          fileOperations: {
+            rename: async (oldPath: string, newPath: string) => {
+              if (newPath.endsWith(".asana-cli.local.json")) {
+                throw new Error("mock rename failure for local config");
+              }
+              const { rename } = await import("node:fs/promises");
+              return rename(oldPath, newPath);
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Stage failure");
+    expect(result.stdout).toContain("Completed: gitignore");
+    expect(result.stdout).toContain("Failed: local_config");
+
+    const gitignoreContent = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignoreContent).toBe("/.asana-cli.local.json\n");
+
+    const localConfigFileExists = await Bun.file(
+      join(root, ".asana-cli.local.json"),
+    ).exists();
+    expect(localConfigFileExists).toBe(false);
+  });
+
+  test("init --local handles partial write where gitignore rename succeeds and local-config rename fails (json mode)", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+        configuration: {
+          cwd: root,
+          home,
+          environment: {},
+          fileOperations: {
+            rename: async (oldPath: string, newPath: string) => {
+              if (newPath.endsWith(".asana-cli.local.json")) {
+                throw new Error("mock rename failure for local config");
+              }
+              const { rename } = await import("node:fs/promises");
+              return rename(oldPath, newPath);
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+
+    const parsedOutput = JSON.parse(result.stdout);
+    expect(parsedOutput.data.completed).toEqual(["gitignore"]);
+    expect(parsedOutput.data.failed).toEqual(["local_config"]);
+    expect(parsedOutput.data.message).toContain(
+      "could not be renamed after writing",
+    );
+    expect(parsedOutput.meta).toEqual({});
+
+    const gitignoreContent = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignoreContent).toBe("/.asana-cli.local.json\n");
+
+    const localConfigFileExists = await Bun.file(
+      join(root, ".asana-cli.local.json"),
+    ).exists();
+    expect(localConfigFileExists).toBe(false);
+  });
+
+  test("init --local fails if missing workspace GID", async () => {
+    const { root, home } = await setup();
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(
+          ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+        ),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("workspace.gid is required");
+  });
+
+  test("resolve my-tasks fails if not ignored", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(
+        ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+      ),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not ignored by the repository .gitignore");
+  });
+
+  test("resolve my-tasks succeeds if already ignored", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      "userTaskListGid: 1213894072990299\n" +
+        "sections:\n" +
+        "  in_progress: 1213894072991394\n" +
+        "customFields:\n",
+    );
+  });
+
+  test("config init rejects invalid flag combinations", async () => {
+    const { dependencies } = await setup();
+
+    const noFlags = await execute(["config", "init"], dependencies);
+    expect(noFlags.exitCode).toBe(2);
+    expect(noFlags.stderr).toContain("requires either --shared or --local");
+
+    const writeGitignoreWithoutLocal = await execute(
+      ["config", "init", "--shared", "--write-gitignore"],
+      dependencies,
+    );
+    expect(writeGitignoreWithoutLocal.exitCode).toBe(2);
+    expect(writeGitignoreWithoutLocal.stderr).toContain(
+      "--write-gitignore requires --local",
+    );
+
+    const localWithWorkspace = await execute(
+      ["config", "init", "--local", "--workspace=100"],
+      dependencies,
+    );
+    expect(localWithWorkspace.exitCode).toBe(2);
+    expect(localWithWorkspace.stderr).toContain(
+      "--workspace is not supported with --local",
+    );
+  });
+
+  test("config commands fail if discovery dependency is missing", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const initResult = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+    expect(initResult.exitCode).toBe(6);
+    expect(initResult.stderr).toContain("Discovery gateway is required");
+
+    const resolveResult = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      configuration: { cwd: root, home, environment: {} },
+    });
+    expect(resolveResult.exitCode).toBe(6);
+    expect(resolveResult.stderr).toContain("Discovery gateway is required");
+  });
+
+  test("resolve my-tasks outputs stable JSON", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(["config", "resolve", "my-tasks", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const body = JSON.parse(result.stdout);
+    expect(body.data).toEqual({
+      userTaskListGid: "1213894072990299",
+      sections: {
+        in_progress: "1213894072991394",
+      },
+      customFields: {},
+    });
+  });
+
+  test("init --local maps identity errors on failure", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(
+          err({ kind: "rate_limit", message: "retries exhausted" }),
+        ),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("rate_limit");
+  });
+
+  test("config init rejects mutually exclusive flags --shared and --local", async () => {
+    const { dependencies } = await setup();
+    const result = await execute(
+      ["config", "init", "--shared", "--local"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain(
+      "--shared and --local are mutually exclusive",
+    );
+  });
+
+  test("config init --shared fails when workspace GID is missing", async () => {
+    const { dependencies } = await setup();
+    const result = await execute(["config", "init", "--shared"], dependencies);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("requires --workspace or a workspace.gid");
+  });
+
+  test("config init --local fails if token is missing", async () => {
+    const { dependencies } = await setup();
+    dependencies.environment = {};
+    const result = await execute(["config", "init", "--local"], dependencies);
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
+  test("config resolve my-tasks fails if token is missing", async () => {
+    const { dependencies } = await setup();
+    dependencies.environment = {};
+    const result = await execute(
+      ["config", "resolve", "my-tasks"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
+  test("config resolve my-tasks maps identity errors on failure", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(
+        err({ kind: "rate_limit", message: "retries exhausted" }),
+      ),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("rate_limit");
+  });
+
+  test("config get fails when configuration is invalid", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(join(root, ".asana-cli.json"), "malformed-json");
+    const result = await execute(
+      ["config", "get", "workspace.gid"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("invalid JSON");
+  });
+
+  test("config get fails for non-existent key", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"100"}}\n',
+    );
+    const result = await execute(
+      ["config", "get", "non.existent.key"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("non.existent.key");
   });
 });

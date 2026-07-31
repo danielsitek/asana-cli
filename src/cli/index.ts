@@ -4,11 +4,14 @@ import { resolveToken } from "../auth/index.ts";
 import {
   getConfigValue,
   initializeSharedConfig,
+  initializeLocalConfig,
   resolveConfig,
   setConfigValue,
   type ConfigContext,
   type ConfigError,
   type ConfigLayer,
+  type MyTasksDiscoveryGateway,
+  type StageFailureError,
 } from "../config/index.ts";
 import type {
   IdentityError as AsanaError,
@@ -20,6 +23,7 @@ import {
   renderError,
   renderIdentity,
   renderJson,
+  renderResolvedMyTasks,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -32,6 +36,7 @@ export type Execution = Readonly<{
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
+  discovery?: MyTasksDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
 }>;
@@ -69,6 +74,31 @@ const renderConfigFailure = (error: ConfigError): Execution => ({
   stderr: renderError({ code: "configuration", message: error.message }),
   exitCode: 2,
 });
+
+const renderStageFailure = (
+  error: StageFailureError,
+  json: boolean,
+): Execution => {
+  if (json) {
+    return {
+      stdout: renderJson({
+        completed: error.completed,
+        failed: error.failed,
+        message: error.message,
+      }),
+      stderr: "",
+      exitCode: 1,
+    };
+  }
+
+  const completedList = [...error.completed].sort().join(", ");
+  const failedList = [...error.failed].sort().join(", ");
+  return {
+    stdout: `Stage failure: ${error.message}\nCompleted: ${completedList || "none"}\nFailed: ${failedList || "none"}\n`,
+    stderr: "",
+    exitCode: 1,
+  };
+};
 
 const selectedLayer = (
   options: Readonly<{
@@ -164,23 +194,106 @@ export const execute = async (
     .command("init")
     .description("initialize configuration")
     .option("--shared", "initialize shared repository configuration")
+    .option("--local", "initialize local repository configuration")
     .option("--workspace <gid>", "Asana workspace GID")
+    .option(
+      "--write-gitignore",
+      "automatically ignore the local configuration file",
+    )
     .action(
-      async (options: Readonly<{ shared?: boolean; workspace?: string }>) => {
+      async (
+        options: Readonly<{
+          shared?: boolean;
+          local?: boolean;
+          workspace?: string;
+          writeGitignore?: boolean;
+        }>,
+      ) => {
         const context = beginConfigCommand();
         if (!context) return;
-        if (!options.shared) {
-          result = usageError("config init currently requires --shared");
+
+        if (options.shared && options.local) {
+          result = usageError("--shared and --local are mutually exclusive");
           return;
         }
-        const initialized = await initializeSharedConfig(
+        if (!options.shared && !options.local) {
+          result = usageError(
+            "config init requires either --shared or --local",
+          );
+          return;
+        }
+        if (options.writeGitignore && !options.local) {
+          result = usageError("--write-gitignore requires --local");
+          return;
+        }
+        if (options.local && options.workspace !== undefined) {
+          result = usageError("--workspace is not supported with --local");
+          return;
+        }
+
+        if (options.shared) {
+          const initialized = await initializeSharedConfig(
+            context,
+            options.workspace,
+          );
+          if (!initialized.ok) {
+            result = renderConfigFailure(initialized.error);
+            return;
+          }
+          result = {
+            stdout: json
+              ? renderJson(initialized.value)
+              : `initialized ${initialized.value.path}\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+          return;
+        }
+
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+
+        if (!dependencies.discovery) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Discovery gateway is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+
+        const initialized = await initializeLocalConfig(
           context,
-          options.workspace,
+          tokenResult.value,
+          dependencies.discovery,
+          options.writeGitignore !== undefined
+            ? { writeGitignore: options.writeGitignore }
+            : {},
         );
         if (!initialized.ok) {
-          result = renderConfigFailure(initialized.error);
+          if (initialized.error.kind === "configuration") {
+            result = renderConfigFailure(initialized.error);
+          } else if (initialized.error.kind === "stage_failure") {
+            result = renderStageFailure(initialized.error, json);
+          } else {
+            result = renderIdentityFailure(initialized.error.kind);
+          }
           return;
         }
+
         result = {
           stdout: json
             ? renderJson(initialized.value)
@@ -190,6 +303,68 @@ export const execute = async (
         };
       },
     );
+
+  const resolveCmd = config
+    .command("resolve")
+    .description("resolve configuration resources");
+
+  resolveCmd
+    .command("my-tasks")
+    .description("resolve My Tasks configuration")
+    .action(async () => {
+      const context = beginConfigCommand();
+      if (!context) return;
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      if (!dependencies.discovery) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Discovery gateway is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const resolved = await initializeLocalConfig(
+        context,
+        tokenResult.value,
+        dependencies.discovery,
+        {},
+      );
+      if (!resolved.ok) {
+        if (resolved.error.kind === "configuration") {
+          result = renderConfigFailure(resolved.error);
+        } else if (resolved.error.kind === "stage_failure") {
+          result = renderStageFailure(resolved.error, json);
+        } else {
+          result = renderIdentityFailure(resolved.error.kind);
+        }
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(resolved.value.myTasks)
+          : renderResolvedMyTasks(resolved.value.myTasks),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
 
   config
     .command("get")
