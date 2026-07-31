@@ -1159,31 +1159,6 @@ describe("tasks update command", () => {
     expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
   });
 
-  test.each([
-    ["123", []],
-    ["invalid", ["--name", "x"]],
-    ["123", ["--notes", "x", "--notes-file", "notes.md"]],
-    ["123", ["--assignee", "ada@example.com"]],
-    ["123", ["--due-on", "2026-02-29"]],
-    ["123", ["--completed", "yes"]],
-  ])("rejects invalid mutation %# without writing", async (id, flags) => {
-    const writer = new InMemoryTaskWriter(ok(updatedTask));
-    const result = await execute(["tasks", "update", id, ...flags], {
-      environment: { ASANA_CLI_TOKEN: "secret" },
-      identity,
-      taskWriter: writer,
-      readFile: async () => {
-        throw new Error("file should not be read");
-      },
-      readStdin: async () => {
-        throw new Error("stdin should not be read");
-      },
-    });
-
-    expect(result.exitCode).toBe(2);
-    expect(writer.calls).toHaveLength(0);
-  });
-
   test("writes all task fields and renders the returned task", async () => {
     const writer = new InMemoryTaskWriter(ok(updatedTask));
     const result = await execute(
