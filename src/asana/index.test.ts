@@ -1030,3 +1030,222 @@ describe("AsanaHttpClient", () => {
     expect(attempts).toBe(1);
   });
 });
+
+describe("AsanaHttpClient comments", () => {
+  test("gets task stories with exact pagination query and schema", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/tasks/123/stories");
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,created_at,text,created_by.gid,created_by.name,resource_subtype",
+      );
+      expect(url.searchParams.get("offset")).toBe("abc");
+      return Response.json({
+        data: [
+          {
+            gid: "1",
+            created_at: "2024-01-01T00:00:00.000Z",
+            text: "hi",
+            created_by: { gid: "1001", name: "Ada" },
+            resource_subtype: "comment_added",
+          },
+        ],
+        next_page: { offset: "next-token" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+      "token",
+      "123",
+      {
+        fields: [
+          "gid",
+          "created_at",
+          "text",
+          "created_by.gid",
+          "created_by.name",
+          "resource_subtype",
+        ],
+        limit: 50,
+        offset: "abc",
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        stories: [
+          {
+            gid: "1",
+            created_at: "2024-01-01T00:00:00.000Z",
+            text: "hi",
+            created_by: { gid: "1001", name: "Ada" },
+            resource_subtype: "comment_added",
+          },
+        ],
+        nextOffset: "next-token",
+      },
+    });
+  });
+
+  test("omits nextOffset when there is no next page", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({ data: [], next_page: null }),
+    );
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+      "token",
+      "123",
+      { fields: ["gid"], limit: 100 },
+    );
+    expect(result).toEqual({ ok: true, value: { stories: [] } });
+  });
+
+  test("validates page limits before making a request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    for (const limit of [0, 101, 1.5]) {
+      const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+        "token",
+        "123",
+        { fields: ["gid"], limit },
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(attempts).toBe(0);
+  });
+
+  test("validates requested nested leaves and permits a null creator", async () => {
+    let response: unknown = {
+      data: [
+        {
+          gid: "1",
+          created_by: { gid: "1001", email: "ada@example.com" },
+          resource_subtype: "comment_added",
+        },
+      ],
+    };
+    const baseUrl = serverFor(() => Response.json(response));
+    const client = new AsanaHttpClient({ baseUrl });
+    const fields = ["gid", "created_by.email", "resource_subtype"];
+
+    expect(
+      (await client.getTaskStories("token", "123", { fields, limit: 1 })).ok,
+    ).toBe(true);
+    response = {
+      data: [
+        {
+          gid: "1",
+          created_by: { gid: "1001" },
+          resource_subtype: "comment_added",
+        },
+      ],
+    };
+    const missingLeaf = await client.getTaskStories("token", "123", {
+      fields,
+      limit: 1,
+    });
+    expect(missingLeaf).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+    response = {
+      data: [{ gid: "1", created_by: null, resource_subtype: "comment_added" }],
+    };
+    expect(
+      (await client.getTaskStories("token", "123", { fields, limit: 1 })).ok,
+    ).toBe(true);
+  });
+
+  test("maps 404 to not_found for stories", async () => {
+    const baseUrl = serverFor(() => new Response(null, { status: 404 }));
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+      "token",
+      "123",
+      { fields: ["gid"], limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Task not found" },
+    });
+  });
+
+  test("posts a comment with exact body and opt_fields, returning the schema-validated comment", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(request.method).toBe("POST");
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/tasks/123/stories");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,text");
+      expect(await request.json()).toEqual({ data: { text: "hello" } });
+      return Response.json({ data: { gid: "9", text: "hello" } });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).createTaskComment(
+      "token",
+      "123",
+      "hello",
+      ["gid", "text"],
+    );
+    expect(result).toEqual({ ok: true, value: { gid: "9", text: "hello" } });
+  });
+
+  test("retries a comment POST only on an explicit 429 with Retry-After", async () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, { status: 429, headers: { "Retry-After": "2" } })
+        : Response.json({ data: { gid: "9", text: "hello" } });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }).createTaskComment("token", "123", "hello", ["gid", "text"]);
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+    expect(waits).toEqual([2000]);
+  });
+
+  test.each([500, 502, 503, 504])(
+    "never retries a comment POST after %i",
+    async (status) => {
+      let attempts = 0;
+      const baseUrl = serverFor(() => {
+        attempts += 1;
+        return new Response(null, { status });
+      });
+      const result = await new AsanaHttpClient({
+        baseUrl,
+        maxRetries: 3,
+        sleep: async () => undefined,
+      }).createTaskComment("token", "123", "hello", ["gid"]);
+      expect(result.ok).toBe(false);
+      expect(attempts).toBe(1);
+    },
+  );
+
+  test("never retries a timed-out comment POST", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Promise<Response>(() => undefined);
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 3,
+      requestTimeoutMs: 1,
+      sleep: async () => undefined,
+    }).createTaskComment("token", "123", "hello", ["gid"]);
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "network", message: "Unable to reach Asana" },
+    });
+    expect(attempts).toBe(1);
+  });
+});
