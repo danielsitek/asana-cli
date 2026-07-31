@@ -591,4 +591,88 @@ describe("config commands", () => {
     expect(result.exitCode).toBe(5);
     expect(result.stderr).toContain("rate_limit");
   });
+
+  test("config init rejects mutually exclusive flags --shared and --local", async () => {
+    const { dependencies } = await setup();
+    const result = await execute(
+      ["config", "init", "--shared", "--local"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain(
+      "--shared and --local are mutually exclusive",
+    );
+  });
+
+  test("config init --shared fails when workspace GID is missing", async () => {
+    const { dependencies } = await setup();
+    const result = await execute(["config", "init", "--shared"], dependencies);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("requires --workspace or a workspace.gid");
+  });
+
+  test("config init --local fails if token is missing", async () => {
+    const { dependencies } = await setup();
+    dependencies.environment = {};
+    const result = await execute(["config", "init", "--local"], dependencies);
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
+  test("config resolve my-tasks fails if token is missing", async () => {
+    const { dependencies } = await setup();
+    dependencies.environment = {};
+    const result = await execute(
+      ["config", "resolve", "my-tasks"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
+  test("config resolve my-tasks maps identity errors on failure", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const result = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(
+        err({ kind: "rate_limit", message: "retries exhausted" }),
+      ),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("rate_limit");
+  });
+
+  test("config get fails when configuration is invalid", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(join(root, ".asana-cli.json"), "malformed-json");
+    const result = await execute(
+      ["config", "get", "workspace.gid"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("invalid JSON");
+  });
+
+  test("config get fails for non-existent key", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"100"}}\n',
+    );
+    const result = await execute(
+      ["config", "get", "non.existent.key"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("non.existent.key");
+  });
 });

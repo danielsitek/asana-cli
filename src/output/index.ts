@@ -62,10 +62,12 @@ export const renderConfigValue = (
   json: boolean,
 ): string => {
   if (json) {
-    return renderJson(
-      value,
-      source ? { source } : Object.keys(sources).length > 0 ? { sources } : {},
-    );
+    const meta = source
+      ? { source }
+      : Object.keys(sources).length > 0
+        ? { sources }
+        : {};
+    return renderJson(value, meta);
   }
   const sourceLines = source
     ? `\nsource layer: ${source.layer}${
