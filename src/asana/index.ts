@@ -10,6 +10,11 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import {
+  type Task,
+  type TaskGateway,
+  type TaskReadError,
+} from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
 const userSchema = z
@@ -39,8 +44,62 @@ const retryAfterMs = (
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
+  Object.hasOwn(value, key);
+
+const isDigitOnlyGid = (value: unknown): value is string =>
+  typeof value === "string" && /^\d+$/.test(value);
+
+const isAssignee = (
+  value: unknown,
+  requestedFields: ReadonlySet<string>,
+): boolean => {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  if (hasOwn(value, "gid") && !isDigitOnlyGid(value.gid)) return false;
+  if (hasOwn(value, "name") && typeof value.name !== "string") return false;
+  for (const field of requestedFields) {
+    if (!hasOwn(value, field)) return false;
+  }
+  return true;
+};
+
+const knownTaskFieldsAreValid = (
+  value: Record<string, unknown>,
+  requestedAssigneeFields: ReadonlySet<string>,
+): boolean =>
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "notes") || typeof value.notes === "string") &&
+  (!hasOwn(value, "completed") || typeof value.completed === "boolean") &&
+  (!hasOwn(value, "due_on") ||
+    typeof value.due_on === "string" ||
+    value.due_on === null) &&
+  (!hasOwn(value, "assignee") ||
+    isAssignee(value.assignee, requestedAssigneeFields));
+
+const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
+  const requestedTopLevelFields = new Set(
+    fields.map((field) => field.split(".", 1)[0] ?? field),
+  );
+  const requestedAssigneeFields = new Set(
+    fields
+      .filter((field) => field === "assignee.gid" || field === "assignee.name")
+      .map((field) => field.slice("assignee.".length)),
+  );
+  return z.custom<Task>(
+    (value) =>
+      isRecord(value) &&
+      [...requestedTopLevelFields].every((field) => hasOwn(value, field)) &&
+      knownTaskFieldsAreValid(value, requestedAssigneeFields),
+  );
+};
+
 export class AsanaHttpClient
-  implements IdentityGateway, MyTasksDiscoveryGateway
+  implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -259,6 +318,40 @@ export class AsanaHttpClient
         isReadOnly: c.custom_field.is_value_read_only,
       })),
     });
+  }
+
+  async getTask(
+    token: string,
+    taskId: string,
+    fields: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const taskSchema = buildTaskSchema(fields);
+    const schema = z.object({ data: taskSchema });
+
+    const result = await this.#get(
+      token,
+      `tasks/${taskId}`,
+      { opt_fields: fields.join(",") },
+      schema,
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data);
   }
 
   private retryDelay(

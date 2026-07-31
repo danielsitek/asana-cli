@@ -13,8 +13,21 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import {
+  type Task,
+  type TaskGateway,
+  type TaskReadError,
+} from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute } from "./index.ts";
+
+const taskReadErrorCases = <
+  const Cases extends readonly (readonly [TaskReadError["kind"], number])[],
+>(
+  cases: Exclude<TaskReadError["kind"], Cases[number][0]> extends never
+    ? Cases
+    : never,
+): Cases => cases;
 
 class InMemoryIdentity implements IdentityGateway {
   constructor(private readonly response: Result<Identity, IdentityError>) {}
@@ -30,6 +43,27 @@ class InMemoryDiscovery implements MyTasksDiscoveryGateway {
   ) {}
 
   async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
+    return this.response;
+  }
+}
+
+class InMemoryTaskReader implements TaskGateway {
+  public lastToken?: string;
+  public lastTaskId?: string;
+  public lastFields?: readonly string[];
+  public callCount = 0;
+
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  async getTask(
+    token: string,
+    taskId: string,
+    fields: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    this.callCount += 1;
+    this.lastToken = token;
+    this.lastTaskId = taskId;
+    this.lastFields = fields;
     return this.response;
   }
 }
@@ -144,6 +178,7 @@ describe("execute", () => {
     expect(helpBefore.exitCode).toBe(0);
     expect(helpBefore.stderr).toBe("");
     expect(helpBefore.stdout).toContain("Commands:");
+    expect(helpBefore.stdout).toContain("select explicit Asana fields");
     expect(helpBefore.stdout).toContain("show the authenticated Asana user");
     expect(helpAfter.exitCode).toBe(0);
     expect(helpAfter.stderr).toBe("");
@@ -785,5 +820,225 @@ describe("config commands", () => {
     );
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("non.existent.key");
+  });
+});
+
+describe("tasks get command", () => {
+  const dummyTask: Task = {
+    gid: "1215978111726134",
+    name: "Implement task reading",
+    notes: "This is a notes section\nwith multiple lines",
+    completed: false,
+    due_on: "2026-12-31",
+    assignee: {
+      gid: "9876",
+      name: "Ada Lovelace",
+    },
+  };
+
+  test("reads task and outputs human-readable deterministic details", async () => {
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: new InMemoryTaskReader(ok(dummyTask)),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      [
+        "gid: 1215978111726134",
+        "name: Implement task reading",
+        "notes:",
+        "  This is a notes section",
+        "  with multiple lines",
+        "completed: false",
+        "due_on: 2026-12-31",
+        "assignee.gid: 9876",
+        "assignee.name: Ada Lovelace",
+      ].join("\n") + "\n",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  test("reads task and outputs JSON", async () => {
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: new InMemoryTaskReader(ok(dummyTask)),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      JSON.stringify({ data: dummyTask, meta: {} }, null, 2) + "\n",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  test("fails fast on invalid ID before checking authentication or making calls", async () => {
+    const result = await execute(["tasks", "get", "invalid-id"], {
+      environment: {},
+      identity: new InMemoryIdentity(
+        err({ kind: "authentication", message: "fail" }),
+      ),
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Invalid task identifier");
+    expect(result.stdout).toBe("");
+  });
+
+  test("rejects fields option on non-supporting commands", async () => {
+    const result = await execute(["whoami", "--fields", "notes"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Option --fields is not supported");
+    expect(result.stdout).toBe("");
+  });
+
+  test("maps task reader errors correctly to stderr and exit codes without token leak", async () => {
+    const failingReader = new InMemoryTaskReader(
+      err({ kind: "not_found", message: "Task not found", status: 404 }),
+    );
+
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "top-secret-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: failingReader,
+    });
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain('"code": "not_found"');
+    expect(result.stderr).toContain("Task not found");
+    expect(result.stderr).not.toContain("top-secret-token");
+  });
+
+  test("records and asserts token, parsed task GID, and exact fields (URL extraction, defaults)", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      [
+        "tasks",
+        "get",
+        "https://app.asana.com/0/1201947864389005/1215978111726134",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "custom-token-123" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastToken).toBe("custom-token-123");
+    expect(reader.lastTaskId).toBe("1215978111726134");
+    expect(reader.lastFields).toEqual([
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+    ]);
+  });
+
+  test("allows fields flag before subcommand", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      ["--fields", "name,notes", "tasks", "get", "1215978111726134"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token-abc" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastFields).toEqual(["name", "notes"]);
+  });
+
+  test("allows fields flag after subcommand", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--fields", "name,notes"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token-abc" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reader.lastFields).toEqual(["name", "notes"]);
+  });
+
+  test("invalid fields list fails before reader or auth calls", async () => {
+    const reader = new InMemoryTaskReader(ok(dummyTask));
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--fields", "name,,notes"],
+      {
+        environment: {},
+        identity: new InMemoryIdentity(
+          err({ kind: "authentication", message: "fail" }),
+        ),
+        taskReader: reader,
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain(
+      "Fields list cannot contain empty segments",
+    );
+    expect(reader.callCount).toBe(0);
+  });
+
+  test("maps task reader errors correctly for other kinds", async () => {
+    const errors = taskReadErrorCases([
+      ["authentication", 3],
+      ["api", 4],
+      ["not_found", 4],
+      ["rate_limit", 5],
+      ["network", 4],
+      ["invalid_response", 4],
+    ]);
+
+    for (const [kind, exitCode] of errors) {
+      const failingReader = new InMemoryTaskReader(
+        err({
+          kind,
+          message: `error for ${kind}`,
+        }),
+      );
+      const result = await execute(["tasks", "get", "1215978111726134"], {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: failingReader,
+      });
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.stderr).toContain(kind);
+    }
+  });
+
+  test("handles thrown internal dependency error in task reader cleanly", async () => {
+    const throwingReader = {
+      getTask: async () => {
+        throw new Error("unexpected db/connection crash!");
+      },
+    };
+
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: throwingReader,
+    });
+
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain("unexpected internal error");
+    expect(result.stderr).not.toContain("unexpected db/connection crash!");
   });
 });

@@ -422,4 +422,308 @@ describe("AsanaHttpClient", () => {
       );
     }
   });
+
+  test("getTask fetches a task with exact required and optional fields", async () => {
+    const taskPayload = {
+      gid: "1215978111726134",
+      name: "Implement the change",
+      notes: "This is a task description",
+      completed: true,
+      due_on: "2026-12-31",
+      assignee: {
+        gid: "12345",
+        name: "Ada Lovelace",
+      },
+      extra_field: "extra_value",
+    };
+
+    let called = false;
+    const baseUrl = serverFor((request) => {
+      called = true;
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("authorization")).toBe("Bearer test-token");
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/tasks/1215978111726134");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,name,notes,completed,due_on,assignee.gid,assignee.name,extra_field",
+      );
+      return Response.json({ data: taskPayload });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "1215978111726134", [
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+      "extra_field",
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(taskPayload);
+    }
+    expect(called).toBe(true);
+  });
+
+  test("exact default opt_fields success with realistic resource_type/extra payload", async () => {
+    const taskPayload = {
+      gid: "1215978111726134",
+      name: "Default Task",
+      notes: "Some notes",
+      completed: false,
+      due_on: null,
+      assignee: null,
+      resource_type: "task",
+      resource_subtype: "default_task",
+    };
+
+    let called = false;
+    const baseUrl = serverFor((request) => {
+      called = true;
+      const url = new URL(request.url);
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,name,notes,completed,due_on,assignee.gid,assignee.name",
+      );
+      return Response.json({ data: taskPayload });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "1215978111726134", [
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(taskPayload);
+    }
+    expect(called).toBe(true);
+  });
+
+  test("exact custom selection such as gid,name,permalink_url returning only those fields", async () => {
+    const taskPayload = {
+      gid: "9876543210",
+      name: "Custom Field Selection Task",
+      permalink_url: "https://app.asana.com/0/123/9876543210",
+    };
+
+    let called = false;
+    const baseUrl = serverFor((request) => {
+      called = true;
+      const url = new URL(request.url);
+      expect(url.searchParams.get("opt_fields")).toBe("gid,name,permalink_url");
+      return Response.json({ data: taskPayload });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "9876543210", [
+      "gid",
+      "name",
+      "permalink_url",
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(taskPayload);
+    }
+    expect(called).toBe(true);
+  });
+
+  test("preserves requested response field order in human output", async () => {
+    const baseUrl = serverFor((request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "notes,name,assignee.name,assignee.gid",
+      );
+      return Response.json({
+        data: {
+          notes: "Notes first",
+          name: "Name second",
+          assignee: {
+            name: "Assignee name third",
+            gid: "12345",
+          },
+        },
+      });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+
+    const result = await execute(
+      [
+        "tasks",
+        "get",
+        "9876543210",
+        "--fields",
+        "notes,name,assignee.name,assignee.gid",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "test-token" },
+        identity: client,
+        taskReader: client,
+      },
+    );
+
+    expect(result).toEqual({
+      stdout:
+        [
+          "notes: Notes first",
+          "name: Name second",
+          "assignee.name: Assignee name third",
+          "assignee.gid: 12345",
+        ].join("\n") + "\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("requires requested fields and validates known present fields", async () => {
+    const cases: ReadonlyArray<
+      Readonly<{
+        fields: readonly string[];
+        data: Record<string, unknown>;
+      }>
+    > = [
+      { fields: ["name"], data: {} },
+      { fields: ["name"], data: { name: false } },
+      { fields: ["name"], data: { name: "Task", gid: "not-digits" } },
+      {
+        fields: ["assignee.gid"],
+        data: { assignee: { name: "Ada" } },
+      },
+      {
+        fields: ["assignee.name"],
+        data: { assignee: { gid: "123" } },
+      },
+      {
+        fields: ["assignee.gid"],
+        data: { assignee: { gid: "not-digits" } },
+      },
+      {
+        fields: ["name"],
+        data: { name: "Task", completed: "false" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const baseUrl = serverFor(() => Response.json({ data: testCase.data }));
+      const result = await new AsanaHttpClient({ baseUrl }).getTask(
+        "test-token",
+        "123",
+        testCase.fields,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.kind).toBe("invalid_response");
+    }
+  });
+
+  test("task 404 mapped to not_found and not retried", async () => {
+    let callCount = 0;
+    const baseUrl = serverFor(() => {
+      callCount += 1;
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("not_found");
+      expect(result.error.status).toBe(404);
+    }
+    expect(callCount).toBe(1);
+  });
+
+  test("429 retry exhaustion honoring Retry-After", async () => {
+    let callCount = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      callCount += 1;
+      return new Response("Too Many Requests", {
+        status: 429,
+        headers: { "Retry-After": "1" },
+      });
+    });
+
+    const client = new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 2,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    const result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("rate_limit");
+      expect(result.error.status).toBe(429);
+    }
+    expect(callCount).toBe(3);
+    expect(waits).toEqual([1000, 1000]);
+  });
+
+  test("503 retry then success", async () => {
+    let callCount = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      callCount += 1;
+      return callCount === 1
+        ? new Response("Service Unavailable", { status: 503 })
+        : Response.json({ data: { gid: "123", name: "Recovered Task" } });
+    });
+
+    const client = new AsanaHttpClient({
+      baseUrl,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    const result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.name).toBe("Recovered Task");
+    }
+    expect(callCount).toBe(2);
+    expect(waits.length).toBe(1);
+  });
+
+  test("malformed JSON/schema", async () => {
+    let baseUrl = serverFor(() => {
+      return new Response("This is not JSON", { status: 200 });
+    });
+    let client = new AsanaHttpClient({ baseUrl });
+    let result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+    }
+
+    baseUrl = serverFor(() => {
+      return Response.json({
+        data: {
+          gid: "non-digits-123",
+          name: "Invalid GID Task",
+        },
+      });
+    });
+    client = new AsanaHttpClient({ baseUrl });
+    result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+    }
+  });
 });

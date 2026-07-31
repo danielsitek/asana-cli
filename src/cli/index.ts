@@ -18,12 +18,20 @@ import type {
   IdentityGateway,
 } from "../identity/index.ts";
 import {
+  type TaskGateway,
+  type TaskReadError,
+  parseTaskId,
+  validateFieldList,
+  DEFAULT_FIELDS,
+} from "../tasks/index.ts";
+import {
   renderConfig,
   renderConfigValue,
   renderError,
   renderIdentity,
   renderJson,
   renderResolvedMyTasks,
+  renderTaskDetail,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -36,6 +44,7 @@ export type Execution = Readonly<{
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
+  taskReader?: TaskGateway;
   discovery?: MyTasksDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
@@ -62,6 +71,29 @@ const identityFailures: Readonly<
 
 const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
   const mapped = identityFailures[kind];
+  return {
+    stdout: "",
+    stderr: renderError({ code: kind, message: mapped.message }),
+    exitCode: mapped.exitCode,
+  };
+};
+
+const taskReadFailures: Readonly<
+  Record<TaskReadError["kind"], Readonly<{ exitCode: number; message: string }>>
+> = {
+  authentication: { exitCode: 3, message: "Asana authentication failed" },
+  api: { exitCode: 4, message: "Asana API request failed" },
+  not_found: { exitCode: 4, message: "Task not found" },
+  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
+  network: { exitCode: 4, message: "Unable to reach Asana" },
+  invalid_response: {
+    exitCode: 4,
+    message: "Asana returned an invalid response",
+  },
+};
+
+const renderTaskReadFailure = (kind: TaskReadError["kind"]): Execution => {
+  const mapped = taskReadFailures[kind];
   return {
     stdout: "",
     stderr: renderError({ code: kind, message: mapped.message }),
@@ -151,6 +183,23 @@ export const execute = async (
   };
 
   program.option("--json", "output JSON");
+  program.option("--fields <fields>", "select explicit Asana fields");
+
+  program.hook("preAction", (thisCommand, actionCommand) => {
+    if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
+      const isTasksGet =
+        actionCommand.name() === "get" &&
+        actionCommand.parent?.name() === "tasks";
+      if (!isTasksGet) {
+        throw new CommanderError(
+          2,
+          "commander.fieldsNotSupported",
+          "Option --fields is not supported for this command",
+        );
+      }
+    }
+  });
+
   const whoami = program
     .command("whoami")
     .description("show the authenticated Asana user")
@@ -374,6 +423,7 @@ export const execute = async (
     .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
       const context = beginConfigCommand();
       if (!context) return;
+
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -416,6 +466,7 @@ export const execute = async (
       ) => {
         const context = beginConfigCommand();
         if (!context) return;
+
         const layer = selectedLayer(options);
         if (!layer.ok) {
           result = usageError(layer.error);
@@ -443,6 +494,7 @@ export const execute = async (
     .action(async (options: Readonly<{ sources?: boolean }>) => {
       const context = beginConfigCommand();
       if (!context) return;
+
       const resolved = await resolveConfig(context);
       if (!resolved.ok) {
         result = renderConfigFailure(resolved.error);
@@ -460,6 +512,82 @@ export const execute = async (
       };
     });
 
+  const tasks = program.command("tasks").description("manage tasks");
+
+  const tasksGet = tasks
+    .command("get <id>")
+    .description("read a task's details")
+    .action(async (idArg: string) => {
+      invoked = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      const parsedId = parseTaskId(idArg);
+      if (!parsedId.ok) {
+        result = usageError("Invalid task identifier");
+        return;
+      }
+
+      const customFieldsOpt = program.opts<{ fields?: string }>().fields;
+      let fields: readonly string[];
+      if (customFieldsOpt !== undefined) {
+        const validated = validateFieldList(customFieldsOpt);
+        if (!validated.ok) {
+          result = usageError(validated.error);
+          return;
+        }
+        fields = validated.value;
+      } else {
+        fields = DEFAULT_FIELDS;
+      }
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      if (!dependencies.taskReader) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Task reader is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const taskResult = await dependencies.taskReader.getTask(
+        tokenResult.value,
+        parsedId.value,
+        fields,
+      );
+
+      if (!taskResult.ok) {
+        result = renderTaskReadFailure(taskResult.error.kind);
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(taskResult.value)
+          : renderTaskDetail(taskResult.value),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+
+  tasksGet.exitOverride();
+  tasksGet.configureOutput(captureOutput);
+
   program.exitOverride();
   program.configureOutput(captureOutput);
   whoami.exitOverride();
@@ -473,6 +601,9 @@ export const execute = async (
         error.code === "commander.version"
       ) {
         return { stdout: parserStdout, stderr: "", exitCode: 0 };
+      }
+      if (error.code === "commander.fieldsNotSupported") {
+        return usageError(error.message);
       }
       return usageError("Invalid command usage");
     }

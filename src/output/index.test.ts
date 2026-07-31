@@ -7,6 +7,7 @@ import {
   renderError,
   renderConfigValue,
   renderConfig,
+  renderTaskDetail,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -120,5 +121,50 @@ describe("configuration output", () => {
     ).toBe(
       "—\nsource layer: local\nsource path: /repo/.asana-cli.local.json\n",
     );
+  });
+
+  test("renderTaskDetail formats task correctly with deterministic keys, multiline notes, and nulls", () => {
+    const task = {
+      gid: "1215978111726134",
+      name: "Implement the change",
+      completed: true,
+      due_on: null,
+      assignee: {
+        gid: "12345",
+        name: "Ada Lovelace",
+      },
+      notes: "This is line 1\nThis is line 2\nThis is line 3",
+    };
+    const expected =
+      [
+        "gid: 1215978111726134",
+        "name: Implement the change",
+        "completed: true",
+        "due_on: —",
+        "assignee.gid: 12345",
+        "assignee.name: Ada Lovelace",
+        "notes:",
+        "  This is line 1",
+        "  This is line 2",
+        "  This is line 3",
+      ].join("\n") + "\n";
+    expect(renderTaskDetail(task)).toBe(expected);
+  });
+
+  test("renderTaskDetail formats assignee as null consistently", () => {
+    const task = {
+      gid: "121",
+      name: "Task without assignee",
+      assignee: null,
+      notes: "",
+    };
+    const expected =
+      [
+        "gid: 121",
+        "name: Task without assignee",
+        "assignee: —",
+        "notes: ",
+      ].join("\n") + "\n";
+    expect(renderTaskDetail(task)).toBe(expected);
   });
 });

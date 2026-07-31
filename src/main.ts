@@ -10,6 +10,7 @@ const client = new AsanaHttpClient();
 const result = await execute(Bun.argv.slice(2), {
   environment: process.env,
   identity: client,
+  taskReader: client,
   discovery: client,
   configuration: {
     cwd: process.cwd(),
