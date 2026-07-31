@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import type {
+  Identity,
+  IdentityError,
+  IdentityGateway,
+} from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
 const userSchema = z
@@ -7,38 +12,27 @@ const userSchema = z
   .passthrough();
 const envelopeSchema = z.object({ data: userSchema });
 
-export type Identity = Readonly<{ gid: string; name: string }>;
-
-export type AsanaError = Readonly<{
-  kind:
-    | "authentication"
-    | "api"
-    | "rate_limit"
-    | "network"
-    | "invalid_response";
-  message: string;
-  status?: number;
-}>;
-
-export interface IdentityGateway {
-  getAuthenticatedUser(token: string): Promise<Result<Identity, AsanaError>>;
-}
-
 export type AsanaClientOptions = Readonly<{
   baseUrl?: string;
   maxRetries?: number;
   requestTimeoutMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
   random?: () => number;
+  now?: () => number;
 }>;
 
 const wait = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-const retryAfterMs = (value: string | null): number | undefined => {
+const retryAfterMs = (
+  value: string | null,
+  now: number,
+): number | undefined => {
   if (value === null) return undefined;
   const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
 
 export class AsanaHttpClient implements IdentityGateway {
@@ -47,6 +41,7 @@ export class AsanaHttpClient implements IdentityGateway {
   readonly #requestTimeoutMs: number;
   readonly #sleep: (milliseconds: number) => Promise<void>;
   readonly #random: () => number;
+  readonly #now: () => number;
 
   constructor(options: AsanaClientOptions = {}) {
     this.#baseUrl = options.baseUrl ?? "https://app.asana.com/api/1.0";
@@ -54,11 +49,12 @@ export class AsanaHttpClient implements IdentityGateway {
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.#sleep = options.sleep ?? wait;
     this.#random = options.random ?? Math.random;
+    this.#now = options.now ?? Date.now;
   }
 
   async getAuthenticatedUser(
     token: string,
-  ): Promise<Result<Identity, AsanaError>> {
+  ): Promise<Result<Identity, IdentityError>> {
     const url = new URL("users/me", `${this.#baseUrl}/`);
     url.searchParams.set("opt_fields", "gid,name");
 
@@ -77,7 +73,7 @@ export class AsanaHttpClient implements IdentityGateway {
           const retryable = [429, 502, 503, 504].includes(response.status);
           if (retryable && attempt < this.#maxRetries) {
             await this.#sleep(
-              retryAfterMs(response.headers.get("Retry-After")) ??
+              retryAfterMs(response.headers.get("Retry-After"), this.#now()) ??
                 1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000),
             );
             continue;
@@ -115,7 +111,7 @@ export class AsanaHttpClient implements IdentityGateway {
     return err({ kind: "network", message: "Unable to reach Asana" });
   }
 
-  private responseError(status: number, retryable: boolean): AsanaError {
+  private responseError(status: number, retryable: boolean): IdentityError {
     if (status === 401 || status === 403) {
       return {
         kind: "authentication",

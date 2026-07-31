@@ -1,20 +1,26 @@
 import { describe, expect, test } from "bun:test";
 
-import type { AsanaError, Identity, IdentityGateway } from "../asana/index.ts";
+import type {
+  Identity,
+  IdentityError,
+  IdentityGateway,
+} from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute } from "./index.ts";
 
 class InMemoryIdentity implements IdentityGateway {
-  constructor(private readonly response: Result<Identity, AsanaError>) {}
+  constructor(private readonly response: Result<Identity, IdentityError>) {}
 
-  async getAuthenticatedUser(): Promise<Result<Identity, AsanaError>> {
+  async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
     return this.response;
   }
 }
 
 class ThrowingIdentity implements IdentityGateway {
-  async getAuthenticatedUser(): Promise<Result<Identity, AsanaError>> {
-    throw new Error("token=secret-value");
+  async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
+    const error = new Error("token=secret-value");
+    Object.assign(error, { code: "ECONNRESET" });
+    throw error;
   }
 }
 
@@ -96,7 +102,7 @@ describe("execute", () => {
   });
 
   test("renders version and help without authenticating", async () => {
-    const version = await execute(["--version"], { environment: {}, identity });
+    const version = await execute(["-v"], { environment: {}, identity });
     expect(version).toEqual({ stdout: "0.1.0\n", stderr: "", exitCode: 0 });
 
     const helpBefore = await execute(["--help", "whoami"], {
@@ -109,8 +115,11 @@ describe("execute", () => {
     });
     expect(helpBefore.exitCode).toBe(0);
     expect(helpBefore.stderr).toBe("");
+    expect(helpBefore.stdout).toContain("Commands:");
     expect(helpBefore.stdout).toContain("show the authenticated Asana user");
-    expect(helpAfter).toEqual(helpBefore);
+    expect(helpAfter.exitCode).toBe(0);
+    expect(helpAfter.stderr).toBe("");
+    expect(helpAfter.stdout).toContain("show the authenticated Asana user");
   });
 
   test("normalizes unknown commands as JSON usage errors", async () => {

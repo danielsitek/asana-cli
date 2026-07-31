@@ -46,6 +46,30 @@ describe("AsanaHttpClient", () => {
     expect(waits).toEqual([2000]);
   });
 
+  test("honors an HTTP-date Retry-After before jitter", async () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, {
+            status: 429,
+            headers: { "Retry-After": "Thu, 01 Jan 1970 00:00:12 GMT" },
+          })
+        : Response.json({ data: { gid: "1", name: "Ada" } });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      now: () => 10_000,
+      random: () => 0.99,
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }).getAuthenticatedUser("x");
+    expect(result.ok).toBe(true);
+    expect(waits).toEqual([2000]);
+  });
+
   test("uses exponential backoff with jitter for retryable GET failures", async () => {
     let attempts = 0;
     const waits: number[] = [];

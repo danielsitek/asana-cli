@@ -1,7 +1,7 @@
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 
 import { resolveToken } from "../auth/index.ts";
-import type { IdentityGateway } from "../asana/index.ts";
+import type { IdentityGateway } from "../identity/index.ts";
 import { renderError, renderIdentity, renderJson } from "../output/index.ts";
 
 export type Execution = Readonly<{
@@ -48,13 +48,21 @@ export const execute = async (
 ): Promise<Execution> => {
   const program = new Command()
     .name("asana-cli")
-    .version(dependencies.version ?? "0.1.0");
+    .version(dependencies.version ?? "0.1.0", "-v, --version");
   let json = false;
   let invoked = false;
   let result: Execution | undefined;
+  let parserStdout = "";
+
+  const captureOutput = {
+    writeOut: (text: string) => {
+      parserStdout += text;
+    },
+    writeErr: () => undefined,
+  };
 
   program.option("--json", "output JSON");
-  program
+  const whoami = program
     .command("whoami")
     .description("show the authenticated Asana user")
     .action(async () => {
@@ -88,32 +96,20 @@ export const execute = async (
       };
     });
 
-  if (argv.includes("--version") || argv.includes("-V")) {
-    return { stdout: `${program.version()}\n`, stderr: "", exitCode: 0 };
-  }
-  if (argv.includes("--help") || argv.includes("-h")) {
-    const whoami = program.commands.find(
-      (command) => command.name() === "whoami",
-    );
-    return {
-      stdout:
-        argv.includes("whoami") && whoami !== undefined
-          ? whoami.helpInformation()
-          : program.helpInformation(),
-      stderr: "",
-      exitCode: 0,
-    };
-  }
-
   program.exitOverride();
-  program.configureOutput({
-    writeOut: () => undefined,
-    writeErr: () => undefined,
-  });
+  program.configureOutput(captureOutput);
+  whoami.exitOverride();
+  whoami.configureOutput(captureOutput);
   try {
     await program.parseAsync(["bun", "asana-cli", ...argv], { from: "node" });
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error) {
+    if (error instanceof CommanderError) {
+      if (
+        error.code === "commander.helpDisplayed" ||
+        error.code === "commander.version"
+      ) {
+        return { stdout: parserStdout, stderr: "", exitCode: 0 };
+      }
       return usageError("Invalid command usage");
     }
     return {
