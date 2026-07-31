@@ -43,6 +43,7 @@ class InMemoryTaskReader implements TaskGateway {
   public lastToken?: string;
   public lastTaskId?: string;
   public lastFields?: readonly string[];
+  public callCount = 0;
 
   constructor(private readonly response: Result<Task, TaskReadError>) {}
 
@@ -51,6 +52,7 @@ class InMemoryTaskReader implements TaskGateway {
     taskId: string,
     fields: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
+    this.callCount += 1;
     this.lastToken = token;
     this.lastTaskId = taskId;
     this.lastFields = fields;
@@ -968,11 +970,10 @@ describe("tasks get command", () => {
 
   test("invalid fields list fails before reader or auth calls", async () => {
     const reader = new InMemoryTaskReader(ok(dummyTask));
-    // Pass empty SEGMENT inside --fields:
     const result = await execute(
       ["tasks", "get", "1215978111726134", "--fields", "name,,notes"],
       {
-        environment: {}, // No token provided, but it shouldn't even check token or reader!
+        environment: {},
         identity: new InMemoryIdentity(
           err({ kind: "authentication", message: "fail" }),
         ),
@@ -984,7 +985,7 @@ describe("tasks get command", () => {
     expect(result.stderr).toContain(
       "Fields list cannot contain empty segments",
     );
-    expect(reader.lastTaskId).toBeUndefined(); // Reader was NOT called!
+    expect(reader.callCount).toBe(0);
   });
 
   test("maps task reader errors correctly for other kinds", async () => {
@@ -1029,6 +1030,6 @@ describe("tasks get command", () => {
 
     expect(result.exitCode).toBe(6);
     expect(result.stderr).toContain("unexpected internal error");
-    expect(result.stderr).not.toContain("unexpected db/connection crash!"); // Ensure actual error details are not leaked!
+    expect(result.stderr).not.toContain("unexpected db/connection crash!");
   });
 });
