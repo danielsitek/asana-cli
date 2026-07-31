@@ -593,7 +593,10 @@ export const execute = async (
   whoami.exitOverride();
   whoami.configureOutput(captureOutput);
   try {
-    await program.parseAsync(["bun", "asana-cli", ...argv], { from: "node" });
+    const effectiveArgv = argv.length === 0 ? ["--help"] : argv;
+    await program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
+      from: "node",
+    });
   } catch (error) {
     if (error instanceof CommanderError) {
       if (

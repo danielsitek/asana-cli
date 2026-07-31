@@ -19,7 +19,7 @@ import {
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
-import { execute } from "./index.ts";
+import { execute, type ExecuteDependencies } from "./index.ts";
 
 const taskReadErrorCases = <
   const Cases extends readonly (readonly [TaskReadError["kind"], number])[],
@@ -183,6 +183,46 @@ describe("execute", () => {
     expect(helpAfter.exitCode).toBe(0);
     expect(helpAfter.stderr).toBe("");
     expect(helpAfter.stdout).toContain("show the authenticated Asana user");
+  });
+
+  test("empty invocation returns top-level help without dependencies", async () => {
+    const environment = new Proxy<Record<string, string | undefined>>(
+      {},
+      {
+        get: () => {
+          throw new Error("environment accessed");
+        },
+      },
+    );
+    const dependencies: ExecuteDependencies = {
+      environment,
+      identity: {
+        getAuthenticatedUser: async () => {
+          throw new Error("identity called");
+        },
+      },
+      discovery: {
+        discoverMyTasks: async () => {
+          throw new Error("discovery called");
+        },
+      },
+      taskReader: {
+        getTask: async () => {
+          throw new Error("task reader called");
+        },
+      },
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+    };
+
+    const explicitHelp = await execute(["--help"], dependencies);
+    const emptyInvocation = await execute([], dependencies);
+
+    expect(emptyInvocation).toEqual(explicitHelp);
+    expect(emptyInvocation.exitCode).toBe(0);
+    expect(emptyInvocation.stderr).toBe("");
+    expect(emptyInvocation.stdout).toContain("Usage: asana-cli");
   });
 
   test("normalizes unknown commands as JSON usage errors", async () => {

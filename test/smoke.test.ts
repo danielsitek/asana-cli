@@ -2,12 +2,16 @@ import { expect, test } from "bun:test";
 
 const compiledTest = process.env.RUN_COMPILED_SMOKE === "1" ? test : test.skip;
 
-compiledTest("compiled executable prints help", async () => {
-  const command = Bun.spawn(["./dist/asana-cli", "--help"], {
+compiledTest("compiled executable prints help without arguments", async () => {
+  const command = Bun.spawn(["./dist/asana-cli"], {
     stdout: "pipe",
+    stderr: "pipe",
   });
   const output = await new Response(command.stdout).text();
+  const errorOutput = await new Response(command.stderr).text();
   expect(await command.exited).toBe(0);
+  expect(errorOutput).toBe("");
+  expect(output).toContain("Usage: asana-cli");
   expect(output).toContain("whoami");
 });
 
