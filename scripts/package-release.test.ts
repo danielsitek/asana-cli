@@ -67,7 +67,9 @@ describe("release packaging", () => {
       "asana-cli-v0.1.0-linux-arm64.tar.gz",
     ]);
     const manifest = await Bun.file(packaged.checksumPath).text();
-    expect(manifest.trim().split("\n")).toHaveLength(4);
+    const checksumLines = manifest.trim().split("\n");
+    expect(checksumLines).toHaveLength(4);
+    expect(checksumLines).toEqual([...checksumLines].sort());
     expect(manifest).toContain("  asana-cli-v0.1.0-darwin-arm64.tar.gz");
     expect(commands.filter(([command]) => command === "tar")).toHaveLength(4);
     expect(commands[0]).toEqual(

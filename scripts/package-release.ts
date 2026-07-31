@@ -100,7 +100,7 @@ export const packageRelease = async (
     }
 
     const checksumPath = join(outputDirectory, "SHA256SUMS");
-    await writeFile(checksumPath, `${checksums.join("\n")}\n`);
+    await writeFile(checksumPath, `${checksums.sort().join("\n")}\n`);
     await runCommand(["sha256sum", "-c", basename(checksumPath)], {
       cwd: outputDirectory,
     });
