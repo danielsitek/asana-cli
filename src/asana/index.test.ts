@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { execute } from "../cli/index.ts";
-import { AsanaHttpClient } from "./index.ts";
+import { AsanaHttpClient, parseTaskId } from "./index.ts";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(() => servers.splice(0).forEach((server) => server.stop(true)));
@@ -421,5 +421,43 @@ describe("AsanaHttpClient", () => {
         "Returned user task list workspace GID 1201947864389005 does not match requested workspace GID 9999999",
       );
     }
+  });
+});
+
+describe("parseTaskId", () => {
+  test("accepts digit-only GIDs", () => {
+    expect(parseTaskId("1234567890")).toEqual({ ok: true, value: "1234567890" });
+  });
+
+  test("accepts unambiguous Asana task URLs", () => {
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134")).toEqual({
+      ok: true,
+      value: "1215978111726134",
+    });
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/f")).toEqual({
+      ok: true,
+      value: "1215978111726134",
+    });
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/")).toEqual({
+      ok: true,
+      value: "1215978111726134",
+    });
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/f/")).toEqual({
+      ok: true,
+      value: "1215978111726134",
+    });
+  });
+
+  test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
+    expect(parseTaskId("abc")).toEqual({ ok: false, error: "Invalid task identifier" });
+    expect(parseTaskId("123a456")).toEqual({ ok: false, error: "Invalid task identifier" });
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/other")).toEqual({
+      ok: false,
+      error: "Invalid task identifier",
+    });
+    expect(parseTaskId("https://app.asana.com/0/1201947864389005/list")).toEqual({
+      ok: false,
+      error: "Invalid task identifier",
+    });
   });
 });

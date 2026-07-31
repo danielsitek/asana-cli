@@ -6,6 +6,7 @@ export type IdentityError = Readonly<{
   kind:
     | "authentication"
     | "api"
+    | "not_found"
     | "rate_limit"
     | "network"
     | "invalid_response";

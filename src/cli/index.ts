@@ -52,6 +52,7 @@ const identityFailures: Readonly<
 > = {
   authentication: { exitCode: 3, message: "Asana authentication failed" },
   api: { exitCode: 4, message: "Asana API request failed" },
+  not_found: { exitCode: 4, message: "Task not found" },
   rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
   network: { exitCode: 4, message: "Unable to reach Asana" },
   invalid_response: {

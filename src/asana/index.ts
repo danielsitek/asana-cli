@@ -12,6 +12,40 @@ import type {
 } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
+export type Task = Readonly<{
+  gid: string;
+  name: string;
+  notes: string;
+  completed: boolean;
+  due_on: string | null;
+  assignee: Readonly<{
+    gid: string;
+    name: string;
+  }> | null;
+  [key: string]: unknown;
+}>;
+
+export interface TaskGateway {
+  getTask(
+    token: string,
+    taskId: string,
+    fields: readonly string[],
+  ): Promise<Result<Task, IdentityError>>;
+}
+
+export const parseTaskId = (input: string): Result<string, string> => {
+  if (/^\d+$/.test(input)) {
+    return ok(input);
+  }
+  const match = input.match(
+    /^https:\/\/app\.asana\.com\/0\/(\d+)\/(\d+)(?:\/f)?\/?$/,
+  );
+  if (match && typeof match[2] === "string") {
+    return ok(match[2]);
+  }
+  return err("Invalid task identifier");
+};
+
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
   .passthrough();
@@ -40,7 +74,7 @@ const retryAfterMs = (
 };
 
 export class AsanaHttpClient
-  implements IdentityGateway, MyTasksDiscoveryGateway
+  implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -261,6 +295,48 @@ export class AsanaHttpClient
     });
   }
 
+  async getTask(
+    token: string,
+    taskId: string,
+    fields: readonly string[],
+  ): Promise<Result<Task, IdentityError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const assigneeSchema = z
+      .object({
+        gid: z.string(),
+        name: z.string(),
+      })
+      .passthrough();
+
+    const taskSchema = z
+      .object({
+        gid: z.string(),
+        name: z.string(),
+        notes: z.string(),
+        completed: z.boolean(),
+        due_on: z.string().nullable(),
+        assignee: assigneeSchema.nullable(),
+      })
+      .passthrough();
+
+    const schema = z.object({ data: taskSchema });
+
+    const result = await this.#get(
+      token,
+      `tasks/${taskId}`,
+      { opt_fields: fields.join(",") },
+      schema,
+    );
+    if (!result.ok) return result;
+    return ok(result.value.data);
+  }
+
   private retryDelay(
     attempt: number,
     retryAfter: string | null = null,
@@ -277,6 +353,13 @@ export class AsanaHttpClient
         kind: "authentication",
         status,
         message: "Asana authentication failed",
+      };
+    }
+    if (status === 404) {
+      return {
+        kind: "not_found",
+        status,
+        message: "Task not found",
       };
     }
     return retryable
