@@ -1,112 +1,151 @@
 # Asana CLI
 
-Fast, script-friendly CLI for working with Asana tasks without unnecessary API
-output. It is designed for both people and automation: commands are
-non-interactive by default, return compact output, and support JSON when needed.
+Fast, script-friendly CLI for working with Asana from a terminal or autonomous
+agent. It favors explicit fields, bounded reads, deterministic JSON, and
+honest reporting of partial writes.
 
-## Quick start
+> **Status:** design and pre-implementation. The commands below define v0.1;
+> there is no installable release yet.
 
-Authenticate with a personal access token. The token is read from
-`ASANA_CLI_TOKEN`, or from stdin when that variable is unset, and stored in the
-OS keychain.
+## v0.1 workflows
 
 ```sh
-echo "$TOKEN" | asana-cli login
+# Read a task, including its description
+asana-cli tasks get 1215978111726134
+
+# Read comments without unrelated system activity
+asana-cli tasks comments 1215978111726134
+
+# Replace a description safely from a file
+asana-cli tasks update 1215978111726134 \
+  --notes-file=task-description.md
+
+# Move the task in your personal My Tasks board and comment
+asana-cli tasks update 1215978111726134 \
+  --my-section=@in_review
+
+asana-cli tasks comment 1215978111726134 "Ready for review"
+
+# Create a subtask, assign it to yourself, and set a numeric custom field
+asana-cli tasks create \
+  --parent=1215978111726134 \
+  --name="Implement the change" \
+  --assignee=me \
+  --my-section=@in_progress \
+  --custom-field=@hours_estimate:4
+```
+
+Use `--json` for the stable `{ "data": ..., "meta": ... }` response and
+`--fields` for explicit Asana fields.
+
+## Authentication
+
+v0.1 reads the token only from `ASANA_CLI_TOKEN`. It never accepts a token as a
+CLI argument, writes it to a shell profile, or loads it automatically from a
+`.env` file.
+
+### Create a personal access token
+
+1. Open the [Asana developer console](https://app.asana.com/0/my-apps), or in
+   Asana open **Settings → Apps → View developer console**.
+2. Open **Personal access tokens**, create a token, and give it a recognizable
+   description such as `asana-cli`.
+3. Copy the token when Asana displays it and store it as a secret.
+
+Asana documents PATs as long-lived credentials that act with the same access
+as the user who created them. There is no separate v0.1 CLI permission model:
+the Asana account must be able to read and edit the relevant tasks, access its
+My Tasks list and sections, read its custom-field definitions, and read and
+write task comments. See Asana's
+[PAT guide](https://developers.asana.com/docs/personal-access-token) and
+[authentication guide](https://developers.asana.com/docs/authentication).
+
+Where Asana documents resource scopes, the API operations used by v0.1
+correspond to `users:read`, `tasks:read`, `tasks:write`, `stories:read`,
+`stories:write`, `projects:read`, and `custom_fields:read`. These scopes are
+useful when OAuth is added later; PAT creation currently relies on the
+permissions of the creating user. Read and write scopes do not imply each
+other.
+
+For one shell invocation:
+
+```sh
+ASANA_CLI_TOKEN="your-token" asana-cli whoami
+```
+
+For a development shell:
+
+```sh
+export ASANA_CLI_TOKEN="your-token"
 asana-cli whoami
 ```
 
-Initialize project configuration:
-
-```sh
-asana-cli config init --shared \
-  --workspace=1201947864389005 \
-  --project=1215855197447915 \
-  --no-input
-
-asana-cli config doctor
-```
-
-The workspace is read from config for all regular commands, so it does not need
-to be passed repeatedly. Shared project settings are stored in
-`.asana-cli.json`; personal My Tasks settings belong in the gitignored
-`.asana-cli.local.json`.
-
-When a project is supplied, `config init` imports its sections as aliases. For
-example, a section named `In Progress` becomes `@in_progress`.
-
-## Common commands
-
-```sh
-# Find open tasks
-asana-cli tasks search --project=1215855197447915 --assignee=me --completed=false
-
-# Read a task (a supported Asana task URL works too)
-asana-cli tasks 1215978111726134
-
-# Create and place a task in a configured project section
-asana-cli tasks create \
-  --name="Prepare release notes" \
-  --assignee=me \
-  --due-on=2026-08-15 \
-  --section=@in_progress
-
-# Update a task
-asana-cli tasks 1215978111726134 update \
-  --completed=true \
-  --section=@done
-
-# Add a comment and read activity
-asana-cli tasks 1215978111726134 comment "Ready for review"
-asana-cli tasks 1215978111726134 stories
-
-# List projects and sections
-asana-cli projects
-asana-cli sections list --project=1215855197447915
-```
-
-Use `--json` for a stable `{ "data": ..., "meta": ... }` response:
-
-```sh
-asana-cli tasks search --assignee=me --completed=false --json
-```
-
-Use `--fields` to request additional Asana fields:
-
-```sh
-asana-cli tasks 1215978111726134 --fields=name,notes,due_on,assignee.email
-```
+Adding the export to `.zshrc` is possible but stores the token as plaintext.
+Prefer a password manager, CI secret store, or another mechanism that injects
+the variable only where needed. Never commit the token. If it is exposed,
+revoke it in the Asana developer console and create a replacement.
 
 ## Configuration
 
-Configuration is merged from CLI flags, selected environment variables, local
-project config, shared project config, and global user config. Inspect the
-effective values or update individual keys with:
+Initialize the shared workspace configuration:
 
 ```sh
-asana-cli config show --sources
-asana-cli config get workspace.gid --source
-asana-cli config set project.gid 1215855197447915 --shared
+asana-cli config init --shared \
+  --workspace=1201947864389005
 ```
 
-Named project sections can be referenced as `@todo`, `@in_progress`, or
-`@done`. Personal My Tasks sections use separate local settings and can be
-referenced with `--my-section=@in_review`.
+Then resolve your personal My Tasks list, sections, and custom-field aliases
+into the local gitignored configuration:
 
-## Safe automation
+```sh
+asana-cli config init --local --write-gitignore
+```
 
-- Search requires at least one filter and never dumps a whole workspace by
-  default.
-- Full pagination requires both `--all` and an explicit `--max=<n>` limit.
-- Destructive task and section deletion requires `--yes`.
-- Bulk commands report each item separately and return a non-zero exit code when
-  any item fails.
-- Run any command with `--help` to see its available options.
+Shared data lives in `.asana-cli.json`. Personal My Tasks data lives in
+`.asana-cli.local.json` and must not be committed. For example:
 
-Exit codes: `0` success, `1` partial bulk failure, `2` invalid usage or config,
-`3` authentication or authorization failure, `4` Asana API error or not found,
-and `5` rate-limit or retry exhaustion.
+```json
+{
+  "myTasks": {
+    "userTaskListGid": "1213894072990299",
+    "sections": {
+      "in_progress": "1213894072991394",
+      "in_review": "1213894072991395"
+    },
+    "customFields": {
+      "hours_estimate": "1213894072991499"
+    }
+  }
+}
+```
 
-## Full reference
+## Safety contract
 
-See [docs/asana-cli.md](docs/asana-cli.md) for all commands, configuration
-rules, output fields, API behavior, and reliability details.
+- v0.1 is non-interactive.
+- Notes are replaced explicitly; there is no implicit append.
+- Long notes and comments may be read from a file or stdin.
+- Reads are bounded; complete traversal always requires an explicit maximum.
+- POST requests are not retried after ambiguous failures that could duplicate
+  a task or comment.
+- Multi-step writes report every completed and failed stage.
+- JSON data goes to stdout; diagnostics and errors go to stderr.
+- The application implements no telemetry or analytics.
+
+Exit codes: `0` success, `1` partial write, `2` invalid usage or config, `3`
+authentication or authorization failure, `4` Asana API error or not found, `5`
+rate-limit or retry exhaustion, and `6` unexpected internal CLI error.
+
+## Implementation
+
+The selected stack is TypeScript and Bun. Bun is used for development, tests,
+and standalone executables; users will not need Bun or Node.js installed.
+Initial distribution targets macOS through Homebrew and Linux/WSL2 through
+GitHub release archives.
+
+See:
+
+- [v0.1 scope](docs/v0.1.md)
+- [technology stack](docs/tech-stack.md)
+- [target product specification](docs/asana-cli.md)
+
+The project is licensed under the MIT License.

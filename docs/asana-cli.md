@@ -2,6 +2,9 @@
 
 Simple, non-interactive-first CLI for fast and reliable work with Asana. It returns a small, predictable data set by default and is designed to be equally usable from a terminal, shell script, or autonomous agent.
 
+> This is the target product specification. The first implementation is the
+> smaller My Tasks-first slice defined in [v0.1.md](v0.1.md).
+
 Design principles:
 
 - **Filter first** — never dump a whole project/workspace by accident; broad list commands require an explicit cap, and task search requires a narrowing filter.
@@ -63,7 +66,7 @@ Workspace is intentionally config-only for normal commands. The CLI always resol
 
 Configured project and team values are defaults only when a command needs a target, such as `tasks create`, `sections list`, or `projects create`. They are never silently added as filters to optional-filter commands such as `tasks search` or `projects`; a search with only `--assignee=me` is therefore workspace-wide. An explicit flag always wins over its configured target default.
 
-`@<name>` resolves against `project.sections` anywhere a project-section value is accepted, including positional section IDs and `--before`/`--after`. `myTasks.sections` aliases resolve only for `--my-section`.
+`@<name>` resolves against `project.sections` anywhere a project-section value is accepted, including positional section IDs and `--before`/`--after`. `myTasks.sections` aliases resolve only for `--my-section`; `myTasks.customFields` aliases resolve for `--custom-field`.
 
 ### Shared vs. local: what goes where
 
@@ -104,12 +107,15 @@ Local, `.asana-cli.local.json` (gitignored):
       "in_review": "1213894072991395",
       "done": "1213894072991396",
       "waiting": "1216110087679028"
+    },
+    "customFields": {
+      "hours_estimate": "1213894072991499"
     }
   }
 }
 ```
 
-`myTasks.userTaskListGid` doesn't need to be found and pasted by hand — it's per-user-per-workspace in Asana, so the CLI resolves it itself via `GET /users/me/user_task_list?workspace=<gid>` (needs the shared workspace gid to already be set) and caches the result locally. `config init --local` does this automatically and imports its section aliases; `config resolve my-tasks` re-resolves the list and sections if they go stale.
+`myTasks.userTaskListGid` doesn't need to be found and pasted by hand — it's per-user-per-workspace in Asana, so the CLI resolves it itself via `GET /users/me/user_task_list?workspace=<gid>` (needs the shared workspace gid to already be set) and caches the result locally. `config init --local` does this automatically and imports its section and custom-field aliases; `config resolve my-tasks` re-resolves the list, sections, and custom fields if they go stale.
 
 ### Merge semantics
 
@@ -124,7 +130,7 @@ Local, `.asana-cli.local.json` (gitignored):
 `asana-cli config init [--shared|--local] [--workspace=<gid>] [--project=<gid>] [--team=<gid>] [--profile=<name>] [--write-gitignore] [--no-input]` — creates config without requiring interaction when the needed flags are provided.
 
 - `--shared` requires a workspace, either from `--workspace` or an existing lower-precedence config. Project and team are optional. When a project is supplied, the CLI validates that it belongs to the workspace, infers its team when `--team` is omitted, and imports its sections into `project.sections`.
-- `--local` requires an effective workspace and authentication. It writes the optional profile, resolves the user's My Tasks list, and imports its sections into `myTasks.sections`.
+- `--local` requires an effective workspace and authentication. It writes the optional profile, resolves the user's My Tasks list, and imports its sections into `myTasks.sections` and custom fields into `myTasks.customFields`.
 - With neither flag, shared initialization runs first and local initialization second.
 - Imported aliases are deterministic: lowercase the section name, replace each run of non-letter/digit characters with `_`, and trim leading/trailing `_` (for example, `In Review` becomes `in_review`). Unicode letters and digits are retained. Alias collisions are reported before writing; the user can then assign explicit aliases with `config set`.
 - If a required value is missing and stdin is a TTY, the command may prompt. With `--no-input` or non-TTY stdin, it fails with exit code `2`. If `.asana-cli.local.json` is not already ignored, non-interactive local initialization requires `--write-gitignore` and fails with exit code `2` before writing otherwise. Interactive mode asks before changing `.gitignore`.
@@ -137,7 +143,7 @@ Local, `.asana-cli.local.json` (gitignored):
 
 `asana-cli config edit [--shared|--local|--global]` — optional convenience command that opens the file in `$EDITOR`. Every setting it can change is also reachable through `config set`.
 
-`asana-cli config doctor` — live-validates the resolved config against the API: workspace reachable, project belongs to workspace, configured `project.sections` gids actually belong to that project, configured `myTasks.sections` gids actually belong to the resolved My Tasks list, resolved My Tasks list belongs to the authenticated user in that workspace, token scopes are sufficient. Catches stale gids (project archived/recreated, section renamed/deleted, someone reordered their My Tasks sections) before a real command fails midway through a task move.
+`asana-cli config doctor` — live-validates the resolved config against the API: workspace reachable, project belongs to workspace, configured `project.sections` gids actually belong to that project, configured `myTasks.sections` gids and `myTasks.customFields` definitions actually belong to the resolved My Tasks list, resolved My Tasks list belongs to the authenticated user in that workspace, token scopes are sufficient. Catches stale gids (project archived/recreated, section renamed/deleted, custom field removed, someone reordered their My Tasks sections) before a real command fails midway through a task move.
 
 `asana-cli config resolve my-tasks` — re-resolves the authenticated user's My Tasks list and section aliases in the configured workspace, then updates local config.
 
@@ -145,21 +151,21 @@ Local, `.asana-cli.local.json` (gitignored):
 
 ## Tasks
 
-`asana-cli tasks <id>` — get a single task. Maps to [gettask](https://developers.asana.com/reference/gettask.md). Default fields: `gid,name,completed,due_on,assignee.gid,assignee.name` — deliberately small and explicit, never "whatever the API defaults to," since that default has grown over time and isn't a token budget the CLI controls. Use `--fields` for more.
+`asana-cli tasks get <id>` — get a single task. Maps to [gettask](https://developers.asana.com/reference/gettask.md). Default fields: `gid,name,notes,completed,due_on,assignee.gid,assignee.name` — deliberately explicit, never "whatever the API defaults to," since that default has grown over time and isn't a token budget the CLI controls. `notes` is included because reading the assignment is the primary purpose of a bounded single-task read. Use `--fields` for more.
 
-`asana-cli tasks <id> update <params...>` — update a task. At least one mutation flag is required. Plain fields map to [updatetask](https://developers.asana.com/reference/updatetask.md); memberships, parent, dependencies, and followers use their dedicated endpoints.
+`asana-cli tasks update <id> <params...>` — update a task. At least one mutation flag is required. Plain fields map to [updatetask](https://developers.asana.com/reference/updatetask.md); memberships, parent, dependencies, and followers use their dedicated endpoints.
 
 ```
-asana-cli tasks 1215978111726134 update --name="new task name" --due-on=2026-08-15 --assignee=me --completed=true
+asana-cli tasks update 1215978111726134 --name="new task name" --due-on=2026-08-15 --assignee=me --completed=true
 ```
 
-Supported flags: `--name`, `--notes`, `--assignee`, `--due-on`, `--start-on`, `--completed`, `--parent`, `--section=<gid>|@<name>`, `--my-section=<gid>|@<name>`, `--custom-field=<gid>:<value>` (repeatable). `tasks create` accepts the same set except `--my-section`; project section placement is supported at create time through Asana task memberships, but My Tasks `assignee_section` is handled only after the task exists and is assigned to the authenticated user.
+Supported flags: `--name`, `--notes`, `--notes-file=<path>|-`, `--assignee`, `--due-on`, `--start-on`, `--completed`, `--parent`, `--section=<gid>|@<name>`, `--my-section=<gid>|@<name>`, `--custom-field=(<gid>|@<name>):<value>` (repeatable). `--notes` and `--notes-file` are mutually exclusive; `--notes-file=-` reads UTF-8 notes from stdin. `tasks create` accepts the same set. Project section placement is supported at create time through Asana task memberships; My Tasks `assignee_section` is applied only after the task exists and is assigned to the authenticated user.
 
 - `--section` — convenience flag, but under the hood it's not a plain field update: Asana models section membership as a project-membership operation, and a task can belong to more than one project/section. If the task isn't already in the target project, the CLI adds it there rather than failing. On `tasks create`, when `--project` is also present, the section must belong to it. `@<name>` (e.g. `--section=@in_review`) resolves against the shared config's `project.sections` map (see [Config](#config)) instead of requiring a raw gid every time.
 - `--my-section` — maps to Asana's `assignee_section` field, i.e. moves the task within *your own* My Tasks list (this is the mechanism `asana-close-loop` uses to move a task to "In Review"). `@<name>` resolves against local config's `myTasks.sections` map. `assignee_section` is only readable/writable for the task's assignee. The CLI checks this precondition after applying any `--assignee` from the same command, so `--assignee=me --my-section=@in_review` works; another final assignee fails instead of moving someone else's My Tasks entry.
-- `--custom-field=<gid>:<value>` — text, number, and date fields use their literal value; enum fields use an option GID; multi-enum fields use comma-separated option GIDs; `null` clears the field. Before writing, the CLI validates the value against the target project's definitions on create, or the task's accessible custom-field definitions on update.
+- `--custom-field=(<gid>|@<name>):<value>` — text, number, and date fields use their literal value; enum fields use an option GID; multi-enum fields use comma-separated option GIDs; `null` clears the field. A named alias resolves against `myTasks.customFields` and is valid only when the final assignee is the authenticated user. Before writing, the CLI validates the value against the applicable project or My Tasks definition.
 
-`asana-cli tasks <id> delete --yes` — delete a task. Without `--yes`, the command refuses to run in non-interactive mode; in an interactive TTY it may ask for confirmation as a convenience.
+`asana-cli tasks delete <id> --yes` — delete a task. Without `--yes`, the command refuses to run in non-interactive mode; in an interactive TTY it may ask for confirmation as a convenience.
 
 `asana-cli tasks search` — filtered task search in the configured workspace. **This replaces a bare `tasks` list**, which is intentionally not supported without at least one narrowing filter (avoids dumping entire workspaces).
 
@@ -226,7 +232,7 @@ Bulk files are UTF-8 JSON. Object keys are the long CLI flag names without `--`;
 
 ### Subtasks, dependencies, followers
 
-Exposed as flags on `tasks create` / `tasks <id> update` for convenience, but each maps to a **separate Asana endpoint**, not a field on the task payload:
+Exposed as flags on `tasks create` / `tasks update <id>` for convenience, but each maps to a **separate Asana endpoint**, not a field on the task payload:
 
 - `--parent=<id>` — creates a subtask or changes its parent through the subtask/set-parent endpoint; `parent` cannot be modified by the normal task PUT
 - `--subtask="name"` (repeatable, one level only) — creates a separate child through the subtask endpoint
@@ -237,15 +243,17 @@ This matters for batch/bulk: a dependency or follower relation targeting a task 
 
 ### Comments & activity
 
-`asana-cli tasks <id> comment "text"` — add a comment. Maps to [createstoryfortask](https://developers.asana.com/reference/createstoryfortask.md).
+`asana-cli tasks comment <id> "text"` — add a comment. `--file=<path>|-` reads a UTF-8 comment from a file or stdin and is mutually exclusive with the positional text. Maps to [createstoryfortask](https://developers.asana.com/reference/createstoryfortask.md).
 
-`asana-cli tasks <id> stories` — activity feed (comments + system events: assignment, completion, due-date changes, project adds). Maps to [getstoriesfortask](https://developers.asana.com/reference/getstoriesfortask.md). The default is the first API page with `--limit=20`, preserving API order; Asana does not document that page as the most recent stories. Use `--offset=<token>` for the next page or `--all --max=<n>` for a bounded complete traversal.
+`asana-cli tasks comments <id>` — comments only. It filters the Stories endpoint client-side, returns up to 20 comments while scanning at most 100 stories by default, and preserves API order. `--max=<n>` changes the scan cap; `--all` requires `--max`. Reaching the scan cap sets `meta.scan_truncated=true`.
+
+`asana-cli tasks stories <id>` — activity feed (comments + system events: assignment, completion, due-date changes, project adds). Maps to [getstoriesfortask](https://developers.asana.com/reference/getstoriesfortask.md). The default is the first API page with `--limit=20`, preserving API order; Asana does not document that page as the most recent stories. Use `--offset=<token>` for the next page or `--all --max=<n>` for a bounded complete traversal.
 
 ## Projects
 
 `asana-cli projects` — list projects in the configured workspace with `--limit=20`; an explicit `--team` narrows the listing. Use `--all --max=<n>` for a broader project inventory.
 
-`asana-cli projects <id>` — get project details. `--sections` includes section gids (needed before moving a task with `tasks <id> update --section=<gid>`).
+`asana-cli projects <id>` — get project details. `--sections` includes section gids (needed before moving a task with `tasks update <id> --section=<gid>`).
 
 `asana-cli projects create --name="..." [--team=<id>]` — create a project. Team comes from the flag or configured `team.gid`; the command fails if neither exists.
 
@@ -263,7 +271,7 @@ This matters for batch/bulk: a dependency or follower relation targeting a task 
 
 `asana-cli sections delete <id> --yes` — delete a section (tasks in it are not deleted, just unsectioned). Without `--yes`, non-interactive execution is refused and a TTY may ask for confirmation. Maps to [deletesection](https://developers.asana.com/reference/deletesection.md).
 
-`asana-cli sections add-task <id> <task-id>` — move/insert a task into a section. Maps to [addtaskforsection](https://developers.asana.com/reference/addtaskforsection.md). `--before=<task-id>` / `--after=<task-id>` for placement within the section; equivalent shortcut also available as `tasks <id> update --section=<section-id>`.
+`asana-cli sections add-task <id> <task-id>` — move/insert a task into a section. Maps to [addtaskforsection](https://developers.asana.com/reference/addtaskforsection.md). `--before=<task-id>` / `--after=<task-id>` for placement within the section; equivalent shortcut also available as `tasks update <id> --section=<section-id>`.
 
 `asana-cli sections reorder <id> --project=<id>` — reorder sections within a project. Maps to [insertsectionforproject](https://developers.asana.com/reference/insertsectionforproject.md), `--before=<section-id>` / `--after=<section-id>`. `--project` may be omitted only when `project.gid` is configured.
 
@@ -287,7 +295,8 @@ Both commands below use the configured workspace. Users map to `GET /users?works
 
 - Default: compact human-readable table. Every read/list command uses a small, explicit default field set rather than the API's own defaults. Mutating commands return `gid`, `name` when available, and every field explicitly changed by the command unless `--fields` overrides that.
 - Default read/list field sets:
-  - `tasks <id>`: `gid,name,completed,due_on,assignee.gid,assignee.name`
+  - `tasks get`: `gid,name,notes,completed,due_on,assignee.gid,assignee.name`
+  - `tasks comments`: `gid,created_at,text,created_by.gid,created_by.name`
   - `tasks search`: `gid,name,completed,due_on,assignee.gid,assignee.name,permalink_url`
   - `tasks stories`: `gid,created_at,type,text,created_by.gid,created_by.name`
   - `projects`: `gid,name,archived,team.gid,team.name`
@@ -298,13 +307,13 @@ Both commands below use the configured workspace. Users map to `GET /users?works
   - `teams`: `gid,name`
   - `custom-fields list`: `gid,name,resource_subtype,enum_options.gid,enum_options.name`
 - `--fields=name,due_on,notes` — explicit field selection, equivalent to Asana API `opt_fields`. Naming rule: CLI flags are kebab-case (`--due-on`), but values passed to `--fields` are Asana's own field names (dotted/snake, e.g. `assignee.email`) since they pass straight through to `opt_fields` — the CLI does not translate between the two.
-- `--json` — stable JSON for scripts and agents, with no status prose on stdout. Success is `{ "data": <object|array>, "meta": { ... } }`; `meta` includes applicable pagination fields and is otherwise empty. `next_offset` is the API token for another page, `truncated=true` means the CLI stopped at an explicit `--max` while more results were known to remain, and `scan_truncated=true` means a client-side scan cap was reached before the source was exhausted. Exit code `1` still emits this shape on stdout with per-item/stage statuses and errors. Exit codes `2`–`5` emit `{ "error": { "code": "<stable_code>", "message": "...", "details": ... } }` to stderr and nothing to stdout when no partial write occurred.
+- `--json` — stable JSON for scripts and agents, with no status prose on stdout. Success is `{ "data": <object|array>, "meta": { ... } }`; `meta` includes applicable pagination fields and is otherwise empty. `next_offset` is the API token for another page, `truncated=true` means the CLI stopped at an explicit `--max` while more results were known to remain, and `scan_truncated=true` means a client-side scan cap was reached before the source was exhausted. Exit code `1` still emits this shape on stdout with per-item/stage statuses and errors. Exit codes `2`–`6` emit `{ "error": { "code": "<stable_code>", "message": "...", "details": ... } }` to stderr and nothing to stdout when no partial write occurred.
 - List commands default to `--limit=20`; Asana page size is capped at 100. A value outside `1..100` fails with exit code `2` instead of being silently clamped. `--offset=<token>` requests a known next page where the underlying endpoint supports offsets. `--all` auto-pages but always requires `--max=<n>`. `tasks search` uses the special no-offset behavior described in its section.
 - Batch/bulk `data` is an array in input order. Each item is `{ "index": <n>, "gid": "<gid>"|null, "status": "ok"|"failed", "error": <object|null>, "retryable": <boolean> }`; `meta` also contains `requested`, `succeeded`, and `failed`. The CLI inspects every inner Batch API result even when the outer HTTP status is `200`.
 - `projects create --file` uses the same item result fields but replaces `index` with an input `path`, such as `project`, `sections[0]`, or `sections[0].tasks[1]`, so every nested result maps back to the structure file.
 - Human bulk output prints one summary line (`N succeeded, M failed`) followed by a compact table of failed input indexes/paths and reasons. Use `--json` when every per-item result is needed.
 - Multi-step operations run in documented dependency order: create/update the base resource first, then memberships/parent, then dependencies/followers/subtasks. A later failure never rolls back prior Asana writes; the result identifies every completed and failed stage.
-- Exit codes: `0` success; `1` at least one requested item or stage failed after another succeeded; `2` invalid CLI usage or config validation failure; `3` authentication/authorization failure; `4` Asana API error or not found before any write succeeded; `5` rate limit/retry exhaustion before any write succeeded. Exit code `1` takes precedence whenever a command has already made a successful write and cannot complete all requested work.
+- Exit codes: `0` success; `1` at least one requested item or stage failed after another succeeded; `2` invalid CLI usage or config validation failure; `3` authentication/authorization failure; `4` Asana API error or not found before any write succeeded; `5` rate limit/retry exhaustion before any write succeeded; `6` unexpected internal CLI error. Exit code `1` takes precedence whenever a command has already made a successful write and cannot complete all requested work.
 
 ## Rate limits & reliability
 
