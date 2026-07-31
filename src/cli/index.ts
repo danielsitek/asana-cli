@@ -22,6 +22,7 @@ import {
   renderError,
   renderIdentity,
   renderJson,
+  renderResolvedMyTasks,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -34,6 +35,7 @@ export type Execution = Readonly<{
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
+  discovery?: MyTasksDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
 }>;
@@ -198,6 +200,10 @@ export const execute = async (
           result = usageError("--write-gitignore requires --local");
           return;
         }
+        if (options.local && options.workspace !== undefined) {
+          result = usageError("--workspace is not supported with --local");
+          return;
+        }
 
         if (options.shared) {
           const initialized = await initializeSharedConfig(
@@ -218,7 +224,6 @@ export const execute = async (
           return;
         }
 
-        // For local config init:
         const tokenResult = resolveToken(dependencies.environment);
         if (!tokenResult.ok) {
           result = {
@@ -232,12 +237,22 @@ export const execute = async (
           return;
         }
 
-        const discovery =
-          dependencies.identity as unknown as MyTasksDiscoveryGateway;
+        if (!dependencies.discovery) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Discovery gateway is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+
         const initialized = await initializeLocalConfig(
           context,
           tokenResult.value,
-          discovery,
+          dependencies.discovery,
           options.writeGitignore !== undefined
             ? { writeGitignore: options.writeGitignore }
             : {},
@@ -261,18 +276,16 @@ export const execute = async (
       },
     );
 
-  config
+  const resolveCmd = config
     .command("resolve")
-    .description("resolve configuration resources")
-    .argument("<target>", "target to resolve (e.g. my-tasks)")
-    .action(async (target: string) => {
+    .description("resolve configuration resources");
+
+  resolveCmd
+    .command("my-tasks")
+    .description("resolve My Tasks configuration")
+    .action(async () => {
       const context = beginConfigCommand();
       if (!context) return;
-
-      if (target !== "my-tasks") {
-        result = usageError(`Unknown resolve target: ${target}`);
-        return;
-      }
 
       const tokenResult = resolveToken(dependencies.environment);
       if (!tokenResult.ok) {
@@ -287,12 +300,22 @@ export const execute = async (
         return;
       }
 
-      const discovery =
-        dependencies.identity as unknown as MyTasksDiscoveryGateway;
+      if (!dependencies.discovery) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Discovery gateway is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
       const resolved = await initializeLocalConfig(
         context,
         tokenResult.value,
-        discovery,
+        dependencies.discovery,
         { requireExistingIgnore: true },
       );
       if (!resolved.ok) {
@@ -306,8 +329,8 @@ export const execute = async (
 
       result = {
         stdout: json
-          ? renderJson(resolved.value)
-          : `resolved ${resolved.value.path}\n`,
+          ? renderJson(resolved.value.myTasks)
+          : renderResolvedMyTasks(resolved.value.myTasks),
         stderr: "",
         exitCode: 0,
       };

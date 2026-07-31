@@ -18,6 +18,30 @@ export const renderIdentity = (identity: {
   name: string;
 }): string => `gid: ${identity.gid}\nname: ${identity.name}\n`;
 
+export const renderResolvedMyTasks = (myTasks: {
+  userTaskListGid: string;
+  sections: Record<string, string>;
+  customFields: Record<string, string>;
+}): string => {
+  const lines: string[] = [];
+  lines.push(`userTaskListGid: ${myTasks.userTaskListGid}`);
+  lines.push("sections:");
+  const sectionKeys = Object.keys(myTasks.sections).sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  for (const key of sectionKeys) {
+    lines.push(`  ${key}: ${myTasks.sections[key]}`);
+  }
+  lines.push("customFields:");
+  const customFieldKeys = Object.keys(myTasks.customFields).sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  for (const key of customFieldKeys) {
+    lines.push(`  ${key}: ${myTasks.customFields[key]}`);
+  }
+  return lines.join("\n") + "\n";
+};
+
 export const renderError = (error: CliError): string =>
   `${JSON.stringify({ error }, null, 2)}\n`;
 
