@@ -22,8 +22,9 @@ import {
   type TaskGateway,
   type TaskMutationGateway,
   type TaskReadError,
+  executeTaskUpdate,
   parseTaskId,
-  updateTask,
+  prepareTaskUpdate,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -618,6 +619,12 @@ export const execute = async (
         invoked = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
+        const prepared = prepareTaskUpdate(idArg, options);
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+
         const tokenResult = resolveToken(dependencies.environment);
         if (!tokenResult.ok) {
           result = {
@@ -642,20 +649,24 @@ export const execute = async (
           return;
         }
 
-        const updated = await updateTask(tokenResult.value, idArg, options, {
-          writer: dependencies.taskWriter,
-          resolveAuthenticatedUserGid: async (token) => {
-            const identity =
-              await dependencies.identity.getAuthenticatedUser(token);
-            return identity.ok
-              ? { ok: true, value: identity.value.gid }
-              : identity;
+        const updated = await executeTaskUpdate(
+          tokenResult.value,
+          prepared.value,
+          {
+            writer: dependencies.taskWriter,
+            resolveAuthenticatedUserGid: async (token) => {
+              const identity =
+                await dependencies.identity.getAuthenticatedUser(token);
+              return identity.ok
+                ? { ok: true, value: identity.value.gid }
+                : identity;
+            },
+            readFile:
+              dependencies.readFile ??
+              ((path) => readFile(path, { encoding: "utf8" })),
+            readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
           },
-          readFile:
-            dependencies.readFile ??
-            ((path) => readFile(path, { encoding: "utf8" })),
-          readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
-        });
+        );
         if (!updated.ok) {
           result =
             updated.error.kind === "invalid_usage"

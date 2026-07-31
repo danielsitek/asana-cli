@@ -72,6 +72,13 @@ export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
   | TaskReadError;
 
+export type PreparedTaskUpdate = Readonly<{
+  taskId: string;
+  mutation: TaskMutation;
+  notesFile?: string;
+  resolveAssigneeMe: boolean;
+}>;
+
 const realDate = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return false;
@@ -86,12 +93,13 @@ const realDate = (value: string): boolean => {
   );
 };
 
-export const updateTask = async (
-  token: string,
+export const prepareTaskUpdate = (
   taskIdInput: string,
   options: TaskUpdateOptions,
-  dependencies: TaskUpdateDependencies,
-): Promise<Result<Task, TaskUpdateError>> => {
+): Result<
+  PreparedTaskUpdate,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
@@ -140,35 +148,6 @@ export const updateTask = async (
     });
   }
 
-  let fileNotes: string | undefined;
-  if (options.notesFile !== undefined) {
-    try {
-      fileNotes =
-        options.notesFile === "-"
-          ? await dependencies.readStdin()
-          : await dependencies.readFile(options.notesFile);
-    } catch {
-      return err({
-        kind: "invalid_usage",
-        message:
-          options.notesFile === "-"
-            ? "Unable to read notes from stdin"
-            : "Unable to read notes file",
-      });
-    }
-  }
-
-  let assignee: string | null | undefined;
-  if (options.assignee === "me") {
-    const identity = await dependencies.resolveAuthenticatedUserGid(token);
-    if (!identity.ok) return identity;
-    assignee = identity.value;
-  } else if (options.assignee === "null") {
-    assignee = null;
-  } else if (options.assignee !== undefined) {
-    assignee = options.assignee;
-  }
-
   const mutation: {
     name?: string;
     notes?: string;
@@ -178,9 +157,10 @@ export const updateTask = async (
   } = {};
   if (options.name !== undefined) mutation.name = options.name;
   if (options.notes !== undefined) mutation.notes = options.notes;
-  if (fileNotes !== undefined) mutation.notes = fileNotes;
-  if (assignee !== undefined || options.assignee === "null") {
-    mutation.assignee = assignee ?? null;
+  if (options.assignee === "null") {
+    mutation.assignee = null;
+  } else if (options.assignee !== undefined && options.assignee !== "me") {
+    mutation.assignee = options.assignee;
   }
   if (options.dueOn !== undefined) {
     mutation.due_on = options.dueOn === "null" ? null : options.dueOn;
@@ -189,7 +169,56 @@ export const updateTask = async (
     mutation.completed = options.completed === "true";
   }
 
-  return dependencies.writer.updateTask(token, taskId.value, mutation);
+  return ok({
+    taskId: taskId.value,
+    mutation,
+    ...(options.notesFile === undefined
+      ? {}
+      : { notesFile: options.notesFile }),
+    resolveAssigneeMe: options.assignee === "me",
+  });
+};
+
+export const executeTaskUpdate = async (
+  token: string,
+  prepared: PreparedTaskUpdate,
+  dependencies: TaskUpdateDependencies,
+): Promise<Result<Task, TaskUpdateError>> => {
+  const mutation = { ...prepared.mutation };
+  if (prepared.notesFile !== undefined) {
+    try {
+      mutation.notes =
+        prepared.notesFile === "-"
+          ? await dependencies.readStdin()
+          : await dependencies.readFile(prepared.notesFile);
+    } catch {
+      return err({
+        kind: "invalid_usage",
+        message:
+          prepared.notesFile === "-"
+            ? "Unable to read notes from stdin"
+            : "Unable to read notes file",
+      });
+    }
+  }
+  if (prepared.resolveAssigneeMe) {
+    const identity = await dependencies.resolveAuthenticatedUserGid(token);
+    if (!identity.ok) return identity;
+    mutation.assignee = identity.value;
+  }
+  return dependencies.writer.updateTask(token, prepared.taskId, mutation);
+};
+
+export const updateTask = async (
+  token: string,
+  taskIdInput: string,
+  options: TaskUpdateOptions,
+  dependencies: TaskUpdateDependencies,
+): Promise<Result<Task, TaskUpdateError>> => {
+  const prepared = prepareTaskUpdate(taskIdInput, options);
+  return prepared.ok
+    ? executeTaskUpdate(token, prepared.value, dependencies)
+    : prepared;
 };
 
 export const DEFAULT_FIELDS = [

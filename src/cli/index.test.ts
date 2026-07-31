@@ -1106,6 +1106,59 @@ describe("tasks update command", () => {
   const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
   const updatedTask: Task = { gid: "123", name: "Updated" };
 
+  test("validates invalid updates before accessing any dependency", async () => {
+    const environment = new Proxy<Record<string, string | undefined>>(
+      {},
+      {
+        get: () => {
+          throw new Error("environment accessed");
+        },
+      },
+    );
+    const dependencies: ExecuteDependencies = {
+      environment,
+      identity,
+      get taskWriter(): never {
+        throw new Error("task writer accessed");
+      },
+      get readFile(): never {
+        throw new Error("file reader accessed");
+      },
+      get readStdin(): never {
+        throw new Error("stdin reader accessed");
+      },
+    };
+
+    for (const argv of [
+      ["tasks", "update", "invalid", "--name", "x"],
+      ["tasks", "update", "123"],
+      ["tasks", "update", "123", "--notes", "x", "--notes-file", "notes.md"],
+      ["tasks", "update", "123", "--assignee", "email@example.com"],
+      ["tasks", "update", "123", "--due-on", "2026-02-29"],
+      ["tasks", "update", "123", "--completed", "yes"],
+    ]) {
+      const result = await execute(argv, dependencies);
+      expect(result.exitCode).toBe(2);
+    }
+  });
+
+  test("reports a missing token before accessing the task writer", async () => {
+    const dependencies: ExecuteDependencies = {
+      environment: {},
+      identity,
+      get taskWriter(): never {
+        throw new Error("task writer accessed");
+      },
+    };
+
+    const result = await execute(
+      ["tasks", "update", "123", "--name", "Updated"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
   test.each([
     ["123", []],
     ["invalid", ["--name", "x"]],
