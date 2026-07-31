@@ -169,13 +169,15 @@ describe("AsanaHttpClient", () => {
       attempts += 1;
       return new Response(null, { status: 429 });
     });
+    const client = new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 1,
+      sleep: async () => undefined,
+    });
     const result = await execute(["whoami"], {
       environment: { ASANA_CLI_TOKEN: "secret" },
-      identity: new AsanaHttpClient({
-        baseUrl,
-        maxRetries: 1,
-        sleep: async () => undefined,
-      }),
+      identity: client,
+      discovery: client,
     });
     expect(attempts).toBe(2);
     expect(result.exitCode).toBe(5);
@@ -268,13 +270,12 @@ describe("AsanaHttpClient", () => {
       ) {
         expect(url.searchParams.get("limit")).toBe("100");
         expect(url.searchParams.get("opt_fields")).toBe(
-          "gid,custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+          "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
         );
         fieldsCalled = true;
         return Response.json({
           data: [
             {
-              gid: "cf-setting-1",
               custom_field: {
                 gid: "1213894072991499",
                 name: "Hours Estimate",
@@ -370,7 +371,6 @@ describe("AsanaHttpClient", () => {
         return Response.json({
           data: [
             {
-              gid: "cf-setting-1",
               custom_field: {
                 gid: "1",
                 name: "CF",
@@ -393,6 +393,32 @@ describe("AsanaHttpClient", () => {
       expect(result.error.kind).toBe("invalid_response");
       expect(result.error.message).toContain(
         "custom field settings; next_page is present",
+      );
+    }
+  });
+
+  test("discoverMyTasks fails if returned user task list workspace GID does not match requested workspace GID", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks("token", "9999999");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+      expect(result.error.message).toContain(
+        "Returned user task list workspace GID 1201947864389005 does not match requested workspace GID 9999999",
       );
     }
   });

@@ -24,23 +24,13 @@ class InMemoryIdentity implements IdentityGateway {
   }
 }
 
-class MockDiscoveryIdentity
-  implements IdentityGateway, MyTasksDiscoveryGateway
-{
+class InMemoryDiscovery implements MyTasksDiscoveryGateway {
   constructor(
-    private readonly userResponse: Result<Identity, IdentityError>,
-    private readonly discoveryResponse: Result<
-      DiscoveredMyTasks,
-      DiscoveryError
-    >,
+    private readonly response: Result<DiscoveredMyTasks, DiscoveryError>,
   ) {}
 
-  async getAuthenticatedUser(): Promise<Result<Identity, IdentityError>> {
-    return this.userResponse;
-  }
-
   async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
-    return this.discoveryResponse;
+    return this.response;
   }
 }
 
@@ -209,6 +199,9 @@ describe("config commands", () => {
       dependencies: {
         environment: {},
         identity,
+        discovery: new InMemoryDiscovery(
+          ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+        ),
         configuration: { cwd: root, home, environment: {} },
       },
     };
@@ -390,16 +383,15 @@ describe("config commands", () => {
       sections: [{ gid: "1213894072991394", name: "In Progress" }],
       customFields: [],
     };
-    const identityMock = new MockDiscoveryIdentity(
-      ok({ gid: "123", name: "Ada Lovelace" }),
-      ok(discoveryResponse),
-    );
 
     const result = await execute(
       ["config", "init", "--local", "--write-gitignore"],
       {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
-        identity: identityMock,
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
         configuration: { cwd: root, home, environment: {} },
       },
     );
@@ -420,16 +412,17 @@ describe("config commands", () => {
 
   test("init --local fails if missing workspace GID", async () => {
     const { root, home } = await setup();
-    const identityMock = new MockDiscoveryIdentity(
-      ok({ gid: "123", name: "Ada Lovelace" }),
-      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
-    );
 
     const result = await execute(
       ["config", "init", "--local", "--write-gitignore"],
       {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
-        identity: identityMock,
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(
+          ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+        ),
         configuration: { cwd: root, home, environment: {} },
       },
     );
@@ -445,14 +438,12 @@ describe("config commands", () => {
       '{"workspace":{"gid":"1201947864389005"}}\n',
     );
 
-    const identityMock = new MockDiscoveryIdentity(
-      ok({ gid: "123", name: "Ada Lovelace" }),
-      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
-    );
-
     const result = await execute(["config", "resolve", "my-tasks"], {
       environment: { ASANA_CLI_TOKEN: "valid-token" },
-      identity: identityMock,
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(
+        ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+      ),
       configuration: { cwd: root, home, environment: {} },
     });
 
@@ -473,20 +464,131 @@ describe("config commands", () => {
       sections: [{ gid: "1213894072991394", name: "In Progress" }],
       customFields: [],
     };
-    const identityMock = new MockDiscoveryIdentity(
-      ok({ gid: "123", name: "Ada Lovelace" }),
-      ok(discoveryResponse),
-    );
 
     const result = await execute(["config", "resolve", "my-tasks"], {
       environment: { ASANA_CLI_TOKEN: "valid-token" },
-      identity: identityMock,
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(ok(discoveryResponse)),
       configuration: { cwd: root, home, environment: {} },
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(
-      `resolved ${join(root, ".asana-cli.local.json")}\n`,
+    expect(result.stdout).toBe(
+      "userTaskListGid: 1213894072990299\n" +
+        "sections:\n" +
+        "  in_progress: 1213894072991394\n" +
+        "customFields:\n",
     );
+  });
+
+  test("config init rejects invalid flag combinations", async () => {
+    const { dependencies } = await setup();
+
+    const noFlags = await execute(["config", "init"], dependencies);
+    expect(noFlags.exitCode).toBe(2);
+    expect(noFlags.stderr).toContain("requires either --shared or --local");
+
+    const writeGitignoreWithoutLocal = await execute(
+      ["config", "init", "--shared", "--write-gitignore"],
+      dependencies,
+    );
+    expect(writeGitignoreWithoutLocal.exitCode).toBe(2);
+    expect(writeGitignoreWithoutLocal.stderr).toContain(
+      "--write-gitignore requires --local",
+    );
+
+    const localWithWorkspace = await execute(
+      ["config", "init", "--local", "--workspace=100"],
+      dependencies,
+    );
+    expect(localWithWorkspace.exitCode).toBe(2);
+    expect(localWithWorkspace.stderr).toContain(
+      "--workspace is not supported with --local",
+    );
+  });
+
+  test("config commands fail if discovery dependency is missing", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const initResult = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+    expect(initResult.exitCode).toBe(6);
+    expect(initResult.stderr).toContain("Discovery gateway is required");
+
+    const resolveResult = await execute(["config", "resolve", "my-tasks"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      configuration: { cwd: root, home, environment: {} },
+    });
+    expect(resolveResult.exitCode).toBe(6);
+    expect(resolveResult.stderr).toContain("Discovery gateway is required");
+  });
+
+  test("resolve my-tasks outputs stable JSON", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
+    };
+
+    const result = await execute(["config", "resolve", "my-tasks", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
+      discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+      configuration: { cwd: root, home, environment: {} },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const body = JSON.parse(result.stdout);
+    expect(body.data).toEqual({
+      userTaskListGid: "1213894072990299",
+      sections: {
+        in_progress: "1213894072991394",
+      },
+      customFields: {},
+    });
+  });
+
+  test("init --local maps identity errors on failure", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(
+          err({ kind: "rate_limit", message: "retries exhausted" }),
+        ),
+        configuration: { cwd: root, home, environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("rate_limit");
   });
 });

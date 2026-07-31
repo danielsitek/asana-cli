@@ -1,18 +1,26 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { err, ok, type Result } from "../shared/result.ts";
 import {
   getConfigValue,
   initializeSharedConfig,
   resolveConfig,
   setConfigValue,
-  generateAlias,
   initializeLocalConfig,
   type ConfigContext,
   type MyTasksDiscoveryGateway,
   type DiscoveredMyTasks,
+  type DiscoveryError,
 } from "./index.ts";
 
 const temporaryDirectories: string[] = [];
@@ -503,22 +511,24 @@ describe("getConfigValue", () => {
   });
 });
 
-describe("generateAlias", () => {
-  test("lowercases and replaces runs of non-letters/digits with a single underscore, trimming ends", () => {
-    expect(generateAlias("In Progress")).toBe("in_progress");
-    expect(generateAlias("Hours Estimate!")).toBe("hours_estimate");
-    expect(generateAlias("---Done---")).toBe("done");
-    expect(generateAlias("Zaškolení (Příprava) 123")).toBe(
-      "zaškolení_příprava_123",
-    );
-    expect(generateAlias("!!!")).toBe("");
-  });
-});
-
 describe("initializeLocalConfig", () => {
   const mockDiscovery = (data: DiscoveredMyTasks): MyTasksDiscoveryGateway => ({
     discoverMyTasks: async () => ({ ok: true, value: data }),
   });
+
+  class TrackingDiscovery implements MyTasksDiscoveryGateway {
+    public callsCount = 0;
+    constructor(
+      private readonly response: Result<DiscoveredMyTasks, DiscoveryError>,
+    ) {}
+
+    async discoverMyTasks(): Promise<
+      Result<DiscoveredMyTasks, DiscoveryError>
+    > {
+      this.callsCount += 1;
+      return this.response;
+    }
+  }
 
   test("initializes local config, updates gitignore, and preserves unrelated keys", async () => {
     const root = await temporaryDirectory();
@@ -722,17 +732,142 @@ describe("initializeLocalConfig", () => {
     const root = await temporaryDirectory();
     await mkdir(join(root, ".git"));
 
+    const tracking = new TrackingDiscovery(
+      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+    );
     const result = await initializeLocalConfig(
       context(root, join(root, "home")),
       "token",
-      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
+      tracking,
       { writeGitignore: true },
     );
 
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.kind).toBe("configuration");
-      expect(result.error.message).toContain("workspace.gid is required");
-    }
+    expect(tracking.callsCount).toBe(0);
+    const exists = await stat(join(root, ".asana-cli.local.json"))
+      .then(() => true)
+      .catch(() => false);
+    expect(exists).toBe(false);
+  });
+
+  test("fails and has no side effects on unsafe ignore", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "1201947864389005" },
+    });
+
+    const tracking = new TrackingDiscovery(
+      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+    );
+    const result = await initializeLocalConfig(
+      context(root, join(root, "home")),
+      "token",
+      tracking,
+      { writeGitignore: false },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(tracking.callsCount).toBe(0);
+    const configExists = await stat(join(root, ".asana-cli.local.json"))
+      .then(() => true)
+      .catch(() => false);
+    const gitignoreExists = await stat(join(root, ".gitignore"))
+      .then(() => true)
+      .catch(() => false);
+    expect(configExists).toBe(false);
+    expect(gitignoreExists).toBe(false);
+  });
+
+  test("fails and has no side effects on invalid config file", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".asana-cli.json"), "invalid-json\n");
+
+    const tracking = new TrackingDiscovery(
+      ok({ userTaskListGid: "1", sections: [], customFields: [] }),
+    );
+    const result = await initializeLocalConfig(
+      context(root, join(root, "home")),
+      "token",
+      tracking,
+      { writeGitignore: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(tracking.callsCount).toBe(0);
+    const configExists = await stat(join(root, ".asana-cli.local.json"))
+      .then(() => true)
+      .catch(() => false);
+    const gitignoreExists = await stat(join(root, ".gitignore"))
+      .then(() => true)
+      .catch(() => false);
+    expect(configExists).toBe(false);
+    expect(gitignoreExists).toBe(false);
+  });
+
+  test("fails and has no side effects on discovery API errors", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "1201947864389005" },
+    });
+
+    const tracking = new TrackingDiscovery(
+      err({ kind: "api", message: "Asana API request failed" }),
+    );
+    const result = await initializeLocalConfig(
+      context(root, join(root, "home")),
+      "token",
+      tracking,
+      { writeGitignore: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(tracking.callsCount).toBe(1);
+    const configExists = await stat(join(root, ".asana-cli.local.json"))
+      .then(() => true)
+      .catch(() => false);
+    const gitignoreExists = await stat(join(root, ".gitignore"))
+      .then(() => true)
+      .catch(() => false);
+    expect(configExists).toBe(false);
+    expect(gitignoreExists).toBe(false);
+  });
+
+  test("fails and has no side effects on section alias collisions", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "1201947864389005" },
+    });
+
+    const tracking = new TrackingDiscovery(
+      ok({
+        userTaskListGid: "1213894072990299",
+        sections: [
+          { gid: "1", name: "In Progress" },
+          { gid: "2", name: "In Progress" },
+        ],
+        customFields: [],
+      }),
+    );
+    const result = await initializeLocalConfig(
+      context(root, join(root, "home")),
+      "token",
+      tracking,
+      { writeGitignore: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(tracking.callsCount).toBe(1);
+    const configExists = await stat(join(root, ".asana-cli.local.json"))
+      .then(() => true)
+      .catch(() => false);
+    const gitignoreExists = await stat(join(root, ".gitignore"))
+      .then(() => true)
+      .catch(() => false);
+    expect(configExists).toBe(false);
+    expect(gitignoreExists).toBe(false);
   });
 });
