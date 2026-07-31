@@ -75,16 +75,30 @@ const renderConfigFailure = (error: ConfigError): Execution => ({
   exitCode: 2,
 });
 
-const renderStageFailure = (error: StageFailureError): Execution => ({
-  stdout: "",
-  stderr: renderError({
-    code: "stage_failure",
-    message: error.message,
-    completed: error.completed,
-    failed: error.failed,
-  }),
-  exitCode: 1,
-});
+const renderStageFailure = (
+  error: StageFailureError,
+  json: boolean,
+): Execution => {
+  if (json) {
+    return {
+      stdout: renderJson({
+        completed: error.completed,
+        failed: error.failed,
+        message: error.message,
+      }),
+      stderr: "",
+      exitCode: 1,
+    };
+  }
+
+  const completedList = [...error.completed].sort().join(", ");
+  const failedList = [...error.failed].sort().join(", ");
+  return {
+    stdout: `Stage failure: ${error.message}\nCompleted: ${completedList || "none"}\nFailed: ${failedList || "none"}\n`,
+    stderr: "",
+    exitCode: 1,
+  };
+};
 
 const selectedLayer = (
   options: Readonly<{
@@ -273,7 +287,7 @@ export const execute = async (
           if (initialized.error.kind === "configuration") {
             result = renderConfigFailure(initialized.error);
           } else if (initialized.error.kind === "stage_failure") {
-            result = renderStageFailure(initialized.error);
+            result = renderStageFailure(initialized.error, json);
           } else {
             result = renderIdentityFailure(initialized.error.kind);
           }
@@ -336,7 +350,7 @@ export const execute = async (
         if (resolved.error.kind === "configuration") {
           result = renderConfigFailure(resolved.error);
         } else if (resolved.error.kind === "stage_failure") {
-          result = renderStageFailure(resolved.error);
+          result = renderStageFailure(resolved.error, json);
         } else {
           result = renderIdentityFailure(resolved.error.kind);
         }

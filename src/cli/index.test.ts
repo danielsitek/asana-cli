@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  fsHooks,
   type MyTasksDiscoveryGateway,
   type DiscoveredMyTasks,
   type DiscoveryError,
@@ -411,7 +410,7 @@ describe("config commands", () => {
     expect(localConfig.myTasks.userTaskListGid).toBe("1213894072990299");
   });
 
-  test("init --local handles partial write where gitignore rename succeeds and local-config rename fails", async () => {
+  test("init --local handles partial write where gitignore rename succeeds and local-config rename fails (human mode)", async () => {
     const { root, home } = await setup();
     await writeFile(
       join(root, ".asana-cli.json"),
@@ -424,48 +423,102 @@ describe("config commands", () => {
       customFields: [],
     };
 
-    const originalRename = fsHooks.rename;
-    fsHooks.rename = async (oldPath: string, newPath: string) => {
-      if (newPath.endsWith(".asana-cli.local.json")) {
-        throw new Error("mock rename failure for local config");
-      }
-      return originalRename(oldPath, newPath);
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+        configuration: {
+          cwd: root,
+          home,
+          environment: {},
+          fileOperations: {
+            rename: async (oldPath: string, newPath: string) => {
+              if (newPath.endsWith(".asana-cli.local.json")) {
+                throw new Error("mock rename failure for local config");
+              }
+              const { rename } = await import("node:fs/promises");
+              return rename(oldPath, newPath);
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Stage failure");
+    expect(result.stdout).toContain("Completed: gitignore");
+    expect(result.stdout).toContain("Failed: local_config");
+
+    const gitignoreContent = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignoreContent).toBe("/.asana-cli.local.json\n");
+
+    const localConfigFileExists = await Bun.file(
+      join(root, ".asana-cli.local.json"),
+    ).exists();
+    expect(localConfigFileExists).toBe(false);
+  });
+
+  test("init --local handles partial write where gitignore rename succeeds and local-config rename fails (json mode)", async () => {
+    const { root, home } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"1201947864389005"}}\n',
+    );
+
+    const discoveryResponse: DiscoveredMyTasks = {
+      userTaskListGid: "1213894072990299",
+      sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      customFields: [],
     };
 
-    try {
-      const result = await execute(
-        ["config", "init", "--local", "--write-gitignore"],
-        {
-          environment: { ASANA_CLI_TOKEN: "valid-token" },
-          identity: new InMemoryIdentity(
-            ok({ gid: "123", name: "Ada Lovelace" }),
-          ),
-          discovery: new InMemoryDiscovery(ok(discoveryResponse)),
-          configuration: { cwd: root, home, environment: {} },
+    const result = await execute(
+      ["config", "init", "--local", "--write-gitignore", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(
+          ok({ gid: "123", name: "Ada Lovelace" }),
+        ),
+        discovery: new InMemoryDiscovery(ok(discoveryResponse)),
+        configuration: {
+          cwd: root,
+          home,
+          environment: {},
+          fileOperations: {
+            rename: async (oldPath: string, newPath: string) => {
+              if (newPath.endsWith(".asana-cli.local.json")) {
+                throw new Error("mock rename failure for local config");
+              }
+              const { rename } = await import("node:fs/promises");
+              return rename(oldPath, newPath);
+            },
+          },
         },
-      );
+      },
+    );
 
-      // Prove the result
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("stage_failure");
-      expect(result.stderr).toContain("completed");
-      expect(result.stderr).toContain("failed");
-      expect(result.stderr).toContain("gitignore");
-      expect(result.stderr).toContain("local_config");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
 
-      // Prove gitignore content was updated successfully
-      const gitignore = await readFile(join(root, ".gitignore"), "utf8");
-      expect(gitignore).toBe("/.asana-cli.local.json\n");
+    const parsedOutput = JSON.parse(result.stdout);
+    expect(parsedOutput.data.completed).toEqual(["gitignore"]);
+    expect(parsedOutput.data.failed).toEqual(["local_config"]);
+    expect(parsedOutput.data.message).toContain(
+      "could not be renamed after writing",
+    );
+    expect(parsedOutput.meta).toEqual({});
 
-      // Prove local config was NOT written (is absent)
-      const localConfigExists = await Bun.file(
-        join(root, ".asana-cli.local.json"),
-      ).exists();
-      expect(localConfigExists).toBe(false);
-    } finally {
-      fsHooks.rename = originalRename;
-    }
+    const gitignoreContent = await readFile(join(root, ".gitignore"), "utf8");
+    expect(gitignoreContent).toBe("/.asana-cli.local.json\n");
+
+    const localConfigFileExists = await Bun.file(
+      join(root, ".asana-cli.local.json"),
+    ).exists();
+    expect(localConfigFileExists).toBe(false);
   });
 
   test("init --local fails if missing workspace GID", async () => {
