@@ -117,3 +117,27 @@ export const renderConfig = (
       .join("\n") + "\n"
   );
 };
+
+export const renderTaskDetail = (task: Record<string, unknown>): string => {
+  const leaves = configLeaves(task);
+  const sortedLeaves = [...leaves].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const lines = sortedLeaves.map(([key, value]) => {
+    if (value === null) {
+      return `${key}: —`;
+    }
+    if (typeof value === "string") {
+      if (value.includes("\n")) {
+        const indented = value
+          .split("\n")
+          .map((line) => `  ${line}`)
+          .join("\n");
+        return `${key}:\n${indented}`;
+      }
+      return `${key}: ${value}`;
+    }
+    return `${key}: ${JSON.stringify(value)}`;
+  });
+  return lines.join("\n") + "\n";
+};
