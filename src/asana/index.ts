@@ -14,7 +14,6 @@ import {
   type Task,
   type TaskGateway,
   type TaskReadError,
-  buildTaskSchema,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
@@ -44,6 +43,84 @@ const retryAfterMs = (
   const date = Date.parse(value);
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
+
+function buildTaskSchema(fields: readonly string[]) {
+  const topLevelFields = new Set(
+    fields
+      .map((f) => f.split(".")[0])
+      .filter((s): s is string => s !== undefined),
+  );
+  const assigneeSubfields = new Set(
+    fields.filter((f) => f.startsWith("assignee.")).map((f) => f.slice(9)),
+  );
+
+  const shape: Record<string, z.ZodTypeAny> = {};
+
+  if (topLevelFields.has("gid")) {
+    shape.gid = z.string().regex(/^\d+$/);
+  } else {
+    shape.gid = z.string().regex(/^\d+$/).optional();
+  }
+
+  if (topLevelFields.has("name")) {
+    shape.name = z.string();
+  } else {
+    shape.name = z.string().optional();
+  }
+
+  if (topLevelFields.has("notes")) {
+    shape.notes = z.string();
+  } else {
+    shape.notes = z.string().optional();
+  }
+
+  if (topLevelFields.has("completed")) {
+    shape.completed = z.boolean();
+  } else {
+    shape.completed = z.boolean().optional();
+  }
+
+  if (topLevelFields.has("due_on")) {
+    shape.due_on = z.string().nullable();
+  } else {
+    shape.due_on = z.string().nullable().optional();
+  }
+
+  const assigneeShape: Record<string, z.ZodTypeAny> = {};
+  if (assigneeSubfields.has("gid")) {
+    assigneeShape.gid = z.string().regex(/^\d+$/);
+  } else {
+    assigneeShape.gid = z.string().regex(/^\d+$/).optional();
+  }
+  if (assigneeSubfields.has("name")) {
+    assigneeShape.name = z.string();
+  } else {
+    assigneeShape.name = z.string().optional();
+  }
+
+  const assigneeSchema = z.object(assigneeShape).passthrough().nullable();
+  if (topLevelFields.has("assignee") || assigneeSubfields.size > 0) {
+    shape.assignee = assigneeSchema;
+  } else {
+    shape.assignee = assigneeSchema.optional();
+  }
+
+  const knownTopLevel = new Set([
+    "gid",
+    "name",
+    "notes",
+    "completed",
+    "due_on",
+    "assignee",
+  ]);
+  for (const field of topLevelFields) {
+    if (!knownTopLevel.has(field)) {
+      shape[field] = z.unknown();
+    }
+  }
+
+  return z.object(shape).passthrough();
+}
 
 export class AsanaHttpClient
   implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway
@@ -298,7 +375,7 @@ export class AsanaHttpClient
       }
       return result;
     }
-    return ok(result.value.data as Task);
+    return ok(result.value.data);
   }
 
   private retryDelay(
