@@ -94,9 +94,10 @@ jobs:
             -C "dist/release/${{ matrix.target }}" asana-cli
       - uses: actions/upload-artifact@v4
         with:
-          name: raw-${{ matrix.target }}-${{ github.run_attempt }}
+          name: raw-${{ matrix.target }}
           path: dist/raw/${{ matrix.target }}.tar
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   package:
@@ -112,7 +113,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
-          pattern: raw-*-${{ github.run_attempt }}
+          pattern: raw-*
           path: raw
           merge-multiple: true
       - name: Validate and extract native artifacts
@@ -140,9 +141,10 @@ jobs:
           ruby -c release-assets/asana-cli.rb
       - uses: actions/upload-artifact@v4
         with:
-          name: release-assets-${{ github.run_attempt }}
+          name: release-assets
           path: release-assets/
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   homebrew-install:
@@ -167,7 +169,7 @@ jobs:
       - run: test "$(uname -m)" = "${{ matrix.uname }}"
       - uses: actions/download-artifact@v4
         with:
-          name: release-assets-${{ github.run_attempt }}
+          name: release-assets
           path: release-assets
       - name: Install and test formula from current artifacts
         shell: bash
