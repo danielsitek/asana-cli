@@ -92,7 +92,13 @@ const isObject = (value: unknown): value is JsonObject =>
 const existsAsGitMarker = async (path: string): Promise<boolean> => {
   try {
     const marker = await stat(path);
-    return marker.isDirectory() || marker.isFile();
+    if (marker.isDirectory()) return true;
+    if (!marker.isFile()) return false;
+    const contents = await readFile(path, "utf8");
+    const match = /^gitdir: (.+)\r?\n?$/.exec(contents);
+    if (!match?.[1]) return false;
+    const gitDirectory = await stat(resolve(dirname(path), match[1]));
+    return gitDirectory.isDirectory();
   } catch {
     return false;
   }
@@ -325,7 +331,7 @@ const localFileIsIgnored = async (gitRoot: string): Promise<boolean> => {
     const contents = await readFile(join(gitRoot, ".gitignore"), "utf8");
     let ignored = false;
     for (const rawLine of contents.split(/\r?\n/)) {
-      let rule = rawLine.trim();
+      let rule = rawLine.trimEnd();
       if (!rule || rule.startsWith("#")) continue;
       let negated = false;
       if (rule.startsWith("\\!") || rule.startsWith("\\#")) {

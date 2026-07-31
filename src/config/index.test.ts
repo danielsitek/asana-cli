@@ -130,6 +130,7 @@ describe("resolveConfig", () => {
     const worktree = join(outer, "worktree");
     const nested = join(worktree, "nested");
     await mkdir(join(outer, ".git"), { recursive: true });
+    await mkdir(join(outer, ".git", "worktrees", "test"), { recursive: true });
     await mkdir(nested, { recursive: true });
     await writeFile(join(worktree, ".git"), "gitdir: ../.git/worktrees/test\n");
     await writeJson(join(outer, ".asana-cli.json"), {
@@ -145,6 +146,36 @@ describe("resolveConfig", () => {
     if (result.ok) {
       expect(result.value.paths.gitRoot).toBe(worktree);
       expect(result.value.value.workspace?.gid).toBe("200");
+    }
+  });
+
+  test("skips a malformed git file and finds the nearest repository", async () => {
+    const root = await temporaryDirectory();
+    const repository = join(root, "repository");
+    const nested = join(repository, "nested");
+    await mkdir(join(repository, ".git"), { recursive: true });
+    await mkdir(nested);
+    await writeFile(join(nested, ".git"), "not a gitdir\n");
+
+    const result = await resolveConfig(context(nested, join(root, "home")));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.paths.gitRoot).toBe(repository);
+    }
+  });
+
+  test("treats a stale git file outside a repository as outside git", async () => {
+    const root = await temporaryDirectory();
+    const nested = join(root, "plain", "nested");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(root, "plain", ".git"), "gitdir: ../missing\n");
+
+    const result = await resolveConfig(context(nested, join(root, "home")));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.paths.gitRoot).toBeUndefined();
     }
   });
 
@@ -385,6 +416,24 @@ describe("configuration writes", () => {
     );
     expect(unignored.ok).toBe(false);
     if (!unignored.ok) expect(unignored.error.message).toContain("not ignored");
+  });
+
+  test("rejects a local write for an ignore rule with leading whitespace", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".gitignore"), " .asana-cli.local.json\n");
+
+    const result = await setConfigValue(
+      context(root, join(root, "home")),
+      "myTasks.sections.review",
+      "300",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("not ignored");
+    expect(await Bun.file(join(root, ".asana-cli.local.json")).exists()).toBe(
+      false,
+    );
   });
 
   test("does not corrupt an existing target when atomic rename fails", async () => {

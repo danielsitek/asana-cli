@@ -70,10 +70,6 @@ const renderConfigFailure = (error: ConfigError): Execution => ({
   exitCode: 2,
 });
 
-const configContext = (
-  dependencies: ExecuteDependencies,
-): ConfigContext | undefined => dependencies.configuration;
-
 const selectedLayer = (
   options: Readonly<{
     shared?: boolean;
@@ -112,7 +108,7 @@ export const execute = async (
   const beginConfigCommand = (): ConfigContext | undefined => {
     invoked = true;
     json = program.opts<{ json?: boolean }>().json ?? false;
-    const context = configContext(dependencies);
+    const context = dependencies.configuration;
     if (!context) result = usageError("Configuration context is unavailable");
     return context;
   };
