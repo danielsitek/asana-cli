@@ -422,40 +422,133 @@ describe("AsanaHttpClient", () => {
       );
     }
   });
+
+  test("getTask fetches a task with exact required and optional fields", async () => {
+    const taskPayload = {
+      gid: "1215978111726134",
+      name: "Implement the change",
+      notes: "This is a task description",
+      completed: true,
+      due_on: "2026-12-31",
+      assignee: {
+        gid: "12345",
+        name: "Ada Lovelace",
+      },
+      extra_field: "extra_value",
+    };
+
+    let called = false;
+    const baseUrl = serverFor((request) => {
+      called = true;
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("authorization")).toBe("Bearer test-token");
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/tasks/1215978111726134");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,name,notes,completed,due_on,assignee.gid,assignee.name,extra_field",
+      );
+      return Response.json({ data: taskPayload });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "1215978111726134", [
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+      "extra_field",
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(taskPayload);
+    }
+    expect(called).toBe(true);
+  });
+
+  test("getTask fails if the response schema is invalid", async () => {
+    const baseUrl = serverFor(() => {
+      return Response.json({
+        data: {
+          gid: "123",
+          name: "Invalid task",
+        },
+      });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.getTask("test-token", "123", ["gid", "name"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+      expect(result.error.message).toContain("invalid response");
+    }
+  });
 });
 
 describe("parseTaskId", () => {
   test("accepts digit-only GIDs", () => {
-    expect(parseTaskId("1234567890")).toEqual({ ok: true, value: "1234567890" });
+    expect(parseTaskId("1234567890")).toEqual({
+      ok: true,
+      value: "1234567890",
+    });
   });
 
   test("accepts unambiguous Asana task URLs", () => {
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134")).toEqual({
+    expect(
+      parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134"),
+    ).toEqual({
       ok: true,
       value: "1215978111726134",
     });
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/f")).toEqual({
+    expect(
+      parseTaskId(
+        "https://app.asana.com/0/1201947864389005/1215978111726134/f",
+      ),
+    ).toEqual({
       ok: true,
       value: "1215978111726134",
     });
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/")).toEqual({
+    expect(
+      parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/"),
+    ).toEqual({
       ok: true,
       value: "1215978111726134",
     });
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/f/")).toEqual({
+    expect(
+      parseTaskId(
+        "https://app.asana.com/0/1201947864389005/1215978111726134/f/",
+      ),
+    ).toEqual({
       ok: true,
       value: "1215978111726134",
     });
   });
 
   test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
-    expect(parseTaskId("abc")).toEqual({ ok: false, error: "Invalid task identifier" });
-    expect(parseTaskId("123a456")).toEqual({ ok: false, error: "Invalid task identifier" });
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/other")).toEqual({
+    expect(parseTaskId("abc")).toEqual({
       ok: false,
       error: "Invalid task identifier",
     });
-    expect(parseTaskId("https://app.asana.com/0/1201947864389005/list")).toEqual({
+    expect(parseTaskId("123a456")).toEqual({
+      ok: false,
+      error: "Invalid task identifier",
+    });
+    expect(
+      parseTaskId(
+        "https://app.asana.com/0/1201947864389005/1215978111726134/other",
+      ),
+    ).toEqual({
+      ok: false,
+      error: "Invalid task identifier",
+    });
+    expect(
+      parseTaskId("https://app.asana.com/0/1201947864389005/list"),
+    ).toEqual({
       ok: false,
       error: "Invalid task identifier",
     });

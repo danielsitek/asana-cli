@@ -13,6 +13,7 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import { type Task, type TaskGateway } from "../asana/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute } from "./index.ts";
 
@@ -30,6 +31,14 @@ class InMemoryDiscovery implements MyTasksDiscoveryGateway {
   ) {}
 
   async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
+    return this.response;
+  }
+}
+
+class InMemoryTaskReader implements TaskGateway {
+  constructor(private readonly response: Result<Task, IdentityError>) {}
+
+  async getTask(): Promise<Result<Task, IdentityError>> {
     return this.response;
   }
 }
@@ -785,5 +794,101 @@ describe("config commands", () => {
     );
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("non.existent.key");
+  });
+});
+
+describe("tasks get command", () => {
+  const dummyTask: Task = {
+    gid: "1215978111726134",
+    name: "Implement task reading",
+    notes: "This is a notes section\nwith multiple lines",
+    completed: false,
+    due_on: "2026-12-31",
+    assignee: {
+      gid: "9876",
+      name: "Ada Lovelace",
+    },
+  };
+
+  test("reads task and outputs human-readable deterministic details", async () => {
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: new InMemoryTaskReader(ok(dummyTask)),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      [
+        "assignee.gid: 9876",
+        "assignee.name: Ada Lovelace",
+        "completed: false",
+        "due_on: 2026-12-31",
+        "gid: 1215978111726134",
+        "name: Implement task reading",
+        "notes:",
+        "  This is a notes section",
+        "  with multiple lines",
+      ].join("\n") + "\n",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  test("reads task and outputs JSON", async () => {
+    const result = await execute(
+      ["tasks", "get", "1215978111726134", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        taskReader: new InMemoryTaskReader(ok(dummyTask)),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      JSON.stringify({ data: dummyTask, meta: {} }, null, 2) + "\n",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  test("fails fast on invalid ID before checking authentication or making calls", async () => {
+    const result = await execute(["tasks", "get", "invalid-id"], {
+      environment: {},
+      identity: new InMemoryIdentity(
+        err({ kind: "authentication", message: "fail" }),
+      ),
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Invalid task identifier");
+    expect(result.stdout).toBe("");
+  });
+
+  test("rejects fields option on non-supporting commands", async () => {
+    const result = await execute(["whoami", "--fields", "notes"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Option --fields is not supported");
+    expect(result.stdout).toBe("");
+  });
+
+  test("maps task reader errors correctly to stderr and exit codes without token leak", async () => {
+    const failingReader = new InMemoryTaskReader(
+      err({ kind: "not_found", message: "Task not found", status: 404 }),
+    );
+
+    const result = await execute(["tasks", "get", "1215978111726134"], {
+      environment: { ASANA_CLI_TOKEN: "top-secret-token" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: failingReader,
+    });
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain('"code": "not_found"');
+    expect(result.stderr).toContain("Task not found");
+    expect(result.stderr).not.toContain("top-secret-token");
   });
 });

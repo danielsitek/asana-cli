@@ -135,18 +135,19 @@ describe("configuration output", () => {
       },
       notes: "This is line 1\nThis is line 2\nThis is line 3",
     };
-    const expected = [
-      "assignee.gid: 12345",
-      "assignee.name: Ada Lovelace",
-      "completed: true",
-      "due_on: —",
-      "gid: 1215978111726134",
-      "name: Implement the change",
-      "notes:",
-      "  This is line 1",
-      "  This is line 2",
-      "  This is line 3",
-    ].join("\n") + "\n";
+    const expected =
+      [
+        "assignee.gid: 12345",
+        "assignee.name: Ada Lovelace",
+        "completed: true",
+        "due_on: —",
+        "gid: 1215978111726134",
+        "name: Implement the change",
+        "notes:",
+        "  This is line 1",
+        "  This is line 2",
+        "  This is line 3",
+      ].join("\n") + "\n";
     expect(renderTaskDetail(task)).toBe(expected);
   });
 
@@ -157,12 +158,13 @@ describe("configuration output", () => {
       assignee: null,
       notes: "",
     };
-    const expected = [
-      "assignee: —",
-      "gid: 121",
-      "name: Task without assignee",
-      "notes: ",
-    ].join("\n") + "\n";
+    const expected =
+      [
+        "assignee: —",
+        "gid: 121",
+        "name: Task without assignee",
+        "notes: ",
+      ].join("\n") + "\n";
     expect(renderTaskDetail(task)).toBe(expected);
   });
 });
