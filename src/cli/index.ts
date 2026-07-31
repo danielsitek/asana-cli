@@ -36,7 +36,6 @@ import {
   renderJson,
   renderResolvedMyTasks,
   renderTaskDetail,
-  renderTaskUpdate,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -716,7 +715,10 @@ export const execute = async (
         result = {
           stdout: json
             ? renderJson(updated.value)
-            : renderTaskUpdate(updated.value),
+            : renderTaskDetail({
+                task: updated.value.task,
+                applied: updated.value.applied,
+              }),
           stderr: "",
           exitCode: 0,
         };
