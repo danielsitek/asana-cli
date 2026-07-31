@@ -3,8 +3,10 @@ export type CliError = Readonly<{
   message: string;
 }>;
 
-export const renderJson = (data: unknown): string =>
-  `${JSON.stringify({ data, meta: {} }, null, 2)}\n`;
+export const renderJson = (
+  data: unknown,
+  meta: Readonly<Record<string, unknown>> = {},
+): string => `${JSON.stringify({ data, meta }, null, 2)}\n`;
 
 export const renderIdentity = (identity: {
   gid: string;

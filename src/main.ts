@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { AsanaHttpClient } from "./asana/index.ts";
 import { execute } from "./cli/index.ts";
 
@@ -7,6 +9,11 @@ const version = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.1.0";
 const result = await execute(Bun.argv.slice(2), {
   environment: process.env,
   identity: new AsanaHttpClient(),
+  configuration: {
+    cwd: process.cwd(),
+    home: homedir(),
+    environment: process.env,
+  },
   version,
 });
 
