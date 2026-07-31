@@ -6,6 +6,7 @@ import {
   executeTaskUpdate,
   parseTaskId,
   prepareTaskUpdate,
+  prepareTaskCreate,
   validateFieldList,
   type PreparedTaskUpdate,
   type TaskMutation,
@@ -385,5 +386,62 @@ describe("task update workflow", () => {
       assignee: "9001",
       assignee_section: "300",
     });
+  });
+});
+
+describe("task creation preparation", () => {
+  test("requires a parent and name", () => {
+    expect(prepareTaskCreate({ name: "Child" })).toEqual({
+      ok: false,
+      error: { kind: "invalid_usage", message: "--parent is required" },
+    });
+    expect(prepareTaskCreate({ parent: "123" })).toEqual({
+      ok: false,
+      error: { kind: "invalid_usage", message: "--name is required" },
+    });
+  });
+
+  test("shares mutation parsing and preserves the parsed parent", () => {
+    expect(
+      prepareTaskCreate({
+        parent: "https://app.asana.com/0/111/222",
+        name: "Child",
+        notesFile: "notes.md",
+        assignee: "me",
+        dueOn: "2028-02-29",
+        completed: "false",
+        mySection: "@in_progress",
+        customFields: ["@estimate:4"],
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        parentId: "222",
+        mutation: {
+          name: "Child",
+          due_on: "2028-02-29",
+          completed: false,
+        },
+        notesFile: "notes.md",
+        resolveAssigneeMe: true,
+        mySection: { kind: "alias", value: "in_progress" },
+        customFields: [
+          { field: { kind: "alias", value: "estimate" }, value: 4 },
+        ],
+      },
+    });
+  });
+
+  test("requires an explicit assignable user for My Tasks values", () => {
+    for (const assignee of [undefined, "null"] as const) {
+      expect(
+        prepareTaskCreate({
+          parent: "123",
+          name: "Child",
+          ...(assignee === undefined ? {} : { assignee }),
+          mySection: "300",
+        }).ok,
+      ).toBe(false);
+    }
   });
 });

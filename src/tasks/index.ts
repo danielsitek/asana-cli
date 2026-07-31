@@ -63,6 +63,14 @@ export interface TaskMutationGateway {
   ): Promise<Result<Task, TaskReadError>>;
 }
 
+export interface TaskCreationGateway {
+  createSubtask(
+    token: string,
+    parentId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
+}
+
 export type TaskUpdateDependencies = Readonly<{
   writer: TaskMutationGateway;
   myTasksMutationResolver?: MyTasksMutationResolver;
@@ -95,6 +103,49 @@ export type PreparedTaskUpdate = Readonly<{
   customFields: readonly PreparedCustomField[];
 }>;
 
+export type TaskCreateOptions = TaskUpdateOptions &
+  Readonly<{ parent?: string }>;
+
+export type PreparedTaskCreate = Readonly<{
+  parentId: string;
+  mutation: TaskMutation & Readonly<{ name: string }>;
+  notesFile?: string;
+  resolveAssigneeMe: boolean;
+  mySection?: ResourceSelector;
+  customFields: readonly PreparedCustomField[];
+}>;
+
+export type TaskCreationStageName =
+  | "create"
+  | "assignee"
+  | "my_section"
+  | "custom_fields";
+
+export type TaskCreationStage = Readonly<{
+  stage: TaskCreationStageName;
+  status: "completed" | "failed" | "not_run";
+  applied?: TaskMutation;
+  error?: Readonly<{ kind: TaskReadError["kind"]; message: string }>;
+  reason?: "not_requested" | "stopped_after_failure";
+}>;
+
+export type TaskCreationResult = Readonly<{
+  task: Task;
+  stages: readonly TaskCreationStage[];
+  complete: boolean;
+}>;
+
+export type TaskCreationDependencies = Readonly<{
+  creator: TaskCreationGateway;
+  writer: TaskMutationGateway;
+  myTasksMutationResolver?: MyTasksMutationResolver;
+  resolveAuthenticatedUserGid: (
+    token: string,
+  ) => Promise<Result<string, TaskReadError>>;
+  readFile: (path: string) => Promise<string>;
+  readStdin: () => Promise<string>;
+}>;
+
 export type ResourceSelector = Readonly<
   { kind: "gid"; value: string } | { kind: "alias"; value: string }
 >;
@@ -106,7 +157,7 @@ export type PreparedCustomField = Readonly<{
 
 export type MyTasksMutationRequest = Readonly<{
   token: string;
-  taskId: string;
+  taskId?: string;
   finalAssignee?: string | null;
   authenticatedUserGid?: string;
   mySection?: ResourceSelector;
@@ -292,6 +343,196 @@ export const prepareTaskUpdate = (
     ...(mySection?.ok ? { mySection: mySection.value } : {}),
     customFields,
   });
+};
+
+export const prepareTaskCreate = (
+  options: TaskCreateOptions,
+): Result<
+  PreparedTaskCreate,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  if (options.parent === undefined) {
+    return err({ kind: "invalid_usage", message: "--parent is required" });
+  }
+  if (options.name === undefined) {
+    return err({ kind: "invalid_usage", message: "--name is required" });
+  }
+
+  const prepared = prepareTaskUpdate(options.parent, options);
+  if (!prepared.ok) return prepared;
+  const hasMyTasksMutation =
+    prepared.value.mySection !== undefined ||
+    prepared.value.customFields.length > 0;
+  if (
+    hasMyTasksMutation &&
+    options.assignee !== "me" &&
+    !/^\d+$/.test(options.assignee ?? "")
+  ) {
+    return err({
+      kind: "invalid_usage",
+      message:
+        "My Tasks values on a new subtask require --assignee=me or a user GID",
+    });
+  }
+
+  return ok({
+    parentId: prepared.value.taskId,
+    mutation: {
+      ...prepared.value.mutation,
+      name: options.name,
+    },
+    ...(prepared.value.notesFile === undefined
+      ? {}
+      : { notesFile: prepared.value.notesFile }),
+    resolveAssigneeMe: prepared.value.resolveAssigneeMe,
+    ...(prepared.value.mySection === undefined
+      ? {}
+      : { mySection: prepared.value.mySection }),
+    customFields: prepared.value.customFields,
+  });
+};
+
+const publicTaskError = (
+  error: TaskReadError,
+): NonNullable<TaskCreationStage["error"]> => {
+  const messages: Readonly<Record<TaskReadError["kind"], string>> = {
+    authentication: "Asana authentication failed",
+    api: "Asana API request failed",
+    not_found: "Task not found",
+    rate_limit: "Asana request retries exhausted",
+    network: "Unable to reach Asana",
+    invalid_response: "Asana returned an invalid response",
+  };
+  return { kind: error.kind, message: messages[error.kind] };
+};
+
+export const executeTaskCreation = async (
+  token: string,
+  prepared: PreparedTaskCreate,
+  dependencies: TaskCreationDependencies,
+): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
+  const mutation = { ...prepared.mutation };
+  if (prepared.notesFile !== undefined) {
+    try {
+      mutation.notes =
+        prepared.notesFile === "-"
+          ? await dependencies.readStdin()
+          : await dependencies.readFile(prepared.notesFile);
+    } catch {
+      return err({
+        kind: "invalid_usage",
+        message:
+          prepared.notesFile === "-"
+            ? "Unable to read notes from stdin"
+            : "Unable to read notes file",
+      });
+    }
+  }
+
+  let authenticatedUserGid: string | undefined;
+  if (prepared.resolveAssigneeMe) {
+    const identity = await dependencies.resolveAuthenticatedUserGid(token);
+    if (!identity.ok) return identity;
+    mutation.assignee = identity.value;
+    authenticatedUserGid = identity.value;
+  }
+
+  const hasMyTasksMutation =
+    prepared.mySection !== undefined || prepared.customFields.length > 0;
+  let myTasksMutation: MyTasksMutationResult = {};
+  if (hasMyTasksMutation) {
+    if (!dependencies.myTasksMutationResolver) {
+      return err({
+        kind: "internal_error",
+        message: "My Tasks creation dependencies are unavailable",
+      });
+    }
+    const resolved = await dependencies.myTasksMutationResolver.resolve({
+      token,
+      ...(mutation.assignee === undefined
+        ? {}
+        : { finalAssignee: mutation.assignee }),
+      ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
+      ...(prepared.mySection === undefined
+        ? {}
+        : { mySection: prepared.mySection }),
+      customFields: prepared.customFields,
+    });
+    if (!resolved.ok) return resolved;
+    myTasksMutation = resolved.value;
+  }
+
+  const assignee = mutation.assignee;
+  const createMutation = orderMutation({
+    name: mutation.name,
+    ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
+    ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
+    ...(mutation.completed === undefined
+      ? {}
+      : { completed: mutation.completed }),
+  });
+  const created = await dependencies.creator.createSubtask(
+    token,
+    prepared.parentId,
+    createMutation,
+  );
+  if (!created.ok) return created;
+
+  let task: Task = created.value;
+  const taskId = created.value.gid;
+  const stages: TaskCreationStage[] = [
+    { stage: "create", status: "completed", applied: createMutation },
+  ];
+  const requestedStages: ReadonlyArray<
+    readonly [TaskCreationStageName, TaskMutation | undefined]
+  > = [
+    ["assignee", assignee === undefined ? undefined : { assignee }],
+    [
+      "my_section",
+      myTasksMutation.assignee_section === undefined
+        ? undefined
+        : { assignee_section: myTasksMutation.assignee_section },
+    ],
+    [
+      "custom_fields",
+      myTasksMutation.custom_fields === undefined
+        ? undefined
+        : { custom_fields: myTasksMutation.custom_fields },
+    ],
+  ];
+  let stopped = false;
+  for (const [stage, applied] of requestedStages) {
+    if (applied === undefined) {
+      stages.push({ stage, status: "not_run", reason: "not_requested" });
+      continue;
+    }
+    if (stopped) {
+      stages.push({
+        stage,
+        status: "not_run",
+        reason: "stopped_after_failure",
+      });
+      continue;
+    }
+    const updated = await dependencies.writer.updateTask(
+      token,
+      taskId,
+      applied,
+    );
+    if (!updated.ok) {
+      stages.push({
+        stage,
+        status: "failed",
+        applied,
+        error: publicTaskError(updated.error),
+      });
+      stopped = true;
+      continue;
+    }
+    task = updated.value;
+    stages.push({ stage, status: "completed", applied });
+  }
+  return ok({ task, stages, complete: !stopped });
 };
 
 export const executeTaskUpdate = async (
