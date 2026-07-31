@@ -20,6 +20,14 @@ import type {
 } from "../identity/index.ts";
 import { createMyTasksMutationResolver } from "../my-tasks/index.ts";
 import {
+  type TaskCommentCreationGateway,
+  type TaskStoryGateway,
+  executeTaskCommentCreate,
+  executeTaskCommentsRead,
+  prepareTaskCommentCreate,
+  prepareTaskCommentsRead,
+} from "../comments/index.ts";
+import {
   type TaskGateway,
   type TaskCreationGateway,
   type TaskMutationGateway,
@@ -40,6 +48,9 @@ import {
   renderIdentity,
   renderJson,
   renderResolvedMyTasks,
+  renderCommentDetail,
+  renderCommentList,
+  renderCommentScanWarning,
   renderTaskDetail,
   renderTaskUpdate,
   renderTaskCreation,
@@ -58,6 +69,8 @@ export type ExecuteDependencies = Readonly<{
   taskReader?: TaskGateway;
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
+  commentReader?: TaskStoryGateway;
+  commentWriter?: TaskCommentCreationGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -272,7 +285,13 @@ export const execute = async (
       const isTasksGet =
         actionCommand.name() === "get" &&
         actionCommand.parent?.name() === "tasks";
-      if (!isTasksGet) {
+      const isTasksComments =
+        actionCommand.name() === "comments" &&
+        actionCommand.parent?.name() === "tasks";
+      const isTasksComment =
+        actionCommand.name() === "comment" &&
+        actionCommand.parent?.name() === "tasks";
+      if (!isTasksGet && !isTasksComments && !isTasksComment) {
         throw new CommanderError(
           2,
           "commander.fieldsNotSupported",
@@ -823,6 +842,160 @@ export const execute = async (
 
   tasksCreate.exitOverride();
   tasksCreate.configureOutput(captureOutput);
+
+  const tasksComments = tasks
+    .command("comments <id>")
+    .description("read task comments")
+    .option("--max <n>", "cap stories scanned")
+    .option("--offset <token>", "start from an Asana offset")
+    .option("--all", "return all comments within the scan cap")
+    .action(
+      async (
+        idArg: string,
+        options: Readonly<{ max?: string; offset?: string; all?: boolean }>,
+      ) => {
+        invoked = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+        const prepared = prepareTaskCommentsRead(idArg, {
+          ...(program.opts<{ fields?: string }>().fields === undefined
+            ? {}
+            : { fields: program.opts<{ fields?: string }>().fields }),
+          ...(options.max === undefined ? {} : { max: options.max }),
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+          ...(options.all === undefined ? {} : { all: options.all }),
+        });
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+        if (!dependencies.commentReader) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Comment reader is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+        const read = await executeTaskCommentsRead(
+          tokenResult.value,
+          prepared.value,
+          {
+            reader: dependencies.commentReader,
+          },
+        );
+        if (!read.ok) {
+          result = renderTaskReadFailure(read.error.kind);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(read.value.comments, read.value.meta)
+            : renderCommentList(
+                read.value.comments,
+                prepared.value.outputFields,
+              ),
+          stderr: json
+            ? ""
+            : renderCommentScanWarning(read.value.meta.scan_truncated),
+          exitCode: 0,
+        };
+      },
+    );
+
+  tasksComments.exitOverride();
+  tasksComments.configureOutput(captureOutput);
+
+  const tasksComment = tasks
+    .command("comment <id> [text]")
+    .description("create a task comment")
+    .option("--file <path>", "read comment text from a file or stdin with -")
+    .action(
+      async (
+        idArg: string,
+        textArg: string | undefined,
+        options: Readonly<{ file?: string }>,
+      ) => {
+        invoked = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+        const prepared = prepareTaskCommentCreate(idArg, {
+          ...(program.opts<{ fields?: string }>().fields === undefined
+            ? {}
+            : { fields: program.opts<{ fields?: string }>().fields }),
+          ...(textArg === undefined ? {} : { text: textArg }),
+          ...(options.file === undefined ? {} : { file: options.file }),
+        });
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+        if (!dependencies.commentWriter) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Comment writer is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+        const created = await executeTaskCommentCreate(
+          tokenResult.value,
+          prepared.value,
+          {
+            writer: dependencies.commentWriter,
+            readFile:
+              dependencies.readFile ??
+              ((path) => readFile(path, { encoding: "utf8" })),
+            readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
+          },
+        );
+        if (!created.ok) {
+          result =
+            created.error.kind === "invalid_usage"
+              ? usageError(created.error.message)
+              : renderTaskReadFailure(created.error.kind);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(created.value)
+            : renderCommentDetail(created.value),
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    );
+
+  tasksComment.exitOverride();
+  tasksComment.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);

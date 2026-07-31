@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import type {
+  Comment,
+  TaskCommentCreationGateway,
+  TaskStoryGateway,
+} from "../comments/index.ts";
+import type {
   MyTasksDiscoveryGateway,
   DiscoveredMyTasks,
   DiscoveryError,
@@ -19,6 +24,7 @@ import {
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { resolvePath } from "../utils/resolve-path.ts";
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
@@ -56,7 +62,7 @@ const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
 const isDigitOnlyGid = (value: unknown): value is string =>
   typeof value === "string" && /^\d+$/.test(value);
 
-const isAssignee = (
+const isNullableNamedResource = (
   value: unknown,
   requestedFields: ReadonlySet<string>,
 ): boolean => {
@@ -82,7 +88,7 @@ const knownTaskFieldsAreValid = (
     typeof value.due_on === "string" ||
     value.due_on === null) &&
   (!hasOwn(value, "assignee") ||
-    isAssignee(value.assignee, requestedAssigneeFields));
+    isNullableNamedResource(value.assignee, requestedAssigneeFields));
 
 const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
   const requestedTopLevelFields = new Set(
@@ -108,13 +114,62 @@ const createdTaskSchema = z.custom<Task & Readonly<{ gid: string }>>(
     knownTaskFieldsAreValid(value, new Set()),
 );
 
+const knownCommentFieldsAreValid = (
+  value: Record<string, unknown>,
+  requestedCreatedByFields: ReadonlySet<string>,
+): boolean =>
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "created_at") || typeof value.created_at === "string") &&
+  (!hasOwn(value, "text") || typeof value.text === "string") &&
+  (!hasOwn(value, "resource_subtype") ||
+    typeof value.resource_subtype === "string") &&
+  (!hasOwn(value, "created_by") ||
+    isNullableNamedResource(value.created_by, requestedCreatedByFields));
+
+const requestedCommentFieldIsPresent = (
+  value: Record<string, unknown>,
+  field: string,
+): boolean => {
+  const path = field.split(".");
+  if (path[0] === "created_by" && value.created_by === null) return true;
+  return resolvePath(value, path).found;
+};
+
+const buildCommentSchema = (fields: readonly string[]): z.ZodType<Comment> => {
+  const requestedCreatedByFields = new Set(
+    fields
+      .filter(
+        (field) => field === "created_by.gid" || field === "created_by.name",
+      )
+      .map((field) => field.slice("created_by.".length)),
+  );
+  return z.custom<Comment>(
+    (value) =>
+      isRecord(value) &&
+      fields.every((field) => requestedCommentFieldIsPresent(value, field)) &&
+      knownCommentFieldsAreValid(value, requestedCreatedByFields),
+  );
+};
+
+const buildStoriesPageSchema = (fields: readonly string[]) =>
+  z.object({
+    data: z.array(buildCommentSchema(fields)),
+    next_page: z
+      .object({ offset: z.string() })
+      .passthrough()
+      .nullable()
+      .optional(),
+  });
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
     MyTasksDiscoveryGateway,
     TaskGateway,
     TaskCreationGateway,
-    TaskMutationGateway
+    TaskMutationGateway,
+    TaskStoryGateway,
+    TaskCommentCreationGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -442,6 +497,107 @@ export class AsanaHttpClient
       `tasks/${parentId}/subtasks`,
       { method: "POST", body: { data: mutation } },
       schema,
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data);
+  }
+
+  async getTaskStories(
+    token: string,
+    taskId: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+    }>,
+  ): Promise<
+    Result<
+      Readonly<{
+        stories: readonly Comment[];
+        nextOffset?: string;
+      }>,
+      TaskReadError
+    >
+  > {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Story page limit must be between 1 and 100",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      `tasks/${taskId}/stories`,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(options.limit),
+          opt_fields: options.fields.join(","),
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+        },
+      },
+      buildStoriesPageSchema(options.fields),
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok({
+      stories: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async createTaskComment(
+    token: string,
+    taskId: string,
+    text: string,
+    fields: readonly string[],
+  ): Promise<Result<Comment, TaskReadError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      `tasks/${taskId}/stories`,
+      {
+        method: "POST",
+        searchParams: { opt_fields: fields.join(",") },
+        body: { data: { text } },
+      },
+      z.object({ data: buildCommentSchema(fields) }),
     );
     if (!result.ok) {
       if (result.error.kind === "api" && result.error.status === 404) {

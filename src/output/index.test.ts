@@ -9,6 +9,9 @@ import {
   renderConfig,
   renderTaskDetail,
   renderTaskUpdate,
+  renderCommentList,
+  renderCommentScanWarning,
+  renderCommentDetail,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -182,5 +185,49 @@ describe("configuration output", () => {
         "  name: Updated\n" +
         "  custom_fields.400: —\n",
     );
+  });
+});
+
+describe("comment output", () => {
+  test("renderCommentList renders a borderless table with padded columns", () => {
+    const comments = [
+      { gid: "1", text: "hi", created_by: { gid: "u1", name: "Ada" } },
+      { gid: "22", text: "hello there", created_by: { gid: "u2", name: "Bo" } },
+    ];
+    expect(
+      renderCommentList(comments, ["gid", "text", "created_by.name"]),
+    ).toBe(
+      [
+        "gid  text         created_by.name",
+        "1    hi           Ada",
+        "22   hello there  Bo",
+      ].join("\n") + "\n",
+    );
+  });
+
+  test("renderCommentList renders unavailable nested values as an em dash", () => {
+    expect(
+      renderCommentList(
+        [{ gid: "1", created_by: null }],
+        ["gid", "created_by.gid", "created_by.name"],
+      ),
+    ).toBe(
+      ["gid  created_by.gid  created_by.name", "1    —               —"].join(
+        "\n",
+      ) + "\n",
+    );
+  });
+
+  test("renderCommentScanWarning renders diagnostics only for truncation", () => {
+    expect(renderCommentScanWarning(true)).toBe(
+      "Warning: story scan cap reached; more comments may exist.\n",
+    );
+    expect(renderCommentScanWarning(false)).toBe("");
+  });
+
+  test("renderCommentDetail renders key/value detail like task detail", () => {
+    expect(
+      renderCommentDetail({ gid: "1", text: "hi", created_by: null }),
+    ).toBe("gid: 1\ntext: hi\ncreated_by: —\n");
   });
 });
