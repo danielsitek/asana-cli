@@ -1,0 +1,5 @@
+env = false
+telemetry = false
+
+[test]
+coverageThreshold = 0.8
