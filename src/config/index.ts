@@ -123,7 +123,7 @@ const hasSecretShapedKey = (
   if (!isObject(value)) return undefined;
   for (const [key, child] of Object.entries(value)) {
     const childPath = [...path, key];
-    if (/^(?:token|accessToken|pat)$/i.test(key)) return childPath.join(".");
+    if (/token/i.test(key) || /^pat$/i.test(key)) return childPath.join(".");
     const nested = hasSecretShapedKey(child, childPath);
     if (nested) return nested;
   }
@@ -281,7 +281,14 @@ const pathSegments = (key: string): Result<readonly string[], ConfigError> => {
 export const getConfigValue = (
   config: ResolvedConfig,
   key: string,
-): Result<Readonly<{ value: unknown; source?: ConfigSource }>, ConfigError> => {
+): Result<
+  Readonly<{
+    value: unknown;
+    source?: ConfigSource;
+    sources: Readonly<Record<string, ConfigSource>>;
+  }>,
+  ConfigError
+> => {
   const segments = pathSegments(key);
   if (!segments.ok) return segments;
   let value: unknown = config.value;
@@ -294,9 +301,15 @@ export const getConfigValue = (
     }
     value = value[segment];
   }
+  const sources = Object.fromEntries(
+    Object.entries(config.sources).filter(
+      ([sourceKey]) => sourceKey === key || sourceKey.startsWith(`${key}.`),
+    ),
+  );
   return ok({
     value,
     ...(config.sources[key] ? { source: config.sources[key] } : {}),
+    sources,
   });
 };
 

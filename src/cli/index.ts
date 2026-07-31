@@ -75,12 +75,22 @@ const renderValue = (value: unknown): string =>
 const renderConfigValue = (
   value: unknown,
   source: ConfigSource | undefined,
+  sources: Readonly<Record<string, ConfigSource>>,
   json: boolean,
 ): string => {
   if (json) {
-    return renderJson(value, source ? { source } : {});
+    return renderJson(
+      value,
+      source ? { source } : Object.keys(sources).length > 0 ? { sources } : {},
+    );
   }
-  return `${renderValue(value)}${source ? `\nsource: ${source.path}` : ""}\n`;
+  const sourceLines = source
+    ? `\nsource: ${source.path}`
+    : Object.entries(sources)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => `\nsource ${key}: ${item.path}`)
+        .join("");
+  return `${renderValue(value)}${sourceLines}\n`;
 };
 
 const configLeaves = (
@@ -262,6 +272,7 @@ export const execute = async (
         stdout: renderConfigValue(
           found.value.value,
           options.source ? found.value.source : undefined,
+          options.source ? found.value.sources : {},
           json,
         ),
         stderr: "",

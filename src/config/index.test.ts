@@ -157,8 +157,8 @@ describe("resolveConfig", () => {
       ['{"workspace":{"gid":"100"},"secctions":{}}', "secctions"],
       ['{"workspace":{"gid":"abc"}}', "digit-only GID"],
       [
-        '{"workspace":{"gid":"100"},"nested":{"accessToken":"secret"}}',
-        "nested.accessToken is forbidden",
+        '{"workspace":{"gid":"100"},"nested":{"apiToken":"secret"}}',
+        "nested.apiToken is forbidden",
       ],
       ['{"workspace":{"gid":"100"},"myTasks":{"sections":{}}}', "myTasks"],
     ];
@@ -314,6 +314,24 @@ describe("getConfigValue", () => {
         source: {
           layer: "shared",
           path: join(root, ".asana-cli.json"),
+        },
+        sources: {
+          "workspace.gid": {
+            layer: "shared",
+            path: join(root, ".asana-cli.json"),
+          },
+        },
+      },
+    });
+    expect(getConfigValue(resolved.value, "workspace")).toEqual({
+      ok: true,
+      value: {
+        value: { gid: "100" },
+        sources: {
+          "workspace.gid": {
+            layer: "shared",
+            path: join(root, ".asana-cli.json"),
+          },
         },
       },
     });
