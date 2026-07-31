@@ -919,4 +919,114 @@ describe("AsanaHttpClient", () => {
       },
     });
   });
+
+  test("creates a subtask with the exact POST request", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("authorization")).toBe("Bearer secret-token");
+      expect(request.headers.get("content-type")).toBe("application/json");
+      expect(new URL(request.url).pathname).toBe("/api/1.0/tasks/123/subtasks");
+      expect(await request.json()).toEqual({
+        data: {
+          name: "Child",
+          notes: "Prepared\n",
+          due_on: "2028-02-29",
+          completed: false,
+        },
+      });
+      return Response.json(
+        { data: { gid: "456", name: "Child" } },
+        { status: 201 },
+      );
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).createSubtask(
+      "secret-token",
+      "123",
+      {
+        name: "Child",
+        notes: "Prepared\n",
+        due_on: "2028-02-29",
+        completed: false,
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "456", name: "Child" },
+    });
+  });
+
+  test("retries only explicit POST rate limits and honors Retry-After", async () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, {
+            status: 429,
+            headers: { "Retry-After": "3" },
+          })
+        : Response.json({ data: { gid: "456" } }, { status: 201 });
+    });
+
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }).createSubtask("token", "123", { name: "Child" });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+    expect(waits).toEqual([3000]);
+  });
+
+  test.each([500, 502, 503, 504])(
+    "does not retry ambiguous POST %i responses",
+    async (status) => {
+      let attempts = 0;
+      const baseUrl = serverFor(() => {
+        attempts += 1;
+        return new Response(null, { status });
+      });
+
+      const result = await new AsanaHttpClient({
+        baseUrl,
+        maxRetries: 3,
+        sleep: async () => undefined,
+      }).createSubtask("token", "123", { name: "Child" });
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          kind: "api",
+          status,
+          message: `Asana API request failed (${status})`,
+        },
+      });
+      expect(attempts).toBe(1);
+    },
+  );
+
+  test("does not retry an ambiguous timed-out POST", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Promise<Response>(() => undefined);
+    });
+
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      maxRetries: 3,
+      requestTimeoutMs: 1,
+      sleep: async () => undefined,
+    }).createSubtask("token", "123", { name: "Child" });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "network", message: "Unable to reach Asana" },
+    });
+    expect(attempts).toBe(1);
+  });
 });

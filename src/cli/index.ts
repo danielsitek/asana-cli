@@ -21,11 +21,15 @@ import type {
 import { createMyTasksMutationResolver } from "../my-tasks/index.ts";
 import {
   type TaskGateway,
+  type TaskCreationGateway,
   type TaskMutationGateway,
   type TaskReadError,
+  type TaskUpdateError,
   executeTaskUpdate,
+  executeTaskCreation,
   parseTaskId,
   prepareTaskUpdate,
+  prepareTaskCreate,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -38,6 +42,7 @@ import {
   renderResolvedMyTasks,
   renderTaskDetail,
   renderTaskUpdate,
+  renderTaskCreation,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 
@@ -51,6 +56,7 @@ export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
   taskReader?: TaskGateway;
+  taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
@@ -58,6 +64,35 @@ export type ExecuteDependencies = Readonly<{
   configuration?: ConfigContext;
   version?: string;
 }>;
+
+type TaskMutationCliOptions = Readonly<{
+  name?: string;
+  notes?: string;
+  notesFile?: string;
+  assignee?: string;
+  dueOn?: string;
+  completed?: string;
+  mySection?: string;
+  customField?: readonly string[];
+}>;
+
+const withTaskMutationOptions = (command: Command): Command =>
+  command
+    .option("--name <text>", "set the task name")
+    .option("--notes <text>", "replace task notes")
+    .option("--notes-file <path>", "replace notes from a file or stdin with -")
+    .option("--assignee <value>", "set me, a user GID, or null")
+    .option("--due-on <date>", "set YYYY-MM-DD or null")
+    .option("--completed <boolean>", "set true or false")
+    .option("--my-section <section>", "move within My Tasks by GID or @alias")
+    .option(
+      "--custom-field <field:value>",
+      "set a numeric My Tasks custom field; repeatable",
+      (value: string, previous: readonly string[] | undefined) => [
+        ...(previous ?? []),
+        value,
+      ],
+    );
 
 const usageError = (message: string): Execution => ({
   stdout: "",
@@ -115,6 +150,22 @@ const renderConfigFailure = (error: ConfigError): Execution => ({
   stderr: renderError({ code: "configuration", message: error.message }),
   exitCode: 2,
 });
+
+const renderTaskWorkflowFailure = (error: TaskUpdateError): Execution => {
+  if (error.kind === "invalid_usage") return usageError(error.message);
+  if (error.kind === "configuration") return renderConfigFailure(error);
+  if (error.kind === "internal_error") {
+    return {
+      stdout: "",
+      stderr: renderError({
+        code: "internal_error",
+        message: error.message,
+      }),
+      exitCode: 6,
+    };
+  }
+  return renderTaskReadFailure(error.kind);
+};
 
 const renderStageFailure = (
   error: StageFailureError,
@@ -189,6 +240,28 @@ export const execute = async (
       parserStdout += text;
     },
     writeErr: () => undefined,
+  };
+
+  const resolveAuthenticatedUserGid = async (token: string) => {
+    const identity = await dependencies.identity.getAuthenticatedUser(token);
+    return identity.ok
+      ? { ok: true as const, value: identity.value.gid }
+      : identity;
+  };
+
+  const myTasksMutationResolverFor = (required: boolean) => {
+    if (!required) return undefined;
+    const configuration = dependencies.configuration;
+    const discovery = dependencies.discovery;
+    const reader = dependencies.taskReader;
+    return configuration && discovery
+      ? createMyTasksMutationResolver({
+          configuration,
+          discovery,
+          ...(reader ? { reader } : {}),
+          resolveAuthenticatedUserGid,
+        })
+      : undefined;
   };
 
   program.option("--json", "output JSON");
@@ -597,145 +670,159 @@ export const execute = async (
   tasksGet.exitOverride();
   tasksGet.configureOutput(captureOutput);
 
-  const tasksUpdate = tasks
-    .command("update <id>")
-    .description("update a task's fields")
-    .option("--name <text>", "replace the task name")
-    .option("--notes <text>", "replace task notes")
-    .option("--notes-file <path>", "replace notes from a file or stdin with -")
-    .option("--assignee <value>", "set me, a user GID, or null")
-    .option("--due-on <date>", "set YYYY-MM-DD or null")
-    .option("--completed <boolean>", "set true or false")
-    .option("--my-section <section>", "move within My Tasks by GID or @alias")
-    .option(
-      "--custom-field <field:value>",
-      "set a numeric My Tasks custom field; repeatable",
-      (value: string, previous: readonly string[] | undefined) => [
-        ...(previous ?? []),
-        value,
-      ],
-    )
-    .action(
-      async (
-        idArg: string,
-        options: Readonly<{
-          name?: string;
-          notes?: string;
-          notesFile?: string;
-          assignee?: string;
-          dueOn?: string;
-          completed?: string;
-          mySection?: string;
-          customField?: readonly string[];
-        }>,
-      ) => {
-        invoked = true;
-        json = program.opts<{ json?: boolean }>().json ?? false;
+  const tasksUpdate = withTaskMutationOptions(
+    tasks.command("update <id>").description("update a task's fields"),
+  ).action(async (idArg: string, options: TaskMutationCliOptions) => {
+    invoked = true;
+    json = program.opts<{ json?: boolean }>().json ?? false;
 
-        const prepared = prepareTaskUpdate(idArg, {
-          ...options,
-          ...(options.customField ? { customFields: options.customField } : {}),
-        });
-        if (!prepared.ok) {
-          result = usageError(prepared.error.message);
-          return;
-        }
+    const prepared = prepareTaskUpdate(idArg, {
+      ...options,
+      ...(options.customField ? { customFields: options.customField } : {}),
+    });
+    if (!prepared.ok) {
+      result = usageError(prepared.error.message);
+      return;
+    }
 
-        const tokenResult = resolveToken(dependencies.environment);
-        if (!tokenResult.ok) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "authentication",
-              message: tokenResult.error.message,
-            }),
-            exitCode: 3,
-          };
-          return;
-        }
-        if (!dependencies.taskWriter) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "internal_error",
-              message: "Task writer is required",
-            }),
-            exitCode: 6,
-          };
-          return;
-        }
+    const tokenResult = resolveToken(dependencies.environment);
+    if (!tokenResult.ok) {
+      result = {
+        stdout: "",
+        stderr: renderError({
+          code: "authentication",
+          message: tokenResult.error.message,
+        }),
+        exitCode: 3,
+      };
+      return;
+    }
+    if (!dependencies.taskWriter) {
+      result = {
+        stdout: "",
+        stderr: renderError({
+          code: "internal_error",
+          message: "Task writer is required",
+        }),
+        exitCode: 6,
+      };
+      return;
+    }
 
-        const resolveAuthenticatedUserGid = async (token: string) => {
-          const identity =
-            await dependencies.identity.getAuthenticatedUser(token);
-          return identity.ok
-            ? { ok: true as const, value: identity.value.gid }
-            : identity;
-        };
-        const hasMyTasksMutation =
-          prepared.value.mySection !== undefined ||
-          prepared.value.customFields.length > 0;
-        let myTasksMutationResolver;
-        if (hasMyTasksMutation) {
-          const configuration = dependencies.configuration;
-          const discovery = dependencies.discovery;
-          const reader = dependencies.taskReader;
-          if (configuration && discovery && reader) {
-            myTasksMutationResolver = createMyTasksMutationResolver({
-              configuration,
-              discovery,
-              reader,
-              resolveAuthenticatedUserGid,
-            });
-          }
-        }
+    const hasMyTasksMutation =
+      prepared.value.mySection !== undefined ||
+      prepared.value.customFields.length > 0;
+    const myTasksMutationResolver =
+      myTasksMutationResolverFor(hasMyTasksMutation);
 
-        const updated = await executeTaskUpdate(
-          tokenResult.value,
-          prepared.value,
-          {
-            writer: dependencies.taskWriter,
-            ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
-            resolveAuthenticatedUserGid,
-            readFile:
-              dependencies.readFile ??
-              ((path) => readFile(path, { encoding: "utf8" })),
-            readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
-          },
-        );
-        if (!updated.ok) {
-          if (updated.error.kind === "invalid_usage") {
-            result = usageError(updated.error.message);
-          } else if (updated.error.kind === "configuration") {
-            result = renderConfigFailure(updated.error);
-          } else if (updated.error.kind === "internal_error") {
-            result = {
-              stdout: "",
-              stderr: renderError({
-                code: "internal_error",
-                message: updated.error.message,
-              }),
-              exitCode: 6,
-            };
-          } else {
-            result = renderTaskReadFailure(updated.error.kind);
-          }
-          return;
-        }
-        result = {
-          stdout: json
-            ? renderJson(updated.value.task, {
-                applied: updated.value.applied,
-              })
-            : renderTaskUpdate(updated.value.task, updated.value.applied),
-          stderr: "",
-          exitCode: 0,
-        };
-      },
-    );
+    const updated = await executeTaskUpdate(tokenResult.value, prepared.value, {
+      writer: dependencies.taskWriter,
+      ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
+      resolveAuthenticatedUserGid,
+      readFile:
+        dependencies.readFile ??
+        ((path) => readFile(path, { encoding: "utf8" })),
+      readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
+    });
+    if (!updated.ok) {
+      result = renderTaskWorkflowFailure(updated.error);
+      return;
+    }
+    result = {
+      stdout: json
+        ? renderJson(updated.value.task, {
+            applied: updated.value.applied,
+          })
+        : renderTaskUpdate(updated.value.task, updated.value.applied),
+      stderr: "",
+      exitCode: 0,
+    };
+  });
 
   tasksUpdate.exitOverride();
   tasksUpdate.configureOutput(captureOutput);
+
+  const tasksCreate = withTaskMutationOptions(
+    tasks
+      .command("create")
+      .description("create a subtask")
+      .option("--parent <id>", "parent task GID or URL"),
+  ).action(
+    async (options: TaskMutationCliOptions & Readonly<{ parent?: string }>) => {
+      invoked = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      const prepared = prepareTaskCreate({
+        ...options,
+        ...(options.customField ? { customFields: options.customField } : {}),
+      });
+      if (!prepared.ok) {
+        result = usageError(prepared.error.message);
+        return;
+      }
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+      if (!dependencies.taskCreator) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Task creator is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const hasMyTasksMutation =
+        prepared.value.mySection !== undefined ||
+        prepared.value.customFields.length > 0;
+      const myTasksMutationResolver =
+        myTasksMutationResolverFor(hasMyTasksMutation);
+      const created = await executeTaskCreation(
+        tokenResult.value,
+        prepared.value,
+        {
+          creator: dependencies.taskCreator,
+          ...(dependencies.taskWriter
+            ? { writer: dependencies.taskWriter }
+            : {}),
+          ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
+          resolveAuthenticatedUserGid,
+          readFile:
+            dependencies.readFile ??
+            ((path) => readFile(path, { encoding: "utf8" })),
+          readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
+        },
+      );
+      if (!created.ok) {
+        result = renderTaskWorkflowFailure(created.error);
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(created.value.task, { stages: created.value.stages })
+          : renderTaskCreation(created.value.task, created.value.stages),
+        stderr: "",
+        exitCode: created.value.complete ? 0 : 1,
+      };
+    },
+  );
+
+  tasksCreate.exitOverride();
+  tasksCreate.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);

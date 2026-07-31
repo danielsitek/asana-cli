@@ -11,6 +11,7 @@ const result = await execute(Bun.argv.slice(2), {
   environment: process.env,
   identity: client,
   taskReader: client,
+  taskCreator: client,
   taskWriter: client,
   discovery: client,
   configuration: {

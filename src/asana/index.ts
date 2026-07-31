@@ -13,6 +13,7 @@ import type {
 import {
   type Task,
   type TaskGateway,
+  type TaskCreationGateway,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskReadError,
@@ -100,11 +101,19 @@ const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
   );
 };
 
+const createdTaskSchema = z.custom<Task & Readonly<{ gid: string }>>(
+  (value) =>
+    isRecord(value) &&
+    isDigitOnlyGid(value.gid) &&
+    knownTaskFieldsAreValid(value, new Set()),
+);
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
     MyTasksDiscoveryGateway,
     TaskGateway,
+    TaskCreationGateway,
     TaskMutationGateway
 {
   readonly #baseUrl: string;
@@ -127,7 +136,7 @@ export class AsanaHttpClient
     token: string,
     path: string,
     options: Readonly<{
-      method: "GET" | "PUT";
+      method: "GET" | "POST" | "PUT";
       searchParams?: Readonly<Record<string, string>>;
       body?: unknown;
     }>,
@@ -160,7 +169,10 @@ export class AsanaHttpClient
           signal: controller.signal,
         });
         if (!response.ok) {
-          const retryable = [429, 502, 503, 504].includes(response.status);
+          const retryable =
+            options.method === "POST"
+              ? response.status === 429
+              : [429, 502, 503, 504].includes(response.status);
           if (retryable && attempt < this.#maxRetries) {
             await this.#sleep(
               this.retryDelay(attempt, response.headers.get("Retry-After")),
@@ -187,7 +199,7 @@ export class AsanaHttpClient
         }
         return ok(parsed.data);
       } catch {
-        if (attempt < this.#maxRetries) {
+        if (options.method !== "POST" && attempt < this.#maxRetries) {
           await this.#sleep(this.retryDelay(attempt));
           continue;
         }
@@ -397,6 +409,38 @@ export class AsanaHttpClient
       token,
       `tasks/${taskId}`,
       { method: "PUT", body: { data: mutation } },
+      schema,
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data);
+  }
+
+  async createSubtask(
+    token: string,
+    parentId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
+    if (!/^\d+$/.test(parentId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+
+    const schema = z.object({ data: createdTaskSchema });
+    const result = await this.#request(
+      token,
+      `tasks/${parentId}/subtasks`,
+      { method: "POST", body: { data: mutation } },
       schema,
     );
     if (!result.ok) {

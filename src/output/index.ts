@@ -151,3 +151,25 @@ export const renderTaskUpdate = (
     .join("\n");
   return `${renderTaskDetail(task)}applied:\n${appliedDetail}\n`;
 };
+
+export const renderTaskCreation = (
+  task: Record<string, unknown>,
+  stages: readonly Readonly<{
+    stage: string;
+    status: string;
+    applied?: Record<string, unknown>;
+    error?: Readonly<{ kind: string; message: string }>;
+    reason?: string;
+  }>[],
+): string => {
+  const lines = [renderTaskDetail(task).trimEnd(), "stages:"];
+  for (const stage of stages) {
+    lines.push(`  ${stage.stage}: ${stage.status}`);
+    if (stage.error) {
+      lines.push(`    error: ${stage.error.kind} — ${stage.error.message}`);
+    } else if (stage.reason) {
+      lines.push(`    reason: ${stage.reason}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+};

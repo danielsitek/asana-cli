@@ -19,7 +19,7 @@ import type {
 export type MyTasksMutationDependencies = Readonly<{
   configuration: ConfigContext;
   discovery: MyTasksDiscoveryGateway;
-  reader: TaskGateway;
+  reader?: TaskGateway;
   resolveAuthenticatedUserGid: (
     token: string,
   ) => Promise<Result<string, TaskReadError>>;
@@ -158,6 +158,15 @@ const resolveMutation = async (
   if (!identity.ok) return identity;
   let finalAssignee = request.finalAssignee;
   if (finalAssignee === undefined) {
+    if (request.taskId === undefined || dependencies.reader === undefined) {
+      return err({
+        kind: request.taskId === undefined ? "invalid_usage" : "internal_error",
+        message:
+          request.taskId === undefined
+            ? "My Tasks mutations require an explicitly resolvable final assignee"
+            : "Task reader is required to resolve the final assignee",
+      });
+    }
     const current = await dependencies.reader.getTask(
       request.token,
       request.taskId,
