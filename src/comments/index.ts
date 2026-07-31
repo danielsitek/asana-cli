@@ -4,6 +4,7 @@ import {
   validateFieldList,
   type TaskReadError,
 } from "../tasks/index.ts";
+import { resolvePath } from "../utils/resolve-path.ts";
 
 export type Comment = Readonly<{
   gid?: string;
@@ -124,25 +125,6 @@ const withInternalFields = (fields: readonly string[]): readonly string[] =>
     ? fields
     : [...fields, RESOURCE_SUBTYPE_FIELD];
 
-const getPath = (
-  value: Record<string, unknown>,
-  path: readonly string[],
-): Readonly<{ found: true; value: unknown }> | Readonly<{ found: false }> => {
-  let current: unknown = value;
-  for (const segment of path) {
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      Array.isArray(current) ||
-      !Object.hasOwn(current, segment)
-    ) {
-      return { found: false };
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return { found: true, value: current };
-};
-
 const setPath = (
   value: Record<string, unknown>,
   path: readonly string[],
@@ -171,7 +153,7 @@ const projectCommentFields = (
   const projected: Record<string, unknown> = {};
   for (const field of fields) {
     const path = field.split(".");
-    const resolved = getPath(comment as Record<string, unknown>, path);
+    const resolved = resolvePath(comment, path);
     if (resolved.found) {
       setPath(projected, path, resolved.value);
       continue;

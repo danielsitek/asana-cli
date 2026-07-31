@@ -1,3 +1,5 @@
+import { resolvePath } from "../utils/resolve-path.ts";
+
 export type CliError = Readonly<{
   code: string;
   message: string;
@@ -181,31 +183,15 @@ const renderLeafValue = (value: unknown): string =>
       ? value
       : JSON.stringify(value);
 
-const fieldValue = (
-  resource: Record<string, unknown>,
-  field: string,
-): unknown => {
-  let current: unknown = resource;
-  for (const segment of field.split(".")) {
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      Array.isArray(current) ||
-      !Object.hasOwn(current, segment)
-    ) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
-};
-
 export const renderCommentList = (
   comments: readonly Record<string, unknown>[],
   fields: readonly string[],
 ): string => {
   const rows = comments.map((comment) =>
-    fields.map((field) => renderLeafValue(fieldValue(comment, field))),
+    fields.map((field) => {
+      const resolved = resolvePath(comment, field.split("."));
+      return renderLeafValue(resolved.found ? resolved.value : undefined);
+    }),
   );
   const widths = fields.map((field, index) =>
     Math.max(
