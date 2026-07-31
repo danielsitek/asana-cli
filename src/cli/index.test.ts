@@ -16,6 +16,8 @@ import type {
 import {
   type Task,
   type TaskGateway,
+  type TaskMutation,
+  type TaskMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
@@ -64,6 +66,23 @@ class InMemoryTaskReader implements TaskGateway {
     this.lastToken = token;
     this.lastTaskId = taskId;
     this.lastFields = fields;
+    return this.response;
+  }
+}
+
+class InMemoryTaskWriter implements TaskMutationGateway {
+  public calls: Array<
+    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+  > = [];
+
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  async updateTask(
+    token: string,
+    taskId: string,
+    mutation: TaskMutation,
+  ): Promise<Result<Task, TaskReadError>> {
+    this.calls.push({ token, taskId, mutation });
     return this.response;
   }
 }
@@ -1080,5 +1099,182 @@ describe("tasks get command", () => {
     expect(result.exitCode).toBe(6);
     expect(result.stderr).toContain("unexpected internal error");
     expect(result.stderr).not.toContain("unexpected db/connection crash!");
+  });
+});
+
+describe("tasks update command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
+  const updatedTask: Task = { gid: "123", name: "Updated" };
+
+  test.each([
+    ["123", []],
+    ["invalid", ["--name", "x"]],
+    ["123", ["--notes", "x", "--notes-file", "notes.md"]],
+    ["123", ["--assignee", "ada@example.com"]],
+    ["123", ["--due-on", "2026-02-29"]],
+    ["123", ["--completed", "yes"]],
+  ])("rejects invalid mutation %# without writing", async (id, flags) => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const result = await execute(["tasks", "update", id, ...flags], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskWriter: writer,
+      readFile: async () => {
+        throw new Error("file should not be read");
+      },
+      readStdin: async () => {
+        throw new Error("stdin should not be read");
+      },
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  test("writes all task fields and renders the returned task", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const result = await execute(
+      [
+        "tasks",
+        "update",
+        "123",
+        "--name",
+        "Updated",
+        "--notes",
+        "Replacement",
+        "--assignee",
+        "me",
+        "--due-on",
+        "2028-02-29",
+        "--completed",
+        "false",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+      },
+    );
+
+    expect(result).toEqual({
+      stdout: "gid: 123\nname: Updated\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(writer.calls).toEqual([
+      {
+        token: "secret",
+        taskId: "123",
+        mutation: {
+          name: "Updated",
+          notes: "Replacement",
+          assignee: "9001",
+          due_on: "2028-02-29",
+          completed: false,
+        },
+      },
+    ]);
+  });
+
+  test("reads file and stdin notes unchanged through injected seams", async () => {
+    for (const [flagValue, expected] of [
+      ["notes.md", "file contents\n\n"],
+      ["-", "stdin contents\n"],
+    ] as const) {
+      const writer = new InMemoryTaskWriter(ok(updatedTask));
+      let fileReads = 0;
+      let stdinReads = 0;
+      const result = await execute(
+        ["tasks", "update", "123", "--notes-file", flagValue],
+        {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          taskWriter: writer,
+          readFile: async (path) => {
+            fileReads += 1;
+            expect(path).toBe("notes.md");
+            return "file contents\n\n";
+          },
+          readStdin: async () => {
+            stdinReads += 1;
+            return "stdin contents\n";
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(writer.calls[0]?.mutation.notes).toBe(expected);
+      expect(fileReads).toBe(flagValue === "-" ? 0 : 1);
+      expect(stdinReads).toBe(flagValue === "-" ? 1 : 0);
+    }
+  });
+
+  test("passes assignee and due date nulls to the writer", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const result = await execute(
+      ["tasks", "update", "123", "--assignee", "null", "--due-on", "null"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls[0]?.mutation).toEqual({
+      assignee: null,
+      due_on: null,
+    });
+  });
+
+  test.each([
+    ["authentication", 3],
+    ["api", 4],
+    ["not_found", 4],
+    ["rate_limit", 5],
+    ["network", 4],
+    ["invalid_response", 4],
+  ] as const)(
+    "maps %s update errors to exit code %i",
+    async (kind, exitCode) => {
+      const writer = new InMemoryTaskWriter(
+        err({ kind, message: "unsafe secret response" }),
+      );
+      const result = await execute(
+        ["tasks", "update", "123", "--name", "Updated"],
+        {
+          environment: { ASANA_CLI_TOKEN: "top-secret" },
+          identity,
+          taskWriter: writer,
+        },
+      );
+
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.stderr).not.toContain("unsafe secret response");
+      expect(result.stderr).not.toContain("top-secret");
+    },
+  );
+
+  test("returns JSON output and rejects --fields", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const json = await execute(
+      ["--json", "tasks", "update", "123", "--name", "Updated"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+      },
+    );
+    expect(JSON.parse(json.stdout)).toEqual({ data: updatedTask, meta: {} });
+
+    const unsupported = await execute(
+      ["--fields", "name", "tasks", "update", "123", "--name", "Updated"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+      },
+    );
+    expect(unsupported.exitCode).toBe(2);
+    expect(writer.calls).toHaveLength(1);
   });
 });
