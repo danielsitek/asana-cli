@@ -1,28 +1,43 @@
-name: CI
+name: Release draft
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    tags: ["v*"]
 
-permissions:
-  contents: read
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  check:
+  validate:
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun run check
+      - name: Verify tag, version, and commit
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run release:verify-tag --tag "$GITHUB_REF_NAME"
+          test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+          version="$(bun -e 'const p=await Bun.file("package.json").json(); process.stdout.write(p.version)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   native-build:
-    needs: check
+    needs: validate
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -57,12 +72,11 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - name: Verify native runner
-        shell: bash
         run: test "$(uname -m)" = "${{ matrix.uname }}"
       - name: Build isolated executable
         shell: bash
         env:
-          ASANA_CLI_BUILD_CANARY: asana-cli-ci-secret-like-canary-7d51390b
+          ASANA_CLI_BUILD_CANARY: asana-cli-release-secret-like-canary-59c2a34e
         run: |
           bun run build:target "${{ matrix.target }}"
           binary="dist/release/${{ matrix.target }}/asana-cli"
@@ -84,8 +98,7 @@ jobs:
           codesign --force --deep --sign - --timestamp=none \
             --entitlements config/macos-entitlements.plist "$binary"
           codesign --verify --deep --strict --verbose=2 "$binary"
-      - name: Run native packaged smoke
-        run: bun run smoke:executable --binary "dist/release/${{ matrix.target }}/asana-cli"
+      - run: bun run smoke:executable --binary "dist/release/${{ matrix.target }}/asana-cli"
       - name: Preserve executable mode and signature
         shell: bash
         run: |
@@ -101,7 +114,9 @@ jobs:
           retention-days: 1
 
   package:
-    needs: native-build
+    needs: [validate, native-build]
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -130,13 +145,14 @@ jobs:
             tar -xf "$archive" -C "release-input/$target"
             chmod 0755 "release-input/$target/asana-cli"
           done
-      - name: Package release assets
+      - name: Package archives and formula
         shell: bash
         run: |
-          version="$(bun -e 'const p=await Bun.file("package.json").json(); process.stdout.write(p.version)')"
-          bun run package:release --input release-input --output release-assets --version "$version"
+          bun run package:release --input release-input --output release-assets \
+            --version "${{ needs.validate.outputs.version }}"
           bun run formula:generate --checksums release-assets/SHA256SUMS \
-            --output release-assets/asana-cli.rb --version "$version" \
+            --output release-assets/asana-cli.rb \
+            --version "${{ needs.validate.outputs.version }}" \
             --repository "${{ github.repository }}"
           ruby -c release-assets/asana-cli.rb
       - uses: actions/upload-artifact@v4
@@ -148,7 +164,9 @@ jobs:
           retention-days: 1
 
   homebrew-install:
-    needs: package
+    needs: [validate, package]
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -171,13 +189,13 @@ jobs:
         with:
           name: release-assets
           path: release-assets
-      - name: Install and test formula from current artifacts
+      - name: Install formula from current-run archives
         shell: bash
         run: |
-          version="$(bun -e 'const p=await Bun.file("package.json").json(); process.stdout.write(p.version)')"
           assets="$(pwd)/release-assets"
           bun run formula:generate --checksums release-assets/SHA256SUMS \
-            --output "$RUNNER_TEMP/asana-cli.rb" --version "$version" \
+            --output "$RUNNER_TEMP/asana-cli.rb" \
+            --version "${{ needs.validate.outputs.version }}" \
             --base-url "file://$assets"
           ruby -c "$RUNNER_TEMP/asana-cli.rb"
           tap="asana-cli/ci"
@@ -191,3 +209,38 @@ jobs:
         run: |
           brew uninstall asana-cli || true
           brew untap asana-cli/ci || true
+
+  release:
+    needs: [validate, package, homebrew-install]
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create or update draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if existing="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$existing" != "true" ]; then
+              echo "Release $tag is already published; refusing to modify it" >&2
+              exit 1
+            fi
+            echo "Updating existing draft release $tag"
+            gh release edit "$tag" --draft --title "asana-cli $tag" \
+              --notes "Automated draft for explicit human verification."
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* --draft --verify-tag \
+              --title "asana-cli $tag" \
+              --notes "Automated draft for explicit human verification."
+          fi

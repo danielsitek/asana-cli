@@ -15,7 +15,13 @@
     "test": "bun test",
     "test:coverage": "bun test --coverage",
     "test:smoke": "RUN_COMPILED_SMOKE=1 bun test test/smoke.test.ts",
+    "smoke:executable": "bun run scripts/smoke-executable.ts",
     "build": "bun run scripts/build.ts",
+    "build:target": "bun run scripts/build.ts --target",
+    "build:release": "bun run scripts/build.ts --all",
+    "package:release": "bun run scripts/package-release.ts",
+    "formula:generate": "bun run scripts/generate-homebrew-formula.ts",
+    "release:verify-tag": "bun run scripts/verify-release-tag.ts",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run test:coverage && bun run build && bun run test:smoke"
   },
   "dependencies": {
