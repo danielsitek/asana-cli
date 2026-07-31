@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type {
   Identity,
@@ -153,5 +156,200 @@ describe("execute", () => {
       exitCode: 6,
     });
     expect(result.stderr).not.toContain("secret-value");
+  });
+});
+
+describe("config commands", () => {
+  const identity = new InMemoryIdentity(
+    ok({ gid: "123", name: "Ada Lovelace" }),
+  );
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  const setup = async () => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-execute-"));
+    temporaryDirectories.push(root);
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+    return {
+      root,
+      home,
+      dependencies: {
+        environment: {},
+        identity,
+        configuration: { cwd: root, home, environment: {} },
+      },
+    };
+  };
+
+  test("initializes and reads shared configuration", async () => {
+    const { root, dependencies } = await setup();
+
+    const initialized = await execute(
+      ["config", "init", "--shared", "--workspace=100"],
+      dependencies,
+    );
+    expect(initialized).toEqual({
+      stdout: `initialized ${join(root, ".asana-cli.json")}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ workspace: { gid: "100" } });
+
+    expect(
+      await execute(
+        ["config", "get", "workspace.gid", "--source"],
+        dependencies,
+      ),
+    ).toEqual({
+      stdout:
+        `100\nsource layer: shared\n` +
+        `source path: ${join(root, ".asana-cli.json")}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("shows deterministic human and JSON configuration with sources", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      '{"workspace":{"gid":"100"},"team":{"gid":"200"}}\n',
+    );
+
+    const human = await execute(["config", "show", "--sources"], dependencies);
+    expect(human).toEqual({
+      stdout:
+        "network.concurrency: 4 [built-in]\n" +
+        "network.maxRetries: 3 [built-in]\n" +
+        "network.requestTimeoutMs: 30000 [built-in]\n" +
+        `team.gid: 200 [shared (${join(root, ".asana-cli.json")})]\n` +
+        `workspace.gid: 100 [shared (${join(root, ".asana-cli.json")})]\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const jsonAfter = await execute(
+      ["config", "show", "--sources", "--json"],
+      dependencies,
+    );
+    const jsonBefore = await execute(
+      ["--json", "config", "show", "--sources"],
+      dependencies,
+    );
+    expect(jsonAfter).toEqual(jsonBefore);
+    expect(jsonAfter.exitCode).toBe(0);
+    expect(JSON.parse(jsonAfter.stdout)).toEqual({
+      data: {
+        network: {
+          concurrency: 4,
+          maxRetries: 3,
+          requestTimeoutMs: 30000,
+        },
+        workspace: { gid: "100" },
+        team: { gid: "200" },
+      },
+      meta: {
+        sources: {
+          "network.concurrency": { layer: "built-in" },
+          "network.maxRetries": { layer: "built-in" },
+          "network.requestTimeoutMs": { layer: "built-in" },
+          "workspace.gid": {
+            layer: "shared",
+            path: join(root, ".asana-cli.json"),
+          },
+          "team.gid": {
+            layer: "shared",
+            path: join(root, ".asana-cli.json"),
+          },
+        },
+      },
+    });
+  });
+
+  test("sets selected layers and enforces local ignore safety", async () => {
+    const { root, home, dependencies } = await setup();
+
+    const shared = await execute(
+      ["config", "set", "workspace.gid", "100"],
+      dependencies,
+    );
+    const global = await execute(
+      ["config", "set", "team.gid", "200", "--global", "--json"],
+      dependencies,
+    );
+    const unsafeLocal = await execute(
+      ["config", "set", "myTasks.sections.review", "300"],
+      dependencies,
+    );
+
+    expect(shared.exitCode).toBe(0);
+    expect(global.exitCode).toBe(0);
+    expect(JSON.parse(global.stdout).data.layer).toBe("global");
+    expect(
+      JSON.parse(
+        await readFile(
+          join(home, ".config", "asana-cli", "config.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ team: { gid: "200" } });
+    expect(unsafeLocal.exitCode).toBe(2);
+    expect(unsafeLocal.stderr).toContain("not ignored");
+
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+    const safeLocal = await execute(
+      ["config", "set", "myTasks.sections.review", "300"],
+      dependencies,
+    );
+    expect(safeLocal.exitCode).toBe(0);
+  });
+
+  test("sets schema-typed network values and rejects malformed values", async () => {
+    const { root, dependencies } = await setup();
+
+    const valid = await execute(
+      ["config", "set", "network.concurrency", "8"],
+      dependencies,
+    );
+    expect(valid.exitCode).toBe(0);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ network: { concurrency: 8 } });
+
+    const invalid = await execute(
+      ["config", "set", "network.maxRetries", "NaN"],
+      dependencies,
+    );
+    expect(invalid.exitCode).toBe(2);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toContain("network.maxRetries");
+  });
+
+  test("returns configuration and usage errors with exit code two", async () => {
+    const { root, dependencies } = await setup();
+    await writeFile(join(root, ".asana-cli.json"), '{"unknown":true}\n');
+
+    const invalidConfig = await execute(["config", "show"], dependencies);
+    expect(invalidConfig.exitCode).toBe(2);
+    expect(invalidConfig.stdout).toBe("");
+    expect(invalidConfig.stderr).toContain(".asana-cli.json");
+    expect(invalidConfig.stderr).toContain("unknown");
+
+    const conflicting = await execute(
+      ["config", "set", "workspace.gid", "100", "--shared", "--global"],
+      dependencies,
+    );
+    expect(conflicting.exitCode).toBe(2);
+    expect(conflicting.stderr).toContain("mutually exclusive");
   });
 });

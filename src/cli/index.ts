@@ -1,11 +1,27 @@
 import { Command, CommanderError } from "commander";
 
 import { resolveToken } from "../auth/index.ts";
+import {
+  getConfigValue,
+  initializeSharedConfig,
+  resolveConfig,
+  setConfigValue,
+  type ConfigContext,
+  type ConfigError,
+  type ConfigLayer,
+} from "../config/index.ts";
 import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
-import { renderError, renderIdentity, renderJson } from "../output/index.ts";
+import {
+  renderConfig,
+  renderConfigValue,
+  renderError,
+  renderIdentity,
+  renderJson,
+} from "../output/index.ts";
+import type { Result } from "../shared/result.ts";
 
 export type Execution = Readonly<{
   stdout: string;
@@ -16,6 +32,7 @@ export type Execution = Readonly<{
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   identity: IdentityGateway;
+  configuration?: ConfigContext;
   version?: string;
 }>;
 
@@ -47,6 +64,34 @@ const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
   };
 };
 
+const renderConfigFailure = (error: ConfigError): Execution => ({
+  stdout: "",
+  stderr: renderError({ code: "configuration", message: error.message }),
+  exitCode: 2,
+});
+
+const selectedLayer = (
+  options: Readonly<{
+    shared?: boolean;
+    local?: boolean;
+    global?: boolean;
+  }>,
+): Result<ConfigLayer | undefined, string> => {
+  const selected = (
+    [
+      ["shared", options.shared],
+      ["local", options.local],
+      ["global", options.global],
+    ] as const
+  ).filter(([, enabled]) => enabled);
+  return selected.length > 1
+    ? {
+        ok: false,
+        error: "--shared, --local, and --global are mutually exclusive",
+      }
+    : { ok: true, value: selected[0]?.[0] };
+};
+
 export const execute = async (
   argv: readonly string[],
   dependencies: ExecuteDependencies,
@@ -59,6 +104,14 @@ export const execute = async (
   let invoked = false;
   let result: Execution | undefined;
   let parserStdout = "";
+
+  const beginConfigCommand = (): ConfigContext | undefined => {
+    invoked = true;
+    json = program.opts<{ json?: boolean }>().json ?? false;
+    const context = dependencies.configuration;
+    if (!context) result = usageError("Configuration context is unavailable");
+    return context;
+  };
 
   const captureOutput = {
     writeOut: (text: string) => {
@@ -102,6 +155,135 @@ export const execute = async (
       };
     });
   whoami.version(version, "-v, --version");
+
+  const config = program
+    .command("config")
+    .description("manage layered configuration");
+
+  config
+    .command("init")
+    .description("initialize configuration")
+    .option("--shared", "initialize shared repository configuration")
+    .option("--workspace <gid>", "Asana workspace GID")
+    .action(
+      async (options: Readonly<{ shared?: boolean; workspace?: string }>) => {
+        const context = beginConfigCommand();
+        if (!context) return;
+        if (!options.shared) {
+          result = usageError("config init currently requires --shared");
+          return;
+        }
+        const initialized = await initializeSharedConfig(
+          context,
+          options.workspace,
+        );
+        if (!initialized.ok) {
+          result = renderConfigFailure(initialized.error);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(initialized.value)
+            : `initialized ${initialized.value.path}\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    );
+
+  config
+    .command("get")
+    .description("read an effective configuration value")
+    .argument("<key>", "dotted configuration key")
+    .option("--source", "include the winning source")
+    .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
+      const context = beginConfigCommand();
+      if (!context) return;
+      const resolved = await resolveConfig(context);
+      if (!resolved.ok) {
+        result = renderConfigFailure(resolved.error);
+        return;
+      }
+      const found = getConfigValue(resolved.value, key);
+      if (!found.ok) {
+        result = renderConfigFailure(found.error);
+        return;
+      }
+      result = {
+        stdout: renderConfigValue(
+          found.value.value,
+          options.source ? found.value.source : undefined,
+          options.source ? found.value.sources : {},
+          json,
+        ),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+
+  config
+    .command("set")
+    .description("write a configuration value")
+    .argument("<key>", "dotted configuration key")
+    .argument("<value>", "configuration value")
+    .option("--shared", "write shared repository configuration")
+    .option("--local", "write personal repository configuration")
+    .option("--global", "write global user configuration")
+    .action(
+      async (
+        key: string,
+        value: string,
+        options: Readonly<{
+          shared?: boolean;
+          local?: boolean;
+          global?: boolean;
+        }>,
+      ) => {
+        const context = beginConfigCommand();
+        if (!context) return;
+        const layer = selectedLayer(options);
+        if (!layer.ok) {
+          result = usageError(layer.error);
+          return;
+        }
+        const written = await setConfigValue(context, key, value, layer.value);
+        if (!written.ok) {
+          result = renderConfigFailure(written.error);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(written.value)
+            : `updated ${written.value.path}\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    );
+
+  config
+    .command("show")
+    .description("show effective configuration")
+    .option("--sources", "include the winning source for every value")
+    .action(async (options: Readonly<{ sources?: boolean }>) => {
+      const context = beginConfigCommand();
+      if (!context) return;
+      const resolved = await resolveConfig(context);
+      if (!resolved.ok) {
+        result = renderConfigFailure(resolved.error);
+        return;
+      }
+      result = {
+        stdout: renderConfig(
+          resolved.value.value,
+          resolved.value.sources,
+          options.sources ?? false,
+          json,
+        ),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
 
   program.exitOverride();
   program.configureOutput(captureOutput);
