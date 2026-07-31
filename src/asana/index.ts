@@ -24,6 +24,7 @@ import {
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { resolvePath } from "../utils/resolve-path.ts";
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
@@ -61,7 +62,7 @@ const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
 const isDigitOnlyGid = (value: unknown): value is string =>
   typeof value === "string" && /^\d+$/.test(value);
 
-const isAssignee = (
+const isNullableNamedResource = (
   value: unknown,
   requestedFields: ReadonlySet<string>,
 ): boolean => {
@@ -87,7 +88,7 @@ const knownTaskFieldsAreValid = (
     typeof value.due_on === "string" ||
     value.due_on === null) &&
   (!hasOwn(value, "assignee") ||
-    isAssignee(value.assignee, requestedAssigneeFields));
+    isNullableNamedResource(value.assignee, requestedAssigneeFields));
 
 const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
   const requestedTopLevelFields = new Set(
@@ -113,20 +114,6 @@ const createdTaskSchema = z.custom<Task & Readonly<{ gid: string }>>(
     knownTaskFieldsAreValid(value, new Set()),
 );
 
-const isCreatedBy = (
-  value: unknown,
-  requestedFields: ReadonlySet<string>,
-): boolean => {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  if (hasOwn(value, "gid") && !isDigitOnlyGid(value.gid)) return false;
-  if (hasOwn(value, "name") && typeof value.name !== "string") return false;
-  for (const field of requestedFields) {
-    if (!hasOwn(value, field)) return false;
-  }
-  return true;
-};
-
 const knownCommentFieldsAreValid = (
   value: Record<string, unknown>,
   requestedCreatedByFields: ReadonlySet<string>,
@@ -137,7 +124,7 @@ const knownCommentFieldsAreValid = (
   (!hasOwn(value, "resource_subtype") ||
     typeof value.resource_subtype === "string") &&
   (!hasOwn(value, "created_by") ||
-    isCreatedBy(value.created_by, requestedCreatedByFields));
+    isNullableNamedResource(value.created_by, requestedCreatedByFields));
 
 const requestedCommentFieldIsPresent = (
   value: Record<string, unknown>,
@@ -145,12 +132,7 @@ const requestedCommentFieldIsPresent = (
 ): boolean => {
   const path = field.split(".");
   if (path[0] === "created_by" && value.created_by === null) return true;
-  let current: unknown = value;
-  for (const segment of path) {
-    if (!isRecord(current) || !hasOwn(current, segment)) return false;
-    current = current[segment];
-  }
-  return true;
+  return resolvePath(value, path).found;
 };
 
 const buildCommentSchema = (fields: readonly string[]): z.ZodType<Comment> => {
