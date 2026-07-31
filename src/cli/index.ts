@@ -183,7 +183,7 @@ export const execute = async (
   };
 
   program.option("--json", "output JSON");
-  program.option("--fields <fields>", "additional Asana fields");
+  program.option("--fields <fields>", "select explicit Asana fields");
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {

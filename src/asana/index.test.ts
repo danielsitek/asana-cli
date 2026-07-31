@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { execute } from "../cli/index.ts";
 import { AsanaHttpClient } from "./index.ts";
-import { parseTaskId, DEFAULT_FIELDS } from "../tasks/index.ts";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(() => servers.splice(0).forEach((server) => server.stop(true)));
@@ -493,11 +492,15 @@ describe("AsanaHttpClient", () => {
     });
 
     const client = new AsanaHttpClient({ baseUrl });
-    const result = await client.getTask(
-      "test-token",
-      "1215978111726134",
-      DEFAULT_FIELDS,
-    );
+    const result = await client.getTask("test-token", "1215978111726134", [
+      "gid",
+      "name",
+      "notes",
+      "completed",
+      "due_on",
+      "assignee.gid",
+      "assignee.name",
+    ]);
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -533,6 +536,93 @@ describe("AsanaHttpClient", () => {
       expect(result.value).toEqual(taskPayload);
     }
     expect(called).toBe(true);
+  });
+
+  test("preserves requested response field order in human output", async () => {
+    const baseUrl = serverFor((request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "notes,name,assignee.name,assignee.gid",
+      );
+      return Response.json({
+        data: {
+          notes: "Notes first",
+          name: "Name second",
+          assignee: {
+            name: "Assignee name third",
+            gid: "12345",
+          },
+        },
+      });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+
+    const result = await execute(
+      [
+        "tasks",
+        "get",
+        "9876543210",
+        "--fields",
+        "notes,name,assignee.name,assignee.gid",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "test-token" },
+        identity: client,
+        taskReader: client,
+      },
+    );
+
+    expect(result).toEqual({
+      stdout:
+        [
+          "notes: Notes first",
+          "name: Name second",
+          "assignee.name: Assignee name third",
+          "assignee.gid: 12345",
+        ].join("\n") + "\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("requires requested fields and validates known present fields", async () => {
+    const cases: ReadonlyArray<
+      Readonly<{
+        fields: readonly string[];
+        data: Record<string, unknown>;
+      }>
+    > = [
+      { fields: ["name"], data: {} },
+      { fields: ["name"], data: { name: false } },
+      { fields: ["name"], data: { name: "Task", gid: "not-digits" } },
+      {
+        fields: ["assignee.gid"],
+        data: { assignee: { name: "Ada" } },
+      },
+      {
+        fields: ["assignee.name"],
+        data: { assignee: { gid: "123" } },
+      },
+      {
+        fields: ["assignee.gid"],
+        data: { assignee: { gid: "not-digits" } },
+      },
+      {
+        fields: ["name"],
+        data: { name: "Task", completed: "false" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const baseUrl = serverFor(() => Response.json({ data: testCase.data }));
+      const result = await new AsanaHttpClient({ baseUrl }).getTask(
+        "test-token",
+        "123",
+        testCase.fields,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.kind).toBe("invalid_response");
+    }
   });
 
   test("task 404 mapped to not_found and not retried", async () => {
@@ -635,70 +725,5 @@ describe("AsanaHttpClient", () => {
     if (!result.ok) {
       expect(result.error.kind).toBe("invalid_response");
     }
-  });
-});
-
-describe("parseTaskId", () => {
-  test("accepts digit-only GIDs", () => {
-    expect(parseTaskId("1234567890")).toEqual({
-      ok: true,
-      value: "1234567890",
-    });
-  });
-
-  test("accepts unambiguous Asana task URLs", () => {
-    expect(
-      parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134"),
-    ).toEqual({
-      ok: true,
-      value: "1215978111726134",
-    });
-    expect(
-      parseTaskId(
-        "https://app.asana.com/0/1201947864389005/1215978111726134/f",
-      ),
-    ).toEqual({
-      ok: true,
-      value: "1215978111726134",
-    });
-  });
-
-  test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
-    expect(
-      parseTaskId("https://app.asana.com/0/1201947864389005/1215978111726134/"),
-    ).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
-    expect(
-      parseTaskId(
-        "https://app.asana.com/0/1201947864389005/1215978111726134/f/",
-      ),
-    ).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
-    expect(parseTaskId("abc")).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
-    expect(parseTaskId("123a456")).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
-    expect(
-      parseTaskId(
-        "https://app.asana.com/0/1201947864389005/1215978111726134/other",
-      ),
-    ).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
-    expect(
-      parseTaskId("https://app.asana.com/0/1201947864389005/list"),
-    ).toEqual({
-      ok: false,
-      error: "Invalid task identifier",
-    });
   });
 });

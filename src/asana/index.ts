@@ -44,83 +44,59 @@ const retryAfterMs = (
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
 
-function buildTaskSchema(fields: readonly string[]) {
-  const topLevelFields = new Set(
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
+  Object.hasOwn(value, key);
+
+const isDigitOnlyGid = (value: unknown): value is string =>
+  typeof value === "string" && /^\d+$/.test(value);
+
+const isAssignee = (
+  value: unknown,
+  requestedFields: ReadonlySet<string>,
+): boolean => {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  if (hasOwn(value, "gid") && !isDigitOnlyGid(value.gid)) return false;
+  if (hasOwn(value, "name") && typeof value.name !== "string") return false;
+  for (const field of requestedFields) {
+    if (!hasOwn(value, field)) return false;
+  }
+  return true;
+};
+
+const knownTaskFieldsAreValid = (
+  value: Record<string, unknown>,
+  requestedAssigneeFields: ReadonlySet<string>,
+): boolean =>
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "notes") || typeof value.notes === "string") &&
+  (!hasOwn(value, "completed") || typeof value.completed === "boolean") &&
+  (!hasOwn(value, "due_on") ||
+    typeof value.due_on === "string" ||
+    value.due_on === null) &&
+  (!hasOwn(value, "assignee") ||
+    isAssignee(value.assignee, requestedAssigneeFields));
+
+const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
+  const requestedTopLevelFields = new Set(
+    fields.map((field) => field.split(".", 1)[0] ?? field),
+  );
+  const requestedAssigneeFields = new Set(
     fields
-      .map((f) => f.split(".")[0])
-      .filter((s): s is string => s !== undefined),
+      .filter((field) => field === "assignee.gid" || field === "assignee.name")
+      .map((field) => field.slice("assignee.".length)),
   );
-  const assigneeSubfields = new Set(
-    fields.filter((f) => f.startsWith("assignee.")).map((f) => f.slice(9)),
+  return z.custom<Task>(
+    (value) =>
+      isRecord(value) &&
+      [...requestedTopLevelFields].every((field) => hasOwn(value, field)) &&
+      knownTaskFieldsAreValid(value, requestedAssigneeFields),
   );
-
-  const shape: Record<string, z.ZodTypeAny> = {};
-
-  if (topLevelFields.has("gid")) {
-    shape.gid = z.string().regex(/^\d+$/);
-  } else {
-    shape.gid = z.string().regex(/^\d+$/).optional();
-  }
-
-  if (topLevelFields.has("name")) {
-    shape.name = z.string();
-  } else {
-    shape.name = z.string().optional();
-  }
-
-  if (topLevelFields.has("notes")) {
-    shape.notes = z.string();
-  } else {
-    shape.notes = z.string().optional();
-  }
-
-  if (topLevelFields.has("completed")) {
-    shape.completed = z.boolean();
-  } else {
-    shape.completed = z.boolean().optional();
-  }
-
-  if (topLevelFields.has("due_on")) {
-    shape.due_on = z.string().nullable();
-  } else {
-    shape.due_on = z.string().nullable().optional();
-  }
-
-  const assigneeShape: Record<string, z.ZodTypeAny> = {};
-  if (assigneeSubfields.has("gid")) {
-    assigneeShape.gid = z.string().regex(/^\d+$/);
-  } else {
-    assigneeShape.gid = z.string().regex(/^\d+$/).optional();
-  }
-  if (assigneeSubfields.has("name")) {
-    assigneeShape.name = z.string();
-  } else {
-    assigneeShape.name = z.string().optional();
-  }
-
-  const assigneeSchema = z.object(assigneeShape).passthrough().nullable();
-  if (topLevelFields.has("assignee") || assigneeSubfields.size > 0) {
-    shape.assignee = assigneeSchema;
-  } else {
-    shape.assignee = assigneeSchema.optional();
-  }
-
-  const knownTopLevel = new Set([
-    "gid",
-    "name",
-    "notes",
-    "completed",
-    "due_on",
-    "assignee",
-  ]);
-  for (const field of topLevelFields) {
-    if (!knownTopLevel.has(field)) {
-      shape[field] = z.unknown();
-    }
-  }
-
-  return z.object(shape).passthrough();
-}
+};
 
 export class AsanaHttpClient
   implements IdentityGateway, MyTasksDiscoveryGateway, TaskGateway

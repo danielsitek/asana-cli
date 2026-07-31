@@ -21,6 +21,14 @@ import {
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute } from "./index.ts";
 
+const taskReadErrorCases = <
+  const Cases extends readonly (readonly [TaskReadError["kind"], number])[],
+>(
+  cases: Exclude<TaskReadError["kind"], Cases[number][0]> extends never
+    ? Cases
+    : never,
+): Cases => cases;
+
 class InMemoryIdentity implements IdentityGateway {
   constructor(private readonly response: Result<Identity, IdentityError>) {}
 
@@ -170,6 +178,7 @@ describe("execute", () => {
     expect(helpBefore.exitCode).toBe(0);
     expect(helpBefore.stderr).toBe("");
     expect(helpBefore.stdout).toContain("Commands:");
+    expect(helpBefore.stdout).toContain("select explicit Asana fields");
     expect(helpBefore.stdout).toContain("show the authenticated Asana user");
     expect(helpAfter.exitCode).toBe(0);
     expect(helpAfter.stderr).toBe("");
@@ -989,19 +998,19 @@ describe("tasks get command", () => {
   });
 
   test("maps task reader errors correctly for other kinds", async () => {
-    const errors: Record<TaskReadError["kind"], number> = {
-      authentication: 3,
-      api: 4,
-      not_found: 4,
-      rate_limit: 5,
-      network: 4,
-      invalid_response: 4,
-    };
+    const errors = taskReadErrorCases([
+      ["authentication", 3],
+      ["api", 4],
+      ["not_found", 4],
+      ["rate_limit", 5],
+      ["network", 4],
+      ["invalid_response", 4],
+    ]);
 
-    for (const [kind, exitCode] of Object.entries(errors)) {
+    for (const [kind, exitCode] of errors) {
       const failingReader = new InMemoryTaskReader(
         err({
-          kind: kind as TaskReadError["kind"],
+          kind,
           message: `error for ${kind}`,
         }),
       );
