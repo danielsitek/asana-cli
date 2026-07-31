@@ -251,8 +251,10 @@ export const executeTaskCommentsRead = async (
   const comments: Comment[] = [];
   let scanned = 0;
   let offset = prepared.offset;
+  const requestedOffsets = new Set<string>();
 
   while (scanned < prepared.scanCap) {
+    if (offset !== undefined) requestedOffsets.add(offset);
     const remaining = prepared.scanCap - scanned;
     const page = await dependencies.reader.getTaskStories(
       token,
@@ -266,6 +268,15 @@ export const executeTaskCommentsRead = async (
     if (!page.ok) return page;
 
     const { stories, nextOffset } = page.value;
+    if (
+      nextOffset !== undefined &&
+      (stories.length === 0 || requestedOffsets.has(nextOffset))
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Story pagination did not advance",
+      });
+    }
     const storiesWithinBudget = stories.slice(0, remaining);
     const pageExceedsBudget = stories.length > storiesWithinBudget.length;
     for (let index = 0; index < storiesWithinBudget.length; index += 1) {

@@ -323,6 +323,76 @@ describe("executeTaskCommentsRead", () => {
     expect(result.value.meta.scan_truncated).toBe(false);
   });
 
+  test("treats an empty terminal page as source exhaustion", async () => {
+    const reader = new QueuedReader([ok({ stories: [] })]);
+    const result = await executeTaskCommentsRead("t", prepared(), { reader });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        comments: [],
+        meta: { scanned: 0, returned: 0, scan_truncated: false },
+      },
+    });
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  test("rejects an empty page that claims a next offset", async () => {
+    const reader = new QueuedReader([
+      ok({ stories: [], nextOffset: "unique-next-page" }),
+    ]);
+    const result = await executeTaskCommentsRead("t", prepared(), { reader });
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Story pagination did not advance",
+      },
+    });
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  test("rejects a non-advancing offset after a non-empty page", async () => {
+    const reader = new QueuedReader([
+      ok({ stories: [story(1, "assigned")], nextOffset: "same-page" }),
+    ]);
+    const result = await executeTaskCommentsRead(
+      "t",
+      prepared({ offset: "same-page" }),
+      { reader },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Story pagination did not advance",
+      },
+    });
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  test("rejects an offset cycle before requesting a duplicate page", async () => {
+    const reader = new QueuedReader([
+      ok({
+        stories: [story(1, "assigned")],
+        nextOffset: "second-page",
+      }),
+      ok({ stories: [story(2, "assigned")], nextOffset: "first-page" }),
+    ]);
+    const result = await executeTaskCommentsRead(
+      "t",
+      prepared({ offset: "first-page" }),
+      { reader },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Story pagination did not advance",
+      },
+    });
+    expect(reader.calls).toHaveLength(2);
+  });
+
   test("marks scan_truncated when the scan cap is hit and more stories are known", async () => {
     const reader = new QueuedReader([
       ok({
