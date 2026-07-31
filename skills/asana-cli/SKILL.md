@@ -15,18 +15,18 @@ Task IDs must be a digit-only GID or a URL of the exact form `https://app.asana.
 
 ## Supported workflows
 
-| Goal | Command |
-| --- | --- |
-| Show authenticated user | `asana-cli whoami` |
-| Init shared config (repo-wide) | `asana-cli config init --shared --workspace=<gid>` |
-| Init local config (per-user aliases) | `asana-cli config init --local --write-gitignore` |
-| Inspect resolved config | `asana-cli config show --json --sources`, `config get <key> --source` |
-| Re-discover My Tasks aliases (writes local config) | `asana-cli config resolve my-tasks` |
-| Read a task | `asana-cli tasks get <id> --json [--fields=...]` |
-| Read comments (bounded) | `asana-cli tasks comments <id> --max=<n> [--all] --json` |
-| Update a task | `asana-cli tasks update <id> --name=... --notes=...\|--notes-file=<path\|-> --assignee=me\|<gid>\|null --due-on=YYYY-MM-DD\|null --completed=true\|false --my-section=@alias --custom-field=@alias:<number>` |
-| Create a subtask (`--parent` and `--name` required) | `asana-cli tasks create --parent=<id> --name=... [same mutation flags]` |
-| Comment on a task | `asana-cli tasks comment <id> "text"` or `--file=<path\|->` |
+| Goal                                                | Command                                                                                                                                                                                                      |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Show authenticated user                             | `asana-cli whoami`                                                                                                                                                                                           |
+| Init shared config (repo-wide)                      | `asana-cli config init --shared --workspace=<gid>`                                                                                                                                                           |
+| Init local config (per-user aliases)                | `asana-cli config init --local --write-gitignore`                                                                                                                                                            |
+| Inspect resolved config                             | `asana-cli config show --json --sources`, `config get <key> --source`                                                                                                                                        |
+| Re-discover My Tasks aliases (writes local config)  | `asana-cli config resolve my-tasks`                                                                                                                                                                          |
+| Read a task                                         | `asana-cli tasks get <id> --json [--fields=...]`                                                                                                                                                             |
+| Read comments (bounded)                             | `asana-cli tasks comments <id> --max=<n> [--all] --json`                                                                                                                                                     |
+| Update a task                                       | `asana-cli tasks update <id> --name=... --notes=...\|--notes-file=<path\|-> --assignee=me\|<gid>\|null --due-on=YYYY-MM-DD\|null --completed=true\|false --my-section=@alias --custom-field=@alias:<number>` |
+| Create a subtask (`--parent` and `--name` required) | `asana-cli tasks create --parent=<id> --name=... [same mutation flags]`                                                                                                                                      |
+| Comment on a task                                   | `asana-cli tasks comment <id> "text"` or `--file=<path\|->`                                                                                                                                                  |
 
 Notes: `--notes` and `--notes-file` are mutually exclusive; notes are replaced wholesale, never appended. `--custom-field` is repeatable and numeric-only. `--json` and `--fields` may appear before or after the subcommand; `--fields` only applies to `tasks get`/`comments`/`comment`. On `tasks create`, `--my-section`/`--custom-field` additionally require `--assignee=me` or a digit-only GID on that same call — a new subtask has no assignee to resolve My Tasks placement against otherwise, and the command fails with exit 2.
 
@@ -36,15 +36,15 @@ With `--json`, successful reads and writes print `{ "data": ..., "meta": ... }` 
 
 Errors are always JSON on stderr, regardless of `--json`: `{ "error": { "code": "...", "message": "..." } }`. One exception: a partial multi-stage write (`tasks create`, `config init --local`, or `config resolve my-tasks`) prints its `{ completed, failed, message }` detail to **stdout** with exit 1, not stderr — check exit code, not which stream has content, to detect a partial write.
 
-| Code | Meaning |
-| --- | --- |
-| 0 | success |
-| 1 | partial write — only from `tasks create`, `config init --local`, or `config resolve my-tasks` |
-| 2 | invalid usage or configuration — fix the command, not a CLI bug |
-| 3 | authentication/authorization failure — fix the environment, not a CLI bug |
-| 4 | Asana API, not-found, or network error |
-| 5 | rate-limit or retry exhaustion |
-| 6 | unexpected internal CLI error |
+| Code | Meaning                                                                                       |
+| ---- | --------------------------------------------------------------------------------------------- |
+| 0    | success                                                                                       |
+| 1    | partial write — only from `tasks create`, `config init --local`, or `config resolve my-tasks` |
+| 2    | invalid usage or configuration — fix the command, not a CLI bug                               |
+| 3    | authentication/authorization failure — fix the environment, not a CLI bug                     |
+| 4    | Asana API, not-found, or network error                                                        |
+| 5    | rate-limit or retry exhaustion                                                                |
+| 6    | unexpected internal CLI error                                                                 |
 
 `tasks update` never returns exit 1 — it either fully succeeds (0) or fails outright (2/3/4/6).
 
