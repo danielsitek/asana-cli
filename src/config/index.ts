@@ -62,7 +62,8 @@ export type ConfigContext = Readonly<{
   home: string;
   environment: Readonly<Record<string, string | undefined>>;
   readonly fileOperations?: Readonly<{
-    rename: (oldPath: string, newPath: string) => Promise<void>;
+    rename?: (oldPath: string, newPath: string) => Promise<void>;
+    stageWrite?: (path: string, content: string) => Promise<void>;
   }>;
 }>;
 
@@ -637,6 +638,7 @@ export const initializeLocalConfig = async (
   >
 > => {
   const renameFn = context.fileOperations?.rename ?? rename;
+  const stageWriteFn = context.fileOperations?.stageWrite ?? stageWrite;
   const resolvedConfigResult = await resolveConfig(context);
   if (!resolvedConfigResult.ok) return resolvedConfigResult;
   const resolvedConfig = resolvedConfigResult.value;
@@ -770,9 +772,10 @@ export const initializeLocalConfig = async (
 
     tempGitignorePath = join(gitRoot, `.gitignore.${randomUUID()}.tmp`);
     try {
-      await stageWrite(tempGitignorePath, newContent);
+      await stageWriteFn(tempGitignorePath, newContent);
       tempFilesToCleanup.push(tempGitignorePath);
     } catch {
+      await cleanupTempFiles([...tempFilesToCleanup, tempGitignorePath]);
       return err({
         kind: "configuration",
         message: `${gitignorePath}: could not be written`,
@@ -787,10 +790,10 @@ export const initializeLocalConfig = async (
   );
   try {
     const contentString = JSON.stringify(validated.value, null, 2) + "\n";
-    await stageWrite(tempLocalConfigPath, contentString);
+    await stageWriteFn(tempLocalConfigPath, contentString);
     tempFilesToCleanup.push(tempLocalConfigPath);
   } catch {
-    await cleanupTempFiles(tempFilesToCleanup);
+    await cleanupTempFiles([...tempFilesToCleanup, tempLocalConfigPath]);
     return err({
       kind: "configuration",
       message: `${localConfigPath}: could not be written`,

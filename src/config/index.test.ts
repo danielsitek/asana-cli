@@ -551,7 +551,6 @@ describe("initializeLocalConfig", () => {
     await writeJson(join(root, ".asana-cli.json"), {
       workspace: { gid: "1201947864389005" },
     });
-    // Write an existing local config with an unrelated key
     const localPath = join(root, ".asana-cli.local.json");
     await writeJson(localPath, {
       project: { gid: "999" },
@@ -571,14 +570,12 @@ describe("initializeLocalConfig", () => {
           resourceSubtype: "number",
           isReadOnly: false,
         },
-        // Should be ignored (isReadOnly is true)
         {
           gid: "1213894072991500",
           name: "Read Only Field",
           resourceSubtype: "number",
           isReadOnly: true,
         },
-        // Should be ignored (resourceSubtype is not number)
         {
           gid: "1213894072991501",
           name: "Text Field",
@@ -601,11 +598,9 @@ describe("initializeLocalConfig", () => {
       expect(result.value.path).toBe(localPath);
     }
 
-    // Verify .gitignore was updated exactly
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toBe("/.asana-cli.local.json\n");
 
-    // Verify local config has sorted aliases, is updated, and preserves project.gid
     const localContent = JSON.parse(await readFile(localPath, "utf8"));
     expect(localContent).toEqual({
       project: { gid: "999" },
@@ -662,7 +657,6 @@ describe("initializeLocalConfig", () => {
     );
 
     expect(result.ok).toBe(true);
-    // .gitignore remains unchanged
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toBe("/.asana-cli.local.json\nsentinel\n");
   });
@@ -1153,6 +1147,96 @@ describe("initializeLocalConfig", () => {
     if (!result.ok) {
       expect(result.error.kind).toBe("configuration");
       expect(result.error.message).toContain("could not be renamed");
+    }
+  });
+
+  test("cleans up attempted temp gitignore on failed gitignore staging", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "1201947864389005" },
+    });
+
+    let attemptedTempPath: string | undefined;
+
+    const ctx: ConfigContext = {
+      cwd: root,
+      home: join(root, "home"),
+      environment: {},
+      fileOperations: {
+        stageWrite: async (path, content) => {
+          attemptedTempPath = path;
+          await writeFile(path, content, { encoding: "utf8" });
+          throw new Error("mock stage write failure");
+        },
+      },
+    };
+
+    const result = await initializeLocalConfig(
+      ctx,
+      "token",
+      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
+      { writeGitignore: true },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("configuration");
+      expect(result.error.message).toContain("could not be written");
+    }
+
+    expect(attemptedTempPath).toBeDefined();
+    if (attemptedTempPath) {
+      const exists = await stat(attemptedTempPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(exists).toBe(false);
+    }
+  });
+
+  test("cleans up all temp files on failed local config staging", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "1201947864389005" },
+    });
+
+    const attemptedPaths: string[] = [];
+
+    const ctx: ConfigContext = {
+      cwd: root,
+      home: join(root, "home"),
+      environment: {},
+      fileOperations: {
+        stageWrite: async (path, content) => {
+          attemptedPaths.push(path);
+          await writeFile(path, content, { encoding: "utf8" });
+          if (path.includes(".asana-cli.local.json")) {
+            throw new Error("mock local config stage write failure");
+          }
+        },
+      },
+    };
+
+    const result = await initializeLocalConfig(
+      ctx,
+      "token",
+      mockDiscovery({ userTaskListGid: "1", sections: [], customFields: [] }),
+      { writeGitignore: true },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("configuration");
+      expect(result.error.message).toContain("could not be written");
+    }
+
+    expect(attemptedPaths.length).toBe(2);
+    for (const path of attemptedPaths) {
+      const exists = await stat(path)
+        .then(() => true)
+        .catch(() => false);
+      expect(exists).toBe(false);
     }
   });
 });
