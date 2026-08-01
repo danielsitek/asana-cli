@@ -182,7 +182,7 @@ describe("AsanaHttpClient", () => {
     expect(attempts).toBe(2);
     expect(result.exitCode).toBe(5);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain('"code": "rate_limit"');
+    expect(result.stderr).toContain('"code":"rate_limit"');
     expect(result.stderr).not.toContain("secret");
   });
 

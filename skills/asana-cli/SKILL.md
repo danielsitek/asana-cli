@@ -36,9 +36,9 @@ Notes: `--notes` and `--notes-file` are mutually exclusive; notes are replaced w
 
 ## JSON envelope, stderr, and exit codes
 
-With `--json`, successful reads and writes print `{ "data": ..., "meta": ... }` to stdout. Diagnostics never go to stdout on success.
+With `--json`, successful reads and writes print a single compact, minified `{"data":...,"meta":...}` line to stdout. Diagnostics never go to stdout on success.
 
-Errors are always JSON on stderr, regardless of `--json`: `{ "error": { "code": "...", "message": "..." } }`. One exception: a partial multi-stage write (exit 1 below) prints its `{ completed, failed, message }` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
+Errors are always compact, minified JSON on stderr, regardless of `--json`: `{"error":{"code":"...","message":"..."}}`. One exception: a partial multi-stage write (exit 1 below) prints its compact `{"completed":...,"failed":...,"message":...}` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
 
 | Code | Meaning                                                                                       |
 | ---- | --------------------------------------------------------------------------------------------- |

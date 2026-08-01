@@ -193,7 +193,7 @@ describe("execute", () => {
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(
-      '{\n  "data": {\n    "gid": "123",\n    "name": "Ada Lovelace"\n  },\n  "meta": {}\n}\n',
+      '{"data":{"gid":"123","name":"Ada Lovelace"},"meta":{}}\n',
     );
   });
 
@@ -202,7 +202,7 @@ describe("execute", () => {
     expect(result).toEqual({
       stdout: "",
       stderr:
-        '{\n  "error": {\n    "code": "authentication",\n    "message": "ASANA_CLI_TOKEN is required"\n  }\n}\n',
+        '{"error":{"code":"authentication","message":"ASANA_CLI_TOKEN is required"}}\n',
       exitCode: 3,
     });
   });
@@ -229,8 +229,7 @@ describe("execute", () => {
     });
     expect(api).toEqual({
       stdout: "",
-      stderr:
-        '{\n  "error": {\n    "code": "api",\n    "message": "Asana API request failed"\n  }\n}\n',
+      stderr: '{"error":{"code":"api","message":"Asana API request failed"}}\n',
       exitCode: 4,
     });
 
@@ -320,7 +319,7 @@ describe("execute", () => {
     expect(await execute(["unknown"], { environment: {}, identity })).toEqual({
       stdout: "",
       stderr:
-        '{\n  "error": {\n    "code": "invalid_usage",\n    "message": "Invalid command usage"\n  }\n}\n',
+        '{"error":{"code":"invalid_usage","message":"Invalid command usage"}}\n',
       exitCode: 2,
     });
   });
@@ -333,7 +332,7 @@ describe("execute", () => {
     expect(result).toEqual({
       stdout: "",
       stderr:
-        '{\n  "error": {\n    "code": "internal_error",\n    "message": "An unexpected internal error occurred"\n  }\n}\n',
+        '{"error":{"code":"internal_error","message":"An unexpected internal error occurred"}}\n',
       exitCode: 6,
     });
     expect(result.stderr).not.toContain("secret-value");
@@ -671,6 +670,7 @@ describe("config commands", () => {
     expect(result.stderr).toBe("");
 
     const parsedOutput = JSON.parse(result.stdout);
+    expect(result.stdout).toBe(JSON.stringify(parsedOutput) + "\n");
     expect(parsedOutput.data.completed).toEqual(["gitignore"]);
     expect(parsedOutput.data.failed).toEqual(["local_config"]);
     expect(parsedOutput.data.message).toContain(
@@ -1003,7 +1003,7 @@ describe("tasks get command", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(
-      JSON.stringify({ data: dummyTask, meta: {} }, null, 2) + "\n",
+      JSON.stringify({ data: dummyTask, meta: {} }) + "\n",
     );
     expect(result.stderr).toBe("");
   });
@@ -1044,7 +1044,7 @@ describe("tasks get command", () => {
     });
 
     expect(result.exitCode).toBe(4);
-    expect(result.stderr).toContain('"code": "not_found"');
+    expect(result.stderr).toContain('"code":"not_found"');
     expect(result.stderr).toContain("Task not found");
     expect(result.stderr).not.toContain("top-secret-token");
   });
@@ -1908,7 +1908,9 @@ describe("tasks create command", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(setup.writer.calls).toHaveLength(2);
-    const stages = JSON.parse(result.stdout).meta.stages as Array<{
+    const parsedOutput = JSON.parse(result.stdout);
+    expect(result.stdout).toBe(JSON.stringify(parsedOutput) + "\n");
+    const stages = parsedOutput.meta.stages as Array<{
       status: string;
       error?: { message: string };
     }>;
@@ -2141,7 +2143,7 @@ describe("workspaces list command", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(
-      '{\n  "data": [\n    {\n      "gid": "1",\n      "name": "Acme"\n    }\n  ],\n  "meta": {}\n}\n',
+      '{"data":[{"gid":"1","name":"Acme"}],"meta":{}}\n',
     );
   });
 

@@ -201,8 +201,11 @@ and `--version`/`-v`, may appear before or after a subcommand.
 
 ### JSON output and agents
 
-`--json` output is stable and script-parseable — safe to pipe or call from an
-autonomous agent (stdout/stderr split covered in Safety below):
+`--json` output is compact, single-line, minified JSON — no `--pretty` option
+is offered; pipe through `jq` for a human-readable view. It is stable and
+script-parseable — safe to pipe or call from an autonomous agent (stdout/stderr
+split covered in Safety below). All JSON the CLI writes, including errors on
+stderr and partial-write results, is minified the same way.
 
 ```sh
 asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
