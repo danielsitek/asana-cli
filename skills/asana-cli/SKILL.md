@@ -56,6 +56,8 @@ File against `danielsitek/asana-cli` for two cases only:
 - **Bug** (`--label bug`): exit 6, or exit 4/5 on a command that this skill's own reference confirms was well-formed. Exit 2 and 3 mean fix the command or the environment — do not file for those.
 - **Feature request** (`--label enhancement`): the workflow needs something no command or flag in "Supported workflows" covers — don't work around it by calling the Asana API/SDK/MCP/curl directly.
 
+Always write the title and body in English, regardless of the conversation language.
+
 1. For a bug, rerun the exact failing command once to confirm the failure is deterministic, not a network blip. Skip this step for a feature request — there's nothing to rerun.
 2. Search for a duplicate: `gh issue list --repo danielsitek/asana-cli --search "<key phrase>" --state all` (error message for a bug, the missing capability in your own words for a feature request).
 3. If none matches, draft the body:
