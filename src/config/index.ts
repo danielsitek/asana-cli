@@ -30,6 +30,7 @@ const myTasks = z
     customFields: gidMap.optional(),
   })
   .strict();
+const assigneeDefault = z.union([z.literal("me"), gid]);
 
 const sharedConfigSchema = z
   .object({
@@ -41,6 +42,7 @@ const sharedConfigSchema = z
   .strict();
 const localConfigSchema = sharedConfigSchema.extend({
   myTasks: myTasks.optional(),
+  defaultAssignee: assigneeDefault.optional(),
 });
 const globalConfigSchema = sharedConfigSchema;
 const effectiveConfigSchema = localConfigSchema;
@@ -479,7 +481,10 @@ export const setConfigValue = async (
   const segments = pathSegments(key);
   if (!segments.ok) return segments;
   const layer =
-    requestedLayer ?? (segments.value[0] === "myTasks" ? "local" : "shared");
+    requestedLayer ??
+    (segments.value[0] === "myTasks" || segments.value[0] === "defaultAssignee"
+      ? "local"
+      : "shared");
   const resolvedConfig = await resolveConfig(context);
   if (!resolvedConfig.ok) return resolvedConfig;
   const path = targetPath(resolvedConfig.value, layer);

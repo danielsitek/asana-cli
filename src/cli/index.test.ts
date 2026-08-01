@@ -497,6 +497,39 @@ describe("config commands", () => {
     expect(safeLocal.exitCode).toBe(0);
   });
 
+  test("routes an unflagged defaultAssignee to local and rejects it for shared/global", async () => {
+    const { root, home, dependencies } = await setup();
+    await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
+
+    const unflagged = await execute(
+      ["--json", "config", "set", "defaultAssignee", "me"],
+      dependencies,
+    );
+    expect(unflagged.exitCode).toBe(0);
+    expect(JSON.parse(unflagged.stdout).data.layer).toBe("local");
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.local.json"), "utf8")),
+    ).toEqual({ defaultAssignee: "me" });
+
+    const shared = await execute(
+      ["config", "set", "defaultAssignee", "me", "--shared"],
+      dependencies,
+    );
+    expect(shared.exitCode).toBe(2);
+    expect(await Bun.file(join(root, ".asana-cli.json")).exists()).toBe(false);
+
+    const global = await execute(
+      ["config", "set", "defaultAssignee", "me", "--global"],
+      dependencies,
+    );
+    expect(global.exitCode).toBe(2);
+    expect(
+      await Bun.file(
+        join(home, ".config", "asana-cli", "config.json"),
+      ).exists(),
+    ).toBe(false);
+  });
+
   test("sets schema-typed network values and rejects malformed values", async () => {
     const { root, dependencies } = await setup();
 
@@ -1568,6 +1601,29 @@ describe("tasks update command", () => {
     expect(result.exitCode).toBe(0);
     expect(writer.calls).toHaveLength(1);
   });
+
+  test("never consults defaultAssignee, even with a malformed local config on disk", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-update-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".asana-cli.local.json"), "not valid json");
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+
+    const result = await execute(
+      ["tasks", "update", "123", "--name", "Updated"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+        configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls).toEqual([
+      { token: "secret", taskId: "123", mutation: { name: "Updated" } },
+    ]);
+  });
 });
 
 describe("tasks create command", () => {
@@ -1581,6 +1637,14 @@ describe("tasks create command", () => {
         .map((path) => rm(path, { recursive: true, force: true })),
     );
   });
+
+  const localMyTasksConfiguration = {
+    myTasks: {
+      userTaskListGid: "200",
+      sections: { in_progress: "300" },
+      customFields: { estimate: "400" },
+    },
+  } as const;
 
   const dependenciesFor = async (
     writerResponses: readonly Result<Task, TaskReadError>[] = [
@@ -1602,13 +1666,7 @@ describe("tasks create command", () => {
     );
     await writeFile(
       join(root, ".asana-cli.local.json"),
-      JSON.stringify({
-        myTasks: {
-          userTaskListGid: "200",
-          sections: { in_progress: "300" },
-          customFields: { estimate: "400" },
-        },
-      }),
+      JSON.stringify(localMyTasksConfiguration),
     );
     const creator = new InMemoryTaskCreator(creatorResponse);
     const writer = new StagedTaskWriter(writerResponses);
@@ -1643,6 +1701,20 @@ describe("tasks create command", () => {
         readFile: async () => "Prepared notes\n",
       } satisfies ExecuteDependencies,
     };
+  };
+
+  const writeLocalConfig = async (
+    dependencies: ExecuteDependencies,
+    value: Readonly<Record<string, unknown>> | string,
+  ): Promise<void> => {
+    const configuration = dependencies.configuration;
+    if (!configuration) throw new Error("configuration is required");
+    await writeFile(
+      join(configuration.cwd, ".asana-cli.local.json"),
+      typeof value === "string"
+        ? value
+        : JSON.stringify({ ...localMyTasksConfiguration, ...value }),
+    );
   };
 
   test("validates every syntactic input before accessing dependencies", async () => {
@@ -1726,6 +1798,8 @@ describe("tasks create command", () => {
         "Child",
         "--my-section",
         "@in_progress",
+        "--assignee",
+        "ada@example.com",
       ],
       [
         "tasks",
@@ -1741,6 +1815,31 @@ describe("tasks create command", () => {
       const result = await execute(argv, dependencies);
       expect(result.exitCode).toBe(2);
     }
+  });
+
+  test("fails My Tasks values without an assignable user when no configuration context exists", async () => {
+    const dependencies: ExecuteDependencies = {
+      environment: {},
+      identity,
+      get taskCreator(): never {
+        throw new Error("creator accessed");
+      },
+    };
+
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--my-section",
+        "@in_progress",
+      ],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(2);
   });
 
   test("prevalidates and applies every stage in dependency order", async () => {
@@ -1922,6 +2021,178 @@ describe("tasks create command", () => {
     ]);
     expect(stages[2]?.error?.message).toBe("Asana API request failed");
     expect(result.stdout).not.toContain("unsafe detail");
+  });
+
+  test("applies a configured default assignee of me when --assignee is omitted", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, { defaultAssignee: "me" });
+
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+    ]);
+  });
+
+  test("applies a configured default GID assignee without an identity lookup", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, { defaultAssignee: "8002" });
+    const identityThatMustNotBeCalled: IdentityGateway = {
+      getAuthenticatedUser: async () => {
+        throw new Error("identity accessed for a GID default");
+      },
+    };
+
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      { ...setup.dependencies, identity: identityThatMustNotBeCalled },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "8002" },
+    ]);
+  });
+
+  test("a configured default assignee satisfies the My Tasks precondition", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, { defaultAssignee: "me" });
+
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--my-section",
+        "@in_progress",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+      { assignee_section: "300" },
+    ]);
+  });
+
+  test("explicit --assignee overrides a configured default and skips config lookup", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, "not valid json");
+
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "9001",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+    ]);
+  });
+
+  test("explicit --assignee=me overrides a configured GID default and skips config lookup", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, "not valid json");
+
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "me",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+    ]);
+  });
+
+  test("explicit --assignee=null overrides a configured default", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, { defaultAssignee: "me" });
+
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "null",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.creator.calls).toHaveLength(1);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: null },
+    ]);
+  });
+
+  test("without a configured default a normal create remains unassigned", async () => {
+    const setup = await dependenciesFor();
+
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.creator.calls).toHaveLength(1);
+    expect(setup.writer.calls).toHaveLength(0);
+  });
+
+  test("fails before token, identity, or API access when local config is malformed", async () => {
+    const setup = await dependenciesFor();
+    await writeLocalConfig(setup.dependencies, "not valid json");
+    const dependencies: ExecuteDependencies = {
+      ...setup.dependencies,
+      get environment(): never {
+        throw new Error("environment accessed");
+      },
+      identity: {
+        getAuthenticatedUser: async () => {
+          throw new Error("identity accessed");
+        },
+      },
+      get taskCreator(): never {
+        throw new Error("creator accessed");
+      },
+    };
+
+    const result = await execute(
+      ["tasks", "create", "--parent", "123", "--name", "Child"],
+      dependencies,
+    );
+
+    expect(result.exitCode).toBe(2);
   });
 });
 
