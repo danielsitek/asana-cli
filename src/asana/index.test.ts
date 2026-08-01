@@ -940,9 +940,9 @@ describe("AsanaHttpClient", () => {
       );
     });
 
-    const result = await new AsanaHttpClient({ baseUrl }).createSubtask(
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
       "secret-token",
-      "123",
+      { kind: "subtask", parentId: "123" },
       {
         name: "Child",
         notes: "Prepared\n",
@@ -956,6 +956,35 @@ describe("AsanaHttpClient", () => {
       value: { gid: "456", name: "Child" },
     });
   });
+
+  test.each([
+    [
+      { kind: "workspace", workspaceGid: "700" } as const,
+      { name: "My task", workspace: "700" },
+    ],
+    [
+      { kind: "project", projectGid: "800" } as const,
+      { name: "Project task", projects: ["800"] },
+    ],
+  ])(
+    "creates a standalone task with its explicit target",
+    async (target, data) => {
+      const baseUrl = serverFor(async (request) => {
+        expect(request.method).toBe("POST");
+        expect(new URL(request.url).pathname).toBe("/api/1.0/tasks");
+        expect(await request.json()).toEqual({ data });
+        return Response.json({ data: { gid: "456" } }, { status: 201 });
+      });
+
+      const result = await new AsanaHttpClient({ baseUrl }).createTask(
+        "token",
+        target,
+        { name: data.name },
+      );
+
+      expect(result.ok).toBe(true);
+    },
+  );
 
   test("retries only explicit POST rate limits and honors Retry-After", async () => {
     let attempts = 0;
@@ -975,7 +1004,13 @@ describe("AsanaHttpClient", () => {
       sleep: async (milliseconds) => {
         waits.push(milliseconds);
       },
-    }).createSubtask("token", "123", { name: "Child" });
+    }).createTask(
+      "token",
+      { kind: "subtask", parentId: "123" },
+      {
+        name: "Child",
+      },
+    );
 
     expect(result.ok).toBe(true);
     expect(attempts).toBe(2);
@@ -995,7 +1030,13 @@ describe("AsanaHttpClient", () => {
         baseUrl,
         maxRetries: 3,
         sleep: async () => undefined,
-      }).createSubtask("token", "123", { name: "Child" });
+      }).createTask(
+        "token",
+        { kind: "subtask", parentId: "123" },
+        {
+          name: "Child",
+        },
+      );
 
       expect(result).toEqual({
         ok: false,
@@ -1021,7 +1062,13 @@ describe("AsanaHttpClient", () => {
       maxRetries: 3,
       requestTimeoutMs: 1,
       sleep: async () => undefined,
-    }).createSubtask("token", "123", { name: "Child" });
+    }).createTask(
+      "token",
+      { kind: "subtask", parentId: "123" },
+      {
+        name: "Child",
+      },
+    );
 
     expect(result).toEqual({
       ok: false,
@@ -1046,7 +1093,13 @@ describe("AsanaHttpClient", () => {
       sleep: async (milliseconds) => {
         waits.push(milliseconds);
       },
-    }).createSubtask("token", "123", { name: "Child" });
+    }).createTask(
+      "token",
+      { kind: "subtask", parentId: "123" },
+      {
+        name: "Child",
+      },
+    );
 
     expect(result).toEqual({
       ok: false,

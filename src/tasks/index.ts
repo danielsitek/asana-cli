@@ -64,12 +64,18 @@ export interface TaskMutationGateway {
 }
 
 export interface TaskCreationGateway {
-  createSubtask(
+  createTask(
     token: string,
-    parentId: string,
+    target: TaskCreationTarget,
     mutation: TaskMutation,
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
 }
+
+export type TaskCreationTarget = Readonly<
+  | { kind: "subtask"; parentId: string }
+  | { kind: "workspace"; workspaceGid: string }
+  | { kind: "project"; projectGid: string }
+>;
 
 type TaskMaterializationDependencies = Readonly<{
   myTasksMutationResolver?: MyTasksMutationResolver;
@@ -106,29 +112,42 @@ export type PreparedTaskUpdate = Readonly<{
 }>;
 
 export type TaskCreateOptions = TaskUpdateOptions &
-  Readonly<{ parent?: string }>;
+  Readonly<{ parent?: string; project?: string }>;
 
-type DefaultAssigneeError = Readonly<{
+type TaskCreateConfigError = Readonly<{
   kind: "configuration";
   message: string;
 }>;
 
 type TaskCreatePreparationError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
-  | DefaultAssigneeError;
+  | TaskCreateConfigError;
 
-type DefaultAssigneeResolver = () => Promise<
-  Result<string | undefined, DefaultAssigneeError>
+type TaskCreateConfig = Readonly<{
+  defaultAssignee?: string;
+  workspaceGid?: string;
+}>;
+
+type TaskCreateConfigResolver = () => Promise<
+  Result<TaskCreateConfig, TaskCreateConfigError>
 >;
 
 export type PreparedTaskCreate = Readonly<{
-  parentId: string;
+  target: TaskCreationTarget;
   mutation: TaskMutation & Readonly<{ name: string }>;
   notesFile?: string;
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
   customFields: readonly PreparedCustomField[];
 }>;
+
+type ParsedTaskCreate = Omit<PreparedTaskCreate, "target"> &
+  Readonly<{ target?: TaskCreationTarget }>;
+
+const withCreationTarget = (
+  prepared: ParsedTaskCreate,
+  target: TaskCreationTarget,
+): PreparedTaskCreate => ({ ...prepared, target });
 
 export type TaskCreationStageName =
   | "create"
@@ -248,6 +267,19 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
+  const prepared = prepareTaskMutation(options);
+  if (!prepared.ok) return prepared;
+  return ok({ taskId: taskId.value, ...prepared.value });
+};
+
+type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;
+
+const prepareTaskMutation = (
+  options: TaskUpdateOptions,
+): Result<
+  PreparedTaskMutation,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
   const supplied = Object.entries(options).some(
     ([key, value]) =>
       value !== undefined && (key !== "customFields" || value.length > 0),
@@ -344,7 +376,6 @@ export const prepareTaskUpdate = (
   }
 
   return ok({
-    taskId: taskId.value,
     mutation,
     ...(options.notesFile === undefined
       ? {}
@@ -358,21 +389,57 @@ export const prepareTaskUpdate = (
 const parseTaskCreateInput = (
   options: TaskCreateOptions,
 ): Result<
-  PreparedTaskCreate,
+  ParsedTaskCreate,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
-  if (options.parent === undefined) {
-    return err({ kind: "invalid_usage", message: "--parent is required" });
-  }
   if (options.name === undefined) {
     return err({ kind: "invalid_usage", message: "--name is required" });
   }
+  if (options.parent !== undefined && options.project !== undefined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--parent and --project are mutually exclusive",
+    });
+  }
+  if (options.project !== undefined && options.mySection !== undefined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--project and --my-section are mutually exclusive",
+    });
+  }
+  if (
+    options.parent === undefined &&
+    options.project === undefined &&
+    options.mySection === undefined
+  ) {
+    return err({
+      kind: "invalid_usage",
+      message: "One of --parent, --my-section, or --project is required",
+    });
+  }
 
-  const prepared = prepareTaskUpdate(options.parent, options);
+  const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
 
+  let target: TaskCreationTarget | undefined;
+  if (options.parent !== undefined) {
+    const parentId = parseTaskId(options.parent);
+    if (!parentId.ok) {
+      return err({ kind: "invalid_usage", message: parentId.error });
+    }
+    target = { kind: "subtask", parentId: parentId.value };
+  } else if (options.project !== undefined) {
+    if (!/^\d+$/.test(options.project)) {
+      return err({
+        kind: "invalid_usage",
+        message: "--project must be a digit-only project GID",
+      });
+    }
+    target = { kind: "project", projectGid: options.project };
+  }
+
   return ok({
-    parentId: prepared.value.taskId,
+    ...(target === undefined ? {} : { target }),
     mutation: {
       ...prepared.value.mutation,
       name: options.name,
@@ -422,7 +489,7 @@ const finalizeTaskCreate = (
     return err({
       kind: "invalid_usage",
       message:
-        "My Tasks values on a new subtask require --assignee=me or a user GID",
+        "My Tasks values on a new task require --assignee=me or a user GID",
     });
   }
   return ok(effective);
@@ -430,28 +497,41 @@ const finalizeTaskCreate = (
 
 export const prepareTaskCreate = (
   options: TaskCreateOptions,
-): Result<
-  PreparedTaskCreate,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
+): Result<PreparedTaskCreate, TaskCreatePreparationError> => {
   const prepared = parseTaskCreateInput(options);
   if (!prepared.ok) return prepared;
-  return finalizeTaskCreate(prepared.value);
+  if (prepared.value.target === undefined) {
+    return err({
+      kind: "configuration",
+      message: "workspace.gid is required to create a task in My Tasks",
+    });
+  }
+  return finalizeTaskCreate(
+    withCreationTarget(prepared.value, prepared.value.target),
+  );
 };
 
-export const prepareTaskCreateWithDefault = async (
+export const prepareTaskCreateWithConfig = async (
   options: TaskCreateOptions,
-  resolveDefaultAssignee?: DefaultAssigneeResolver,
+  resolveConfig?: TaskCreateConfigResolver,
 ): Promise<Result<PreparedTaskCreate, TaskCreatePreparationError>> => {
   const prepared = parseTaskCreateInput(options);
   if (!prepared.ok) return prepared;
-  if (options.assignee !== undefined || !resolveDefaultAssignee) {
-    return finalizeTaskCreate(prepared.value);
+  const needsDefaultAssignee = options.assignee === undefined;
+  if (
+    prepared.value.target !== undefined &&
+    (!needsDefaultAssignee || !resolveConfig)
+  ) {
+    return finalizeTaskCreate(
+      withCreationTarget(prepared.value, prepared.value.target),
+    );
   }
 
-  const resolved = await resolveDefaultAssignee();
+  const resolved = resolveConfig
+    ? await resolveConfig()
+    : ok<TaskCreateConfig>({});
   if (!resolved.ok) return resolved;
-  const defaultAssignee = resolved.value;
+  const { defaultAssignee, workspaceGid } = resolved.value;
   if (
     defaultAssignee !== undefined &&
     defaultAssignee !== "me" &&
@@ -462,7 +542,18 @@ export const prepareTaskCreateWithDefault = async (
       message: "defaultAssignee must be me or a digit-only user GID",
     });
   }
-  return finalizeTaskCreate(prepared.value, defaultAssignee);
+  let target = prepared.value.target;
+  if (target === undefined) {
+    if (workspaceGid === undefined || !/^\d+$/.test(workspaceGid)) {
+      return err({
+        kind: "configuration",
+        message: "workspace.gid is required to create a task in My Tasks",
+      });
+    }
+    target = { kind: "workspace", workspaceGid };
+  }
+  const withTarget = withCreationTarget(prepared.value, target);
+  return finalizeTaskCreate(withTarget, defaultAssignee);
 };
 
 const publicTaskError = (
@@ -592,13 +683,13 @@ export const executeTaskCreation = async (
   if (hasStagedWrites && dependencies.writer === undefined) {
     return err({
       kind: "internal_error",
-      message: "Task writer is required for staged subtask mutations",
+      message: "Task writer is required for staged task mutations",
     });
   }
 
-  const created = await dependencies.creator.createSubtask(
+  const created = await dependencies.creator.createTask(
     token,
-    prepared.parentId,
+    prepared.target,
     createMutation,
   );
   if (!created.ok) return created;

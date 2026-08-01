@@ -22,6 +22,7 @@ import type {
 import {
   type Task,
   type TaskCreationGateway,
+  type TaskCreationTarget,
   type TaskGateway,
   type TaskMutation,
   type TaskMutationGateway,
@@ -96,7 +97,11 @@ class InMemoryTaskWriter implements TaskMutationGateway {
 
 class InMemoryTaskCreator implements TaskCreationGateway {
   public calls: Array<
-    Readonly<{ token: string; parentId: string; mutation: TaskMutation }>
+    Readonly<{
+      token: string;
+      target: TaskCreationTarget;
+      mutation: TaskMutation;
+    }>
   > = [];
 
   constructor(
@@ -106,12 +111,12 @@ class InMemoryTaskCreator implements TaskCreationGateway {
     >,
   ) {}
 
-  async createSubtask(
+  async createTask(
     token: string,
-    parentId: string,
+    target: TaskCreationTarget,
     mutation: TaskMutation,
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
-    this.calls.push({ token, parentId, mutation });
+    this.calls.push({ token, target, mutation });
     return this.response;
   }
 }
@@ -1842,6 +1847,51 @@ describe("tasks create command", () => {
     expect(result.exitCode).toBe(2);
   });
 
+  test("lists every landing alternative for a bare create", async () => {
+    const result = await execute(["tasks", "create", "--name", "Task"], {
+      environment: {},
+      identity,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--parent");
+    expect(result.stderr).toContain("--my-section");
+    expect(result.stderr).toContain("--project");
+  });
+
+  test("creates standalone My Tasks and project tasks", async () => {
+    const myTasksSetup = await dependenciesFor();
+    const myTasksResult = await execute(
+      [
+        "tasks",
+        "create",
+        "--name",
+        "My task",
+        "--assignee",
+        "me",
+        "--my-section",
+        "@in_progress",
+      ],
+      myTasksSetup.dependencies,
+    );
+    expect(myTasksResult.exitCode).toBe(0);
+    expect(myTasksSetup.creator.calls[0]?.target).toEqual({
+      kind: "workspace",
+      workspaceGid: "100",
+    });
+
+    const projectSetup = await dependenciesFor();
+    const projectResult = await execute(
+      ["tasks", "create", "--name", "Project task", "--project", "800"],
+      projectSetup.dependencies,
+    );
+    expect(projectResult.exitCode).toBe(0);
+    expect(projectSetup.creator.calls[0]?.target).toEqual({
+      kind: "project",
+      projectGid: "800",
+    });
+  });
+
   test("prevalidates and applies every stage in dependency order", async () => {
     const setup = await dependenciesFor();
     const result = await execute(
@@ -1875,7 +1925,7 @@ describe("tasks create command", () => {
     expect(setup.creator.calls).toEqual([
       {
         token: "secret",
-        parentId: "123",
+        target: { kind: "subtask", parentId: "123" },
         mutation: {
           name: "Child",
           notes: "Prepared notes\n",
@@ -1975,7 +2025,7 @@ describe("tasks create command", () => {
     );
     expect(result.exitCode).toBe(6);
     expect(result.stderr).toContain(
-      "Task writer is required for staged subtask mutations",
+      "Task writer is required for staged task mutations",
     );
     expect(setup.creator.calls).toHaveLength(0);
   });

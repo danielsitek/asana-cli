@@ -37,7 +37,7 @@ import {
   executeTaskCreation,
   parseTaskId,
   prepareTaskUpdate,
-  prepareTaskCreateWithDefault,
+  prepareTaskCreateWithConfig,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -770,14 +770,18 @@ export const execute = async (
   const tasksCreate = withTaskMutationOptions(
     tasks
       .command("create")
-      .description("create a subtask")
-      .option("--parent <id>", "parent task GID or URL"),
+      .description("create a task or subtask")
+      .option("--parent <id>", "parent task GID or URL")
+      .option("--project <gid>", "destination project GID"),
   ).action(
-    async (options: TaskMutationCliOptions & Readonly<{ parent?: string }>) => {
+    async (
+      options: TaskMutationCliOptions &
+        Readonly<{ parent?: string; project?: string }>,
+    ) => {
       invoked = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
-      const prepared = await prepareTaskCreateWithDefault(
+      const prepared = await prepareTaskCreateWithConfig(
         {
           ...options,
           ...(options.customField ? { customFields: options.customField } : {}),
@@ -785,13 +789,22 @@ export const execute = async (
         async () => {
           const configuration = dependencies.configuration;
           if (!configuration) {
-            return { ok: true as const, value: undefined };
+            return { ok: true as const, value: {} };
           }
           const resolved = await resolveConfig(configuration);
           return resolved.ok
             ? {
                 ok: true as const,
-                value: resolved.value.value.defaultAssignee,
+                value: {
+                  ...(resolved.value.value.defaultAssignee === undefined
+                    ? {}
+                    : {
+                        defaultAssignee: resolved.value.value.defaultAssignee,
+                      }),
+                  ...(resolved.value.value.workspace?.gid === undefined
+                    ? {}
+                    : { workspaceGid: resolved.value.value.workspace.gid }),
+                },
               }
             : resolved;
         },
