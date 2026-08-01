@@ -22,11 +22,6 @@ curl -L https://github.com/danielsitek/asana-cli/releases/download/v0.1.0/asana-
 brew install danielsitek/asana-cli-local/asana-cli
 ```
 
-The formula is generated per release and points at architecture-specific
-archives (`darwin-arm64`, `darwin-x64`) with embedded SHA-256 checksums. The
-local tap is necessary because Homebrew 6 no longer installs a standalone
-Formula file directly. A dedicated public tap may replace this step later.
-
 ### Direct archive (macOS, Linux, WSL2)
 
 Download the archive for your platform from the release assets, verify its
@@ -92,19 +87,12 @@ automatically from a `.env` file.
    description such as `asana-cli`.
 3. Copy the token when Asana displays it and store it as a secret.
 
-Asana documents PATs as long-lived credentials that act with the same access
-as the user who created them. There is no separate CLI permission model: the
-Asana account must be able to read and edit the relevant tasks, access its My
-Tasks list and sections, read its custom-field definitions, and read and
-write task comments. See Asana's
+The Asana account must be able to read and edit the relevant tasks, access
+its My Tasks list and sections, read its custom-field definitions, and read
+and write task comments — PATs act with the same access as the creating
+user. See Asana's
 [PAT guide](https://developers.asana.com/docs/personal-access-token) and
 [authentication guide](https://developers.asana.com/docs/authentication).
-
-Where Asana documents resource scopes, the API operations used correspond to
-`users:read`, `tasks:read`, `tasks:write`, `stories:read`, `stories:write`,
-`projects:read`, and `custom_fields:read`. These scopes are useful when OAuth
-is added later; PAT creation currently relies on the permissions of the
-creating user. Read and write scopes do not imply each other.
 
 ### Set the token
 
@@ -114,17 +102,14 @@ For one shell invocation:
 ASANA_CLI_TOKEN="your-token" asana-cli whoami
 ```
 
-For a development shell:
+For persistent use:
 
 ```sh
-export ASANA_CLI_TOKEN="your-token"
-asana-cli whoami
+echo 'export ASANA_CLI_TOKEN="your-token"' >> ~/.zshrc
 ```
 
-Adding the export to `.zshrc` is possible but stores the token as plaintext.
-Prefer a password manager, CI secret store, or another mechanism that injects
-the variable only where needed. Never commit the token. If it is exposed,
-revoke it in the Asana developer console and create a replacement.
+Never commit the token; if exposed, revoke it in the Asana developer console
+and create a replacement.
 
 ## Configuration
 
@@ -209,9 +194,8 @@ and `--version`/`-v`, may appear before or after a subcommand.
 
 ### JSON output and agents
 
-`--json` produces a stable, script-parseable envelope on stdout; diagnostics
-and errors always go to stderr, never stdout. This makes every command safe
-to pipe or call from an autonomous agent:
+`--json` output is stable and script-parseable — safe to pipe or call from an
+autonomous agent (stdout/stderr split covered in Safety below):
 
 ```sh
 asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
