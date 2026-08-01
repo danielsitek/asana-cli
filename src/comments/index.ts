@@ -26,13 +26,17 @@ export type TaskCommentListMeta = Readonly<{
   next_offset?: string;
 }>;
 
+type TaskCommentsReadMode =
+  | Readonly<{ kind: "capped"; resultCap: number; offset?: string }>
+  | Readonly<{ kind: "all"; offset?: string }>
+  | Readonly<{ kind: "latest"; count: number }>;
+
 export type PreparedTaskCommentsRead = Readonly<{
   taskId: string;
   outputFields: readonly string[];
   requestFields: readonly string[];
   scanCap: number;
-  resultCap?: number;
-  offset?: string;
+  mode: TaskCommentsReadMode;
 }>;
 
 export type PreparedTaskCommentCreate = Readonly<{
@@ -43,6 +47,7 @@ export type PreparedTaskCommentCreate = Readonly<{
 }>;
 
 export interface TaskStoryGateway {
+  /** Returns each page in Asana's chronological story order (oldest first). */
   getTaskStories(
     token: string,
     taskId: string,
@@ -74,6 +79,10 @@ export interface TaskCommentCreationGateway {
 export type TaskCommentCreateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
   | TaskReadError;
+
+export type TaskCommentsReadError =
+  | TaskReadError
+  | Readonly<{ kind: "scan_limit"; message: string }>;
 
 export const DEFAULT_COMMENT_FIELDS = [
   "gid",
@@ -143,6 +152,7 @@ export const prepareTaskCommentsRead = (
     max?: string;
     offset?: string;
     all?: boolean;
+    latest?: string;
   }>,
 ): Result<
   PreparedTaskCommentsRead,
@@ -156,6 +166,31 @@ export const prepareTaskCommentsRead = (
 
   if (options.offset === "") {
     return err({ kind: "invalid_usage", message: "--offset cannot be empty" });
+  }
+
+  let latestValue: number | undefined;
+  if (options.latest !== undefined) {
+    if (options.all) {
+      return err({
+        kind: "invalid_usage",
+        message: "--latest and --all are mutually exclusive",
+      });
+    }
+    if (options.offset !== undefined) {
+      return err({
+        kind: "invalid_usage",
+        message: "--latest and --offset are mutually exclusive",
+      });
+    }
+    if (options.max === undefined) {
+      return err({
+        kind: "invalid_usage",
+        message: "--latest requires --max",
+      });
+    }
+    const parsedLatest = parsePositiveSafeInteger(options.latest, "--latest");
+    if (!parsedLatest.ok) return parsedLatest;
+    latestValue = parsedLatest.value;
   }
 
   if (options.all && options.max === undefined) {
@@ -176,8 +211,23 @@ export const prepareTaskCommentsRead = (
     outputFields: outputFields.value,
     requestFields: withInternalFields(outputFields.value),
     scanCap: scanCap.value,
-    ...(options.offset === undefined ? {} : { offset: options.offset }),
-    ...(options.all ? {} : { resultCap: DEFAULT_RESULT_CAP }),
+    mode:
+      latestValue !== undefined
+        ? { kind: "latest", count: latestValue }
+        : options.all
+          ? {
+              kind: "all",
+              ...(options.offset === undefined
+                ? {}
+                : { offset: options.offset }),
+            }
+          : {
+              kind: "capped",
+              resultCap: DEFAULT_RESULT_CAP,
+              ...(options.offset === undefined
+                ? {}
+                : { offset: options.offset }),
+            },
   });
 };
 
@@ -191,13 +241,26 @@ export const executeTaskCommentsRead = async (
       comments: readonly Comment[];
       meta: TaskCommentListMeta;
     }>,
-    TaskReadError
+    TaskCommentsReadError
   >
 > => {
+  const latestCap =
+    prepared.mode.kind === "latest" ? prepared.mode.count : undefined;
+  const resultCap =
+    prepared.mode.kind === "capped" ? prepared.mode.resultCap : undefined;
   const comments: Comment[] = [];
   let scanned = 0;
-  let offset = prepared.offset;
+  let offset =
+    prepared.mode.kind === "latest" ? undefined : prepared.mode.offset;
   const requestedOffsets = new Set<string>();
+  const completedLatestRead = () => ({
+    comments: [...comments].reverse(),
+    meta: {
+      scanned,
+      returned: comments.length,
+      scan_truncated: false as const,
+    },
+  });
 
   while (scanned < prepared.scanCap) {
     if (offset !== undefined) requestedOffsets.add(offset);
@@ -225,41 +288,59 @@ export const executeTaskCommentsRead = async (
     }
     const storiesWithinBudget = stories.slice(0, remaining);
     const pageExceedsBudget = stories.length > storiesWithinBudget.length;
-    for (let index = 0; index < storiesWithinBudget.length; index += 1) {
-      const story = storiesWithinBudget[index]!;
-      scanned += 1;
-      if (story.resource_subtype === "comment_added") {
-        comments.push(projectCommentFields(story, prepared.outputFields));
-        if (
-          prepared.resultCap !== undefined &&
-          comments.length >= prepared.resultCap
-        ) {
-          const stoppedMidPage = index < stories.length - 1;
-          const scanCapReached = scanned >= prepared.scanCap;
-          const scanTruncated =
-            scanCapReached && (stoppedMidPage || nextOffset !== undefined);
-          return ok({
-            comments,
-            meta: {
-              scanned,
-              returned: comments.length,
-              scan_truncated: scanTruncated,
-              ...(!stoppedMidPage && nextOffset !== undefined
-                ? { next_offset: nextOffset }
-                : {}),
-            },
-          });
+
+    if (latestCap === undefined) {
+      for (let index = 0; index < storiesWithinBudget.length; index += 1) {
+        const story = storiesWithinBudget[index]!;
+        scanned += 1;
+        if (story.resource_subtype === "comment_added") {
+          comments.push(projectCommentFields(story, prepared.outputFields));
+          if (resultCap !== undefined && comments.length >= resultCap) {
+            const stoppedMidPage = index < stories.length - 1;
+            const scanCapReached = scanned >= prepared.scanCap;
+            const scanTruncated =
+              scanCapReached && (stoppedMidPage || nextOffset !== undefined);
+            return ok({
+              comments,
+              meta: {
+                scanned,
+                returned: comments.length,
+                scan_truncated: scanTruncated,
+                ...(!stoppedMidPage && nextOffset !== undefined
+                  ? { next_offset: nextOffset }
+                  : {}),
+              },
+            });
+          }
+        }
+      }
+    } else {
+      for (const story of storiesWithinBudget) {
+        scanned += 1;
+        if (story.resource_subtype === "comment_added") {
+          comments.push(projectCommentFields(story, prepared.outputFields));
+          if (comments.length > latestCap) comments.shift();
         }
       }
     }
 
     if (scanned >= prepared.scanCap) {
+      const truncated = pageExceedsBudget || nextOffset !== undefined;
+      if (latestCap !== undefined) {
+        if (truncated) {
+          return err({
+            kind: "scan_limit",
+            message: `Reached --max=${prepared.scanCap} before confirming the newest ${latestCap} comment(s); rerun with a higher --max`,
+          });
+        }
+        return ok(completedLatestRead());
+      }
       return ok({
         comments,
         meta: {
           scanned,
           returned: comments.length,
-          scan_truncated: pageExceedsBudget || nextOffset !== undefined,
+          scan_truncated: truncated,
           ...(pageExceedsBudget || nextOffset === undefined
             ? {}
             : { next_offset: nextOffset }),
@@ -268,26 +349,30 @@ export const executeTaskCommentsRead = async (
     }
 
     if (nextOffset === undefined) {
-      return ok({
+      return latestCap === undefined
+        ? ok({
+            comments,
+            meta: {
+              scanned,
+              returned: comments.length,
+              scan_truncated: false,
+            },
+          })
+        : ok(completedLatestRead());
+    }
+    offset = nextOffset;
+  }
+
+  return latestCap === undefined
+    ? ok({
         comments,
         meta: {
           scanned,
           returned: comments.length,
           scan_truncated: false,
         },
-      });
-    }
-    offset = nextOffset;
-  }
-
-  return ok({
-    comments,
-    meta: {
-      scanned,
-      returned: comments.length,
-      scan_truncated: false,
-    },
-  });
+      })
+    : ok(completedLatestRead());
 };
 
 export const prepareTaskCommentCreate = (
