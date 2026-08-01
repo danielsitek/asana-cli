@@ -37,7 +37,7 @@ import {
   executeTaskCreation,
   parseTaskId,
   prepareTaskUpdate,
-  prepareTaskCreate,
+  prepareTaskCreateWithDefault,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -777,12 +777,30 @@ export const execute = async (
       invoked = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
-      const prepared = prepareTaskCreate({
-        ...options,
-        ...(options.customField ? { customFields: options.customField } : {}),
-      });
+      const prepared = await prepareTaskCreateWithDefault(
+        {
+          ...options,
+          ...(options.customField ? { customFields: options.customField } : {}),
+        },
+        async () => {
+          const configuration = dependencies.configuration;
+          if (!configuration) {
+            return { ok: true as const, value: undefined };
+          }
+          const resolved = await resolveConfig(configuration);
+          return resolved.ok
+            ? {
+                ok: true as const,
+                value: resolved.value.value.defaultAssignee,
+              }
+            : resolved;
+        },
+      );
       if (!prepared.ok) {
-        result = usageError(prepared.error.message);
+        result =
+          prepared.error.kind === "configuration"
+            ? renderConfigFailure(prepared.error)
+            : usageError(prepared.error.message);
         return;
       }
 

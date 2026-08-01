@@ -108,6 +108,19 @@ export type PreparedTaskUpdate = Readonly<{
 export type TaskCreateOptions = TaskUpdateOptions &
   Readonly<{ parent?: string }>;
 
+type DefaultAssigneeError = Readonly<{
+  kind: "configuration";
+  message: string;
+}>;
+
+type TaskCreatePreparationError =
+  | Readonly<{ kind: "invalid_usage"; message: string }>
+  | DefaultAssigneeError;
+
+type DefaultAssigneeResolver = () => Promise<
+  Result<string | undefined, DefaultAssigneeError>
+>;
+
 export type PreparedTaskCreate = Readonly<{
   parentId: string;
   mutation: TaskMutation & Readonly<{ name: string }>;
@@ -342,7 +355,7 @@ export const prepareTaskUpdate = (
   });
 };
 
-export const prepareTaskCreate = (
+const parseTaskCreateInput = (
   options: TaskCreateOptions,
 ): Result<
   PreparedTaskCreate,
@@ -357,20 +370,6 @@ export const prepareTaskCreate = (
 
   const prepared = prepareTaskUpdate(options.parent, options);
   if (!prepared.ok) return prepared;
-  const hasMyTasksMutation =
-    prepared.value.mySection !== undefined ||
-    prepared.value.customFields.length > 0;
-  if (
-    hasMyTasksMutation &&
-    options.assignee !== "me" &&
-    !/^\d+$/.test(options.assignee ?? "")
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "My Tasks values on a new subtask require --assignee=me or a user GID",
-    });
-  }
 
   return ok({
     parentId: prepared.value.taskId,
@@ -387,6 +386,83 @@ export const prepareTaskCreate = (
       : { mySection: prepared.value.mySection }),
     customFields: prepared.value.customFields,
   });
+};
+
+const applyDefaultAssignee = (
+  prepared: PreparedTaskCreate,
+  defaultAssignee: string | undefined,
+): PreparedTaskCreate => {
+  if (prepared.resolveAssigneeMe || prepared.mutation.assignee !== undefined) {
+    return prepared;
+  }
+  if (defaultAssignee === undefined) return prepared;
+  return defaultAssignee === "me"
+    ? { ...prepared, resolveAssigneeMe: true }
+    : {
+        ...prepared,
+        mutation: { ...prepared.mutation, assignee: defaultAssignee },
+      };
+};
+
+const finalizeTaskCreate = (
+  prepared: PreparedTaskCreate,
+  defaultAssignee?: string,
+): Result<
+  PreparedTaskCreate,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const effective = applyDefaultAssignee(prepared, defaultAssignee);
+  const hasMyTasksMutation =
+    effective.mySection !== undefined || effective.customFields.length > 0;
+  const hasAssignableUser =
+    effective.resolveAssigneeMe ||
+    (effective.mutation.assignee !== undefined &&
+      effective.mutation.assignee !== null);
+  if (hasMyTasksMutation && !hasAssignableUser) {
+    return err({
+      kind: "invalid_usage",
+      message:
+        "My Tasks values on a new subtask require --assignee=me or a user GID",
+    });
+  }
+  return ok(effective);
+};
+
+export const prepareTaskCreate = (
+  options: TaskCreateOptions,
+): Result<
+  PreparedTaskCreate,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const prepared = parseTaskCreateInput(options);
+  if (!prepared.ok) return prepared;
+  return finalizeTaskCreate(prepared.value);
+};
+
+export const prepareTaskCreateWithDefault = async (
+  options: TaskCreateOptions,
+  resolveDefaultAssignee?: DefaultAssigneeResolver,
+): Promise<Result<PreparedTaskCreate, TaskCreatePreparationError>> => {
+  const prepared = parseTaskCreateInput(options);
+  if (!prepared.ok) return prepared;
+  if (options.assignee !== undefined || !resolveDefaultAssignee) {
+    return finalizeTaskCreate(prepared.value);
+  }
+
+  const resolved = await resolveDefaultAssignee();
+  if (!resolved.ok) return resolved;
+  const defaultAssignee = resolved.value;
+  if (
+    defaultAssignee !== undefined &&
+    defaultAssignee !== "me" &&
+    !/^\d+$/.test(defaultAssignee)
+  ) {
+    return err({
+      kind: "configuration",
+      message: "defaultAssignee must be me or a digit-only user GID",
+    });
+  }
+  return finalizeTaskCreate(prepared.value, defaultAssignee);
 };
 
 const publicTaskError = (

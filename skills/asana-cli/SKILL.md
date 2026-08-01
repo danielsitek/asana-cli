@@ -32,7 +32,11 @@ Every `<id>` below must be a digit-only GID or a URL of the exact form `https://
 | Create a subtask (`--parent` and `--name` required) | `asana-cli tasks create --parent=<id> --name=... [same mutation flags]`                                                                                                                                      |
 | Comment on a task                                   | `asana-cli tasks comment <id> "text"` or `--file=<path\|->`                                                                                                                                                  |
 
-Notes: `--notes` and `--notes-file` are mutually exclusive; notes are replaced wholesale, never appended. `--custom-field` is repeatable and numeric-only. `--json` and `--fields` may appear before or after the subcommand; `--fields` only applies to `tasks get`/`comments`/`comment`. On `tasks create`, `--my-section`/`--custom-field` additionally require `--assignee=me` or a digit-only GID on that same call, or the command fails with exit 2.
+Notes: `--notes` and `--notes-file` are mutually exclusive; notes are replaced wholesale, never appended. `--custom-field` is repeatable and numeric-only. `--json` and `--fields` may appear before or after the subcommand; `--fields` only applies to `tasks get`/`comments`/`comment`. On `tasks create`, `--my-section`/`--custom-field` require an assignable user — either `--assignee=me`/a digit-only GID on that same call, or a configured `defaultAssignee` (below) — or the command fails with exit 2.
+
+## Personal default assignee (`tasks create` only)
+
+`asana-cli config set defaultAssignee me|<gid>` stores a personal default in the gitignored local config. `tasks create` applies it only when `--assignee` is omitted; an explicit `--assignee`, including `--assignee=null`, always overrides it and skips the config lookup entirely. `tasks update` never reads or applies this default. Invalid values (anything other than `me` or a digit-only GID) are rejected with no file written; `--shared`/`--global` reject the key the same way.
 
 ## JSON envelope, stderr, and exit codes
 

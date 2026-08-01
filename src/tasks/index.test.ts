@@ -8,6 +8,7 @@ import {
   parseTaskId,
   prepareTaskUpdate,
   prepareTaskCreate,
+  prepareTaskCreateWithDefault,
   validateFieldList,
   type PreparedTaskUpdate,
   type PreparedTaskCreate,
@@ -510,6 +511,83 @@ describe("task creation preparation", () => {
         }).ok,
       ).toBe(false);
     }
+  });
+});
+
+describe("prepareTaskCreateWithDefault", () => {
+  const optionsWithMySection = {
+    parent: "123",
+    name: "Child",
+    mySection: "300",
+  } as const;
+
+  test("applies validated me and GID defaults", async () => {
+    const ownTask = await prepareTaskCreateWithDefault(
+      optionsWithMySection,
+      async () => ok("me"),
+    );
+    expect(ownTask.ok && ownTask.value.resolveAssigneeMe).toBe(true);
+
+    const delegatedTask = await prepareTaskCreateWithDefault(
+      optionsWithMySection,
+      async () => ok("9001"),
+    );
+    expect(delegatedTask.ok && delegatedTask.value.mutation.assignee).toBe(
+      "9001",
+    );
+  });
+
+  test("never resolves a default for an explicit assignee", async () => {
+    for (const assignee of ["me", "9001", "null"] as const) {
+      let resolverCalls = 0;
+      const prepared = await prepareTaskCreateWithDefault(
+        { parent: "123", name: "Child", assignee },
+        async () => {
+          resolverCalls += 1;
+          return ok("8002");
+        },
+      );
+      expect(prepared.ok).toBe(true);
+      expect(resolverCalls).toBe(0);
+    }
+  });
+
+  test("keeps an explicit null from satisfying the My Tasks precondition", async () => {
+    let resolverCalls = 0;
+    const prepared = await prepareTaskCreateWithDefault(
+      { ...optionsWithMySection, assignee: "null" },
+      async () => {
+        resolverCalls += 1;
+        return ok("me");
+      },
+    );
+    expect(prepared.ok).toBe(false);
+    expect(resolverCalls).toBe(0);
+  });
+
+  test("rejects an invalid resolved default", async () => {
+    const prepared = await prepareTaskCreateWithDefault(
+      { parent: "123", name: "Child" },
+      async () => ok("not-a-gid"),
+    );
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "configuration",
+        message: "defaultAssignee must be me or a digit-only user GID",
+      },
+    });
+  });
+
+  test("propagates default resolution failures", async () => {
+    const prepared = await prepareTaskCreateWithDefault(
+      { parent: "123", name: "Child" },
+      async () => err({ kind: "configuration", message: "invalid config" }),
+    );
+    expect(prepared).toEqual({
+      ok: false,
+      error: { kind: "configuration", message: "invalid config" },
+    });
   });
 });
 

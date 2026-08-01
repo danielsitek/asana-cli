@@ -357,6 +357,100 @@ describe("configuration writes", () => {
     ).toEqual({ myTasks: { sections: { review: "300" } } });
   });
 
+  test("writes defaultAssignee locally by default and resolves it in effective config", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".gitignore"),
+      "dist/\n/.asana-cli.local.json\n",
+    );
+
+    const written = await setConfigValue(
+      context(root, home),
+      "defaultAssignee",
+      "me",
+    );
+    expect(written.ok).toBe(true);
+    if (written.ok) expect(written.value.layer).toBe("local");
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.local.json"), "utf8")),
+    ).toEqual({ defaultAssignee: "me" });
+
+    const resolved = await resolveConfig(context(root, home));
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.value.defaultAssignee).toBe("me");
+  });
+
+  test("writes a GID defaultAssignee with --local and resolves it", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".gitignore"),
+      "dist/\n/.asana-cli.local.json\n",
+    );
+
+    const written = await setConfigValue(
+      context(root, home),
+      "defaultAssignee",
+      "123",
+      "local",
+    );
+    expect(written.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.local.json"), "utf8")),
+    ).toEqual({ defaultAssignee: "123" });
+
+    const resolved = await resolveConfig(context(root, home));
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.value.defaultAssignee).toBe("123");
+  });
+
+  test("rejects invalid defaultAssignee values without writing", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".gitignore"),
+      "dist/\n/.asana-cli.local.json\n",
+    );
+
+    for (const invalid of ["null", "", "abc", "1.5", "you"]) {
+      const result = await setConfigValue(
+        context(root, home),
+        "defaultAssignee",
+        invalid,
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(await Bun.file(join(root, ".asana-cli.local.json")).exists()).toBe(
+      false,
+    );
+  });
+
+  test("rejects defaultAssignee for --shared and --global without writing", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+
+    for (const layer of ["shared", "global"] as const) {
+      const result = await setConfigValue(
+        context(root, home),
+        "defaultAssignee",
+        "me",
+        layer,
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(await Bun.file(join(root, ".asana-cli.json")).exists()).toBe(false);
+    expect(
+      await Bun.file(
+        join(home, ".config", "asana-cli", "config.json"),
+      ).exists(),
+    ).toBe(false);
+  });
+
   test("rejects unsafe local writes and invalid target values", async () => {
     const root = await temporaryDirectory();
     await mkdir(join(root, ".git"));
