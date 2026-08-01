@@ -160,6 +160,18 @@ asana-cli config show --json --sources
 asana-cli config resolve my-tasks
 ```
 
+Set a personal default assignee for `tasks create` (stored locally, alongside
+`myTasks`, and never read by `tasks update`):
+
+```sh
+asana-cli config set defaultAssignee me
+asana-cli config set defaultAssignee 1201947864389005 --local
+```
+
+The value must be exactly `me` or a digit-only user GID. `tasks create` only
+applies it when `--assignee` is omitted; an explicit `--assignee`, including
+`--assignee=null`, always overrides it.
+
 ## Usage
 
 ```sh
