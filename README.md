@@ -188,6 +188,10 @@ asana-cli tasks update 1215978111726134 --notes-file=task-description.md
 asana-cli tasks update 1215978111726134 --my-section=@in_review
 asana-cli tasks comment 1215978111726134 "Ready for review"
 
+# Reparent a task under another task, or promote it to top level
+asana-cli tasks update 1215978111726134 --parent=1209876543210987
+asana-cli tasks update 1215978111726134 --parent=null
+
 # Create a subtask, assign it to yourself, and set a numeric custom field
 asana-cli tasks create \
   --parent=1215978111726134 \
@@ -215,6 +219,11 @@ subtask, `--my-section` for a standalone My Tasks task, or `--project` with a
 digit-only project GID. A standalone My Tasks task uses the configured
 `workspace.gid`. `--parent` may be combined with `--my-section`; `--project`
 cannot be combined with either destination flag.
+
+`tasks update --parent=<gid>|null` reparents an existing task: a GID or task
+URL moves it under that parent, and literal `null` promotes it to a top-level
+task. It is a dedicated single-write operation and cannot be combined with any
+other `tasks update` flag; a task cannot be its own parent.
 
 `--notes` and `--notes-file` are mutually exclusive; notes are replaced
 explicitly, with no read-modify-write append. `--notes-file=-` and

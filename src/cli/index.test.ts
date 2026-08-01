@@ -26,6 +26,7 @@ import {
   type TaskGateway,
   type TaskMutation,
   type TaskMutationGateway,
+  type TaskParentMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
@@ -91,6 +92,23 @@ class InMemoryTaskWriter implements TaskMutationGateway {
     mutation: TaskMutation,
   ): Promise<Result<Task, TaskReadError>> {
     this.calls.push({ token, taskId, mutation });
+    return this.response;
+  }
+}
+
+class InMemoryTaskParentWriter implements TaskParentMutationGateway {
+  public calls: Array<
+    Readonly<{ token: string; taskId: string; parentId: string | null }>
+  > = [];
+
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  async setTaskParent(
+    token: string,
+    taskId: string,
+    parentId: string | null,
+  ): Promise<Result<Task, TaskReadError>> {
+    this.calls.push({ token, taskId, parentId });
     return this.response;
   }
 }
@@ -1209,6 +1227,223 @@ describe("tasks get command", () => {
     expect(result.exitCode).toBe(6);
     expect(result.stderr).toContain("unexpected internal error");
     expect(result.stderr).not.toContain("unexpected db/connection crash!");
+  });
+});
+
+describe("tasks update --parent", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
+  const movedTask: Task = { gid: "222", name: "Moved" };
+
+  const isolatedDependencies = (): ExecuteDependencies => ({
+    environment: new Proxy<Record<string, string | undefined>>(
+      {},
+      {
+        get: () => {
+          throw new Error("environment accessed");
+        },
+      },
+    ),
+    identity,
+    get taskParentWriter(): never {
+      throw new Error("task parent writer accessed");
+    },
+    get taskWriter(): never {
+      throw new Error("task writer accessed");
+    },
+    get taskReader(): never {
+      throw new Error("task reader accessed");
+    },
+    get discovery(): never {
+      throw new Error("discovery accessed");
+    },
+    get configuration(): never {
+      throw new Error("configuration accessed");
+    },
+    get readFile(): never {
+      throw new Error("file reader accessed");
+    },
+    get readStdin(): never {
+      throw new Error("stdin reader accessed");
+    },
+  });
+
+  test.each([
+    ["invalid task id", ["tasks", "update", "invalid", "--parent", "456"]],
+    ["malformed parent", ["tasks", "update", "222", "--parent", "not-a-gid"]],
+    ["self parent by GID", ["tasks", "update", "222", "--parent", "222"]],
+    [
+      "self parent by URL",
+      ["tasks", "update", "222", "--parent", "https://app.asana.com/0/111/222"],
+    ],
+    [
+      "combined name",
+      ["tasks", "update", "222", "--parent", "456", "--name", "Updated"],
+    ],
+    [
+      "combined notes",
+      ["tasks", "update", "222", "--parent", "456", "--notes", "text"],
+    ],
+    [
+      "combined notes file",
+      ["tasks", "update", "222", "--parent", "456", "--notes-file", "n.md"],
+    ],
+    [
+      "combined assignee",
+      ["tasks", "update", "222", "--parent", "456", "--assignee", "me"],
+    ],
+    [
+      "combined due date",
+      ["tasks", "update", "222", "--parent", "456", "--due-on", "2028-02-29"],
+    ],
+    [
+      "combined completed",
+      ["tasks", "update", "222", "--parent", "456", "--completed", "true"],
+    ],
+    [
+      "combined My Tasks section",
+      ["tasks", "update", "222", "--parent", "456", "--my-section", "300"],
+    ],
+    [
+      "combined custom field",
+      ["tasks", "update", "222", "--parent", "456", "--custom-field", "400:1"],
+    ],
+  ])("rejects %s before any dependency access", async (_, argv) => {
+    const result = await execute(argv, isolatedDependencies());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+  });
+
+  test("reports a missing token before accessing the parent writer", async () => {
+    const result = await execute(
+      ["tasks", "update", "222", "--parent", "456"],
+      {
+        environment: {},
+        identity,
+        get taskParentWriter(): never {
+          throw new Error("task parent writer accessed");
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("ASANA_CLI_TOKEN is required");
+  });
+
+  test("requires an injected parent writer", async () => {
+    const result = await execute(
+      ["tasks", "update", "222", "--parent", "456"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+      },
+    );
+
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain("Task parent writer is required");
+  });
+
+  test.each([
+    ["a GID", "456", "456"],
+    ["a task URL", "https://app.asana.com/0/111/456", "456"],
+  ])(
+    "reparents through %s with exactly one write",
+    async (_, parent, expected) => {
+      const writer = new InMemoryTaskParentWriter(ok(movedTask));
+      const result = await execute(
+        ["tasks", "update", "222", "--parent", parent],
+        {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          taskParentWriter: writer,
+          get taskWriter(): never {
+            throw new Error("task writer accessed");
+          },
+          get taskReader(): never {
+            throw new Error("task reader accessed");
+          },
+          get configuration(): never {
+            throw new Error("configuration accessed");
+          },
+        },
+      );
+
+      expect(result).toEqual({
+        stdout: "gid: 222\nname: Moved\napplied:\n  parent: 456\n",
+        stderr: "",
+        exitCode: 0,
+      });
+      expect(writer.calls).toEqual([
+        { token: "secret", taskId: "222", parentId: expected },
+      ]);
+    },
+  );
+
+  test("promotes a subtask with --parent=null", async () => {
+    const writer = new InMemoryTaskParentWriter(ok(movedTask));
+    const result = await execute(
+      ["tasks", "update", "222", "--parent", "null"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskParentWriter: writer,
+      },
+    );
+
+    expect(result).toEqual({
+      stdout: "gid: 222\nname: Moved\napplied:\n  parent: —\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(writer.calls).toEqual([
+      { token: "secret", taskId: "222", parentId: null },
+    ]);
+  });
+
+  test("renders the reparented task as JSON", async () => {
+    const writer = new InMemoryTaskParentWriter(ok(movedTask));
+    const result = await execute(
+      ["--json", "tasks", "update", "222", "--parent", "456"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskParentWriter: writer,
+      },
+    );
+
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: movedTask,
+      meta: { applied: { parent: "456" } },
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test.each(
+    taskReadErrorCases([
+      ["authentication", 3],
+      ["api", 4],
+      ["not_found", 4],
+      ["rate_limit", 5],
+      ["network", 4],
+      ["invalid_response", 4],
+    ]),
+  )("maps %s parent failures to exit code %i", async (kind, exitCode) => {
+    const writer = new InMemoryTaskParentWriter(
+      err({ kind, message: "unsafe secret response" }),
+    );
+    const result = await execute(
+      ["tasks", "update", "222", "--parent", "456"],
+      {
+        environment: { ASANA_CLI_TOKEN: "top-secret" },
+        identity,
+        taskParentWriter: writer,
+      },
+    );
+
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.stderr).not.toContain("unsafe secret response");
+    expect(result.stderr).not.toContain("top-secret");
+    expect(writer.calls).toHaveLength(1);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   type TaskCreationTarget,
   type TaskMutation,
   type TaskMutationGateway,
+  type TaskParentMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
 import type {
@@ -192,6 +193,7 @@ export class AsanaHttpClient
     TaskGateway,
     TaskCreationGateway,
     TaskMutationGateway,
+    TaskParentMutationGateway,
     TaskStoryGateway,
     TaskCommentCreationGateway,
     WorkspaceGateway
@@ -531,6 +533,44 @@ export class AsanaHttpClient
       token,
       `tasks/${taskId}`,
       { method: "PUT", body: { data: mutation } },
+      schema,
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Task not found",
+        });
+      }
+      return result;
+    }
+    return ok(result.value.data);
+  }
+
+  async setTaskParent(
+    token: string,
+    taskId: string,
+    parentId: string | null,
+  ): Promise<Result<Task, TaskReadError>> {
+    if (!/^\d+$/.test(taskId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      });
+    }
+    if (parentId !== null && !/^\d+$/.test(parentId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Parent task GID is not digit-only",
+      });
+    }
+
+    const schema = z.object({ data: buildTaskSchema([]) });
+    const result = await this.#request(
+      token,
+      `tasks/${taskId}/setParent`,
+      { method: "POST", body: { data: { parent: parentId } } },
       schema,
     );
     if (!result.ok) {
