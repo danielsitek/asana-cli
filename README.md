@@ -195,9 +195,26 @@ asana-cli tasks create \
   --assignee=me \
   --my-section=@in_progress \
   --custom-field=@hours_estimate:4
+
+# Create a standalone task in My Tasks
+asana-cli tasks create \
+  --name="Investigate the issue" \
+  --assignee=me \
+  --my-section=@in_progress
+
+# Create a standalone task in a project
+asana-cli tasks create \
+  --name="Prepare the release" \
+  --project=1201947864389005
 ```
 
 Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
+
+`tasks create` requires `--name` and an explicit destination: `--parent` for a
+subtask, `--my-section` for a standalone My Tasks task, or `--project` with a
+digit-only project GID. A standalone My Tasks task uses the configured
+`workspace.gid`. `--parent` may be combined with `--my-section`; `--project`
+cannot be combined with either destination flag.
 
 `--notes` and `--notes-file` are mutually exclusive; notes are replaced
 explicitly, with no read-modify-write append. `--notes-file=-` and
