@@ -270,7 +270,7 @@ describe("AsanaHttpClient", () => {
       ) {
         expect(url.searchParams.get("limit")).toBe("100");
         expect(url.searchParams.get("opt_fields")).toBe(
-          "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+          "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled",
         );
         fieldsCalled = true;
         return Response.json({
@@ -281,6 +281,18 @@ describe("AsanaHttpClient", () => {
                 name: "Hours Estimate",
                 resource_subtype: "number",
                 is_value_read_only: false,
+              },
+            },
+            {
+              custom_field: {
+                gid: "1213894072991503",
+                name: "Priority",
+                resource_subtype: "enum",
+                is_value_read_only: false,
+                enum_options: [
+                  { gid: "1213894072991601", name: "Low", enabled: true },
+                  { gid: "1213894072991602", name: "High", enabled: false },
+                ],
               },
             },
           ],
@@ -309,6 +321,16 @@ describe("AsanaHttpClient", () => {
           name: "Hours Estimate",
           resourceSubtype: "number",
           isReadOnly: false,
+        },
+        {
+          gid: "1213894072991503",
+          name: "Priority",
+          resourceSubtype: "enum",
+          isReadOnly: false,
+          enumOptions: [
+            { gid: "1213894072991601", name: "Low", enabled: true },
+            { gid: "1213894072991602", name: "High", enabled: false },
+          ],
         },
       ]);
     }
@@ -395,6 +417,96 @@ describe("AsanaHttpClient", () => {
         "custom field settings; next_page is present",
       );
     }
+  });
+
+  test("discoverMyTasks fails if an enum custom field is missing enum_options", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        return Response.json({ data: [] });
+      }
+      if (
+        url.pathname.endsWith(
+          "/projects/1213894072990299/custom_field_settings",
+        )
+      ) {
+        return Response.json({
+          data: [
+            {
+              custom_field: {
+                gid: "1",
+                name: "Priority",
+                resource_subtype: "enum",
+                is_value_read_only: false,
+              },
+            },
+          ],
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks("token", "1201947864389005");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("invalid_response");
+      expect(result.error.message).toContain("enum_options");
+    }
+  });
+
+  test("discoverMyTasks rejects a malformed enum option GID", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        return Response.json({ data: [] });
+      }
+      if (
+        url.pathname.endsWith(
+          "/projects/1213894072990299/custom_field_settings",
+        )
+      ) {
+        return Response.json({
+          data: [
+            {
+              custom_field: {
+                gid: "1",
+                name: "Priority",
+                resource_subtype: "enum",
+                is_value_read_only: false,
+                enum_options: [
+                  { gid: "not-a-gid", name: "In Review", enabled: true },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTasks("token", "1201947864389005");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("invalid_response");
   });
 
   test("discoverMyTasks fails if returned user task list workspace GID does not match requested workspace GID", async () => {

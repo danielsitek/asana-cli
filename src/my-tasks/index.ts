@@ -2,6 +2,7 @@ import {
   resolveConfig,
   type ConfigContext,
   type ConfigError,
+  type DiscoveredCustomField,
   type DiscoveredMyTasks,
   type MyTasksDiscoveryGateway,
 } from "../config/index.ts";
@@ -50,7 +51,6 @@ const validateDiscoveredResources = (
   discovered: DiscoveredMyTasks,
   configuredUserTaskListGid: string,
   sectionGid: string | undefined,
-  customFieldGids: readonly string[],
 ): Result<void, ConfigError> => {
   if (discovered.userTaskListGid !== configuredUserTaskListGid) {
     return err(
@@ -69,10 +69,70 @@ const validateDiscoveredResources = (
       ),
     );
   }
-  for (const gid of customFieldGids) {
-    const field = discovered.customFields.find(
-      (candidate) => candidate.gid === gid,
+  return ok(undefined);
+};
+
+const sortedUniqueNames = (names: readonly string[]): readonly string[] =>
+  [...new Set(names)].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+
+const parseNumberValue = (input: string): Result<number, string> => {
+  if (!/^-?\d+(?:\.\d+)?$/.test(input)) {
+    return err("Custom field value must be an integer, dot-decimal, or null");
+  }
+  const value = Number(input);
+  return Number.isFinite(value)
+    ? ok(value)
+    : err("Custom field value must be finite");
+};
+
+const resolveEnumValue = (
+  raw: string,
+  field: Extract<DiscoveredCustomField, Readonly<{ resourceSubtype: "enum" }>>,
+): Result<string, ConfigError> => {
+  const options = field.enumOptions;
+  const enabled = options.filter((option) => option.enabled);
+  const validNames = sortedUniqueNames(
+    enabled.map((option) => option.name),
+  ).join(", ");
+  if (/^\d+$/.test(raw)) {
+    const byGid = options.find((option) => option.gid === raw);
+    if (byGid) {
+      return byGid.enabled
+        ? ok(byGid.gid)
+        : err(
+            configurationError(
+              `Custom field ${field.gid} option GID ${raw} is disabled; valid options: ${validNames}`,
+            ),
+          );
+    }
+  }
+  const matches = enabled.filter((option) => option.name === raw);
+  if (matches.length > 1) {
+    return err(
+      configurationError(
+        `Custom field ${field.gid} option "${raw}" is ambiguous; valid options: ${validNames}`,
+      ),
     );
+  }
+  if (matches.length === 1 && matches[0]) {
+    return ok(matches[0].gid);
+  }
+  return err(
+    configurationError(
+      `Custom field ${field.gid} option "${raw}" is unknown; valid options: ${validNames}`,
+    ),
+  );
+};
+
+const resolveCustomFieldValues = (
+  discoveredFields: readonly DiscoveredCustomField[],
+  rawCustomFields: Readonly<Record<string, string | null>>,
+): Result<Record<string, number | string | null>, MyTasksMutationError> => {
+  const resolved: Record<string, number | string | null> = {};
+  for (const [gid, raw] of Object.entries(rawCustomFields)) {
+    const field = discoveredFields.find((candidate) => candidate.gid === gid);
     if (!field) {
       return err(
         configurationError(
@@ -80,16 +140,33 @@ const validateDiscoveredResources = (
         ),
       );
     }
-    if (field.resourceSubtype !== "number") {
+    if (field.resourceSubtype === "unsupported") {
       return err(
-        configurationError(`Custom field ${gid} is not a number field`),
+        configurationError(
+          `Custom field ${gid} is not a number or enum field (${field.originalResourceSubtype})`,
+        ),
       );
     }
     if (field.isReadOnly) {
       return err(configurationError(`Custom field ${gid} is read-only`));
     }
+    if (raw === null) {
+      resolved[gid] = null;
+      continue;
+    }
+    if (field.resourceSubtype === "number") {
+      const value = parseNumberValue(raw);
+      if (!value.ok) {
+        return err({ kind: "invalid_usage", message: value.error });
+      }
+      resolved[gid] = value.value;
+      continue;
+    }
+    const value = resolveEnumValue(raw, field);
+    if (!value.ok) return value;
+    resolved[gid] = value.value;
   }
-  return ok(undefined);
+  return ok(resolved);
 };
 
 const resolveMutation = async (
@@ -122,7 +199,7 @@ const resolveMutation = async (
     : ok(undefined);
   if (!sectionGid.ok) return sectionGid;
 
-  const customFields: Record<string, number | null> = {};
+  const rawCustomFields: Record<string, string | null> = {};
   for (const customField of request.customFields) {
     const gid = resolveAlias(
       customField.field,
@@ -130,13 +207,13 @@ const resolveMutation = async (
       "Custom field",
     );
     if (!gid.ok) return gid;
-    if (Object.hasOwn(customFields, gid.value)) {
+    if (Object.hasOwn(rawCustomFields, gid.value)) {
       return err({
         kind: "invalid_usage",
         message: "--custom-field cannot update the same field more than once",
       });
     }
-    customFields[gid.value] = customField.value;
+    rawCustomFields[gid.value] = customField.value;
   }
 
   const discovered = await dependencies.discovery.discoverMyTasks(
@@ -148,9 +225,15 @@ const resolveMutation = async (
     discovered.value,
     configuredMyTasks.userTaskListGid,
     sectionGid.value,
-    Object.keys(customFields),
   );
   if (!validated.ok) return validated;
+
+  const resolvedCustomFields = resolveCustomFieldValues(
+    discovered.value.customFields,
+    rawCustomFields,
+  );
+  if (!resolvedCustomFields.ok) return resolvedCustomFields;
+  const customFields = resolvedCustomFields.value;
 
   const identity = request.authenticatedUserGid
     ? ok(request.authenticatedUserGid)

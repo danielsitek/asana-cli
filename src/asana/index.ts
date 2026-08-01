@@ -493,6 +493,14 @@ export class AsanaHttpClient
       });
     }
 
+    const enumOptionSchema = z
+      .object({
+        gid: z.custom<string>(isDigitOnlyGid),
+        name: z.string(),
+        enabled: z.boolean(),
+      })
+      .passthrough();
+
     const customFieldsSchema = z
       .object({
         data: z.array(
@@ -504,6 +512,7 @@ export class AsanaHttpClient
                   name: z.string(),
                   resource_subtype: z.string(),
                   is_value_read_only: z.boolean(),
+                  enum_options: z.array(enumOptionSchema).optional(),
                 })
                 .passthrough(),
             })
@@ -521,7 +530,7 @@ export class AsanaHttpClient
         searchParams: {
           limit: "100",
           opt_fields:
-            "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only",
+            "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled",
         },
       },
       customFieldsSchema,
@@ -537,6 +546,42 @@ export class AsanaHttpClient
           "Asana returned more than 100 custom field settings; next_page is present",
       });
     }
+    const customFields: DiscoveredMyTasks["customFields"][number][] = [];
+    for (const setting of customFieldsResult.value.data) {
+      const field = setting.custom_field;
+      const base = {
+        gid: field.gid,
+        name: field.name,
+        isReadOnly: field.is_value_read_only,
+      };
+      if (field.resource_subtype === "number") {
+        customFields.push({ ...base, resourceSubtype: "number" });
+        continue;
+      }
+      if (field.resource_subtype === "enum") {
+        if (field.enum_options === undefined) {
+          return err({
+            kind: "invalid_response",
+            message: `Asana returned enum custom field ${field.gid} without enum_options`,
+          });
+        }
+        customFields.push({
+          ...base,
+          resourceSubtype: "enum",
+          enumOptions: field.enum_options.map((option) => ({
+            gid: option.gid,
+            name: option.name,
+            enabled: option.enabled,
+          })),
+        });
+        continue;
+      }
+      customFields.push({
+        ...base,
+        resourceSubtype: "unsupported",
+        originalResourceSubtype: field.resource_subtype,
+      });
+    }
 
     return ok({
       userTaskListGid: utlGid,
@@ -544,12 +589,7 @@ export class AsanaHttpClient
         gid: s.gid,
         name: s.name,
       })),
-      customFields: customFieldsResult.value.data.map((c) => ({
-        gid: c.custom_field.gid,
-        name: c.custom_field.name,
-        resourceSubtype: c.custom_field.resource_subtype,
-        isReadOnly: c.custom_field.is_value_read_only,
-      })),
+      customFields,
     });
   }
 

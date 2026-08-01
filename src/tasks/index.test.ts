@@ -235,15 +235,8 @@ describe("task update workflow", () => {
     ["empty My Tasks alias", "123", { mySection: "@" }],
     ["missing custom field delimiter", "123", { customFields: ["123"] }],
     ["empty custom field value", "123", { customFields: ["123:"] }],
-    ["multiple delimiters", "123", { customFields: ["123:1:2"] }],
     ["empty field selector", "123", { customFields: [":1"] }],
     ["non-GID field", "123", { customFields: ["field:1"] }],
-    ["exponent number", "123", { customFields: ["123:1e3"] }],
-    ["comma number", "123", { customFields: ["123:1,5"] }],
-    ["NaN", "123", { customFields: ["123:NaN"] }],
-    ["Infinity", "123", { customFields: ["123:Infinity"] }],
-    ["leading decimal", "123", { customFields: ["123:.5"] }],
-    ["trailing decimal", "123", { customFields: ["123:5."] }],
     ["duplicate raw field", "123", { customFields: ["456:1", "456:2"] }],
     [
       "duplicate alias field",
@@ -270,15 +263,31 @@ describe("task update workflow", () => {
         resolveAssigneeMe: false,
         mySection: { kind: "alias", value: "in_review" },
         customFields: [
-          { field: { kind: "gid", value: "456" }, value: -2.5 },
+          { field: { kind: "gid", value: "456" }, value: "-2.5" },
           {
             field: { kind: "alias", value: "hours_estimate" },
             value: null,
           },
-          { field: { kind: "gid", value: "789" }, value: 0 },
+          { field: { kind: "gid", value: "789" }, value: "0" },
         ],
       },
     });
+  });
+
+  test("preserves colons inside a custom field value", () => {
+    const result = prepareTaskUpdate("123", {
+      customFields: ["456:Review: Ready"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.customFields).toEqual([
+        {
+          field: { kind: "gid", value: "456" },
+          value: "Review: Ready",
+        },
+      ]);
+    }
   });
 
   test("builds all supported mutations and resolves me before writing", async () => {
@@ -417,7 +426,7 @@ describe("task update workflow", () => {
       taskId: "123",
       mySection: { kind: "alias", value: "in_review" },
       customFields: [
-        { field: { kind: "gid", value: "500" }, value: 2.5 },
+        { field: { kind: "gid", value: "500" }, value: "2.5" },
         { field: { kind: "alias", value: "estimate" }, value: null },
       ],
     });
@@ -645,7 +654,7 @@ describe("task creation preparation", () => {
         resolveAssigneeMe: true,
         mySection: { kind: "alias", value: "in_progress" },
         customFields: [
-          { field: { kind: "alias", value: "estimate" }, value: 4 },
+          { field: { kind: "alias", value: "estimate" }, value: "4" },
         ],
       },
     });
@@ -934,7 +943,9 @@ describe("task creation workflow", () => {
       finalAssignee: "9001",
       authenticatedUserGid: "9001",
       mySection: { kind: "alias", value: "in_progress" },
-      customFields: [{ field: { kind: "alias", value: "estimate" }, value: 4 }],
+      customFields: [
+        { field: { kind: "alias", value: "estimate" }, value: "4" },
+      ],
     });
     expect(creator.calls[0]?.mutation).toEqual({
       name: "Child",

@@ -42,6 +42,18 @@ const discoveredMyTasks = (
       resourceSubtype: "number",
       isReadOnly: false,
     },
+    {
+      gid: "600",
+      name: "Priority",
+      resourceSubtype: "enum",
+      isReadOnly: false,
+      enumOptions: [
+        { gid: "601", name: "Low", enabled: true },
+        { gid: "602", name: "High", enabled: true },
+        { gid: "603", name: "Archived", enabled: false },
+        { gid: "604", name: "603", enabled: true },
+      ],
+    },
   ],
   ...overrides,
 });
@@ -51,7 +63,7 @@ const setup = async (
   myTasks: Record<string, unknown> = {
     userTaskListGid: "200",
     sections: { in_review: "300" },
-    customFields: { estimate: "400", cost: "500" },
+    customFields: { estimate: "400", cost: "500", priority: "600" },
   },
 ) => {
   const root = await mkdtemp(join(tmpdir(), "asana-cli-my-tasks-"));
@@ -110,7 +122,7 @@ describe("My Tasks mutation resolution", () => {
       taskId: "123",
       mySection: { kind: "alias", value: "in_review" },
       customFields: [
-        { field: { kind: "gid", value: "500" }, value: 2.5 },
+        { field: { kind: "gid", value: "500" }, value: "2.5" },
         { field: { kind: "alias", value: "estimate" }, value: null },
       ],
     });
@@ -123,6 +135,46 @@ describe("My Tasks mutation resolution", () => {
       },
     });
     expect(calls).toEqual({ discovery: 1, identity: 1, reader: 1 });
+  });
+
+  test("resolves enum fields by option GID and by exact name", async () => {
+    const { resolver } = await setup();
+    const byGid = await resolver.resolve({
+      token: "secret",
+      taskId: "123",
+      finalAssignee: "9001",
+      authenticatedUserGid: "9001",
+      customFields: [{ field: { kind: "gid", value: "600" }, value: "601" }],
+    });
+    const byName = await resolver.resolve({
+      token: "secret",
+      taskId: "123",
+      finalAssignee: "9001",
+      authenticatedUserGid: "9001",
+      customFields: [
+        { field: { kind: "alias", value: "priority" }, value: "High" },
+      ],
+    });
+    const byNull = await resolver.resolve({
+      token: "secret",
+      taskId: "123",
+      finalAssignee: "9001",
+      authenticatedUserGid: "9001",
+      customFields: [{ field: { kind: "gid", value: "600" }, value: null }],
+    });
+
+    expect(byGid).toEqual({
+      ok: true,
+      value: { custom_fields: { "600": "601" } },
+    });
+    expect(byName).toEqual({
+      ok: true,
+      value: { custom_fields: { "600": "602" } },
+    });
+    expect(byNull).toEqual({
+      ok: true,
+      value: { custom_fields: { "600": null } },
+    });
   });
 
   test("uses a known authenticated final assignee without identity or task reads", async () => {
@@ -154,7 +206,7 @@ describe("My Tasks mutation resolution", () => {
       "missing field alias",
       {
         customFields: [
-          { field: { kind: "alias", value: "missing" }, value: 1 },
+          { field: { kind: "alias", value: "missing" }, value: "1" },
         ],
       },
       {},
@@ -175,15 +227,15 @@ describe("My Tasks mutation resolution", () => {
     [
       "field outside My Tasks",
       {
-        customFields: [{ field: { kind: "gid", value: "401" }, value: 1 }],
+        customFields: [{ field: { kind: "gid", value: "401" }, value: "1" }],
       },
       {},
       "is not present",
     ],
     [
-      "wrong field type",
+      "unsupported field subtype",
       {
-        customFields: [{ field: { kind: "gid", value: "400" }, value: 1 }],
+        customFields: [{ field: { kind: "gid", value: "400" }, value: "1" }],
       },
       {
         discovered: discoveredMyTasks({
@@ -191,18 +243,19 @@ describe("My Tasks mutation resolution", () => {
             {
               gid: "400",
               name: "Estimate",
-              resourceSubtype: "text",
+              resourceSubtype: "unsupported",
+              originalResourceSubtype: "text",
               isReadOnly: false,
             },
           ],
         }),
       },
-      "is not a number field",
+      "is not a number or enum field",
     ],
     [
       "read-only field",
       {
-        customFields: [{ field: { kind: "gid", value: "400" }, value: 1 }],
+        customFields: [{ field: { kind: "gid", value: "400" }, value: "1" }],
       },
       {
         discovered: discoveredMyTasks({
@@ -217,6 +270,65 @@ describe("My Tasks mutation resolution", () => {
         }),
       },
       "is read-only",
+    ],
+    [
+      "malformed numeric value",
+      {
+        customFields: [{ field: { kind: "gid", value: "400" }, value: "1e3" }],
+      },
+      {},
+      "must be an integer, dot-decimal, or null",
+    ],
+    [
+      "disabled enum option by GID",
+      {
+        customFields: [{ field: { kind: "gid", value: "600" }, value: "603" }],
+      },
+      {},
+      "is disabled",
+    ],
+    [
+      "disabled enum option by name",
+      {
+        customFields: [
+          { field: { kind: "gid", value: "600" }, value: "Archived" },
+        ],
+      },
+      {},
+      "is unknown",
+    ],
+    [
+      "unknown enum option",
+      {
+        customFields: [
+          { field: { kind: "gid", value: "600" }, value: "Medium" },
+        ],
+      },
+      {},
+      "is unknown",
+    ],
+    [
+      "ambiguous enum option name",
+      {
+        customFields: [{ field: { kind: "gid", value: "600" }, value: "Low" }],
+      },
+      {
+        discovered: discoveredMyTasks({
+          customFields: [
+            {
+              gid: "600",
+              name: "Priority",
+              resourceSubtype: "enum",
+              isReadOnly: false,
+              enumOptions: [
+                { gid: "601", name: "Low", enabled: true },
+                { gid: "604", name: "Low", enabled: true },
+              ],
+            },
+          ],
+        }),
+      },
+      "is ambiguous",
     ],
   ] as const)("rejects %s", async (_, request, setupOptions, message) => {
     const discovery = new (class implements MyTasksDiscoveryGateway {
@@ -239,6 +351,42 @@ describe("My Tasks mutation resolution", () => {
     if (!result.ok) expect(result.error.message).toContain(message);
   });
 
+  test("lists valid enum option names once each, sorted deterministically", async () => {
+    const discovery = new (class implements MyTasksDiscoveryGateway {
+      async discoverMyTasks() {
+        return ok(
+          discoveredMyTasks({
+            customFields: [
+              {
+                gid: "600",
+                name: "Priority",
+                resourceSubtype: "enum",
+                isReadOnly: false,
+                enumOptions: [
+                  { gid: "601", name: "Low", enabled: true },
+                  { gid: "604", name: "Low", enabled: true },
+                  { gid: "602", name: "High", enabled: true },
+                ],
+              },
+            ],
+          }),
+        );
+      }
+    })();
+    const { resolver } = await setup({ discovery });
+    const result = await resolver.resolve({
+      token: "secret",
+      taskId: "123",
+      customFields: [{ field: { kind: "gid", value: "600" }, value: "Medium" }],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("valid options: High, Low");
+      expect(result.error.message).not.toContain("Low, Low");
+    }
+  });
+
   test("rejects aliases resolving to one field and assignee mismatches", async () => {
     const { resolver } = await setup();
     const duplicate = await resolver.resolve({
@@ -247,8 +395,8 @@ describe("My Tasks mutation resolution", () => {
       finalAssignee: "9001",
       authenticatedUserGid: "9001",
       customFields: [
-        { field: { kind: "alias", value: "estimate" }, value: 1 },
-        { field: { kind: "gid", value: "400" }, value: 2 },
+        { field: { kind: "alias", value: "estimate" }, value: "1" },
+        { field: { kind: "gid", value: "400" }, value: "2" },
       ],
     });
     const mismatch = await resolver.resolve({

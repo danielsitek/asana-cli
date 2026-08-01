@@ -111,7 +111,7 @@ const withTaskMutationOptions = (command: Command): Command =>
     .option("--my-section <section>", "move within My Tasks by GID or @alias")
     .option(
       "--custom-field <field:value>",
-      "set a numeric My Tasks custom field; repeatable",
+      "set a number or enum My Tasks custom field by GID or @alias; enum value is an option GID or exact name; repeatable",
       (value: string, previous: readonly string[] | undefined) => [
         ...(previous ?? []),
         value,
