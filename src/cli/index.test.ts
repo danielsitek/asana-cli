@@ -81,7 +81,12 @@ class InMemoryTaskReader implements TaskGateway {
 
 class InMemoryTaskWriter implements TaskMutationGateway {
   public calls: Array<
-    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+    Readonly<{
+      token: string;
+      taskId: string;
+      mutation: TaskMutation;
+      fields?: readonly string[];
+    }>
   > = [];
 
   constructor(private readonly response: Result<Task, TaskReadError>) {}
@@ -90,15 +95,26 @@ class InMemoryTaskWriter implements TaskMutationGateway {
     token: string,
     taskId: string,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
-    this.calls.push({ token, taskId, mutation });
+    this.calls.push({
+      token,
+      taskId,
+      mutation,
+      ...(fields === undefined ? {} : { fields }),
+    });
     return this.response;
   }
 }
 
 class InMemoryTaskParentWriter implements TaskParentMutationGateway {
   public calls: Array<
-    Readonly<{ token: string; taskId: string; parentId: string | null }>
+    Readonly<{
+      token: string;
+      taskId: string;
+      parentId: string | null;
+      fields?: readonly string[];
+    }>
   > = [];
 
   constructor(private readonly response: Result<Task, TaskReadError>) {}
@@ -107,8 +123,14 @@ class InMemoryTaskParentWriter implements TaskParentMutationGateway {
     token: string,
     taskId: string,
     parentId: string | null,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
-    this.calls.push({ token, taskId, parentId });
+    this.calls.push({
+      token,
+      taskId,
+      parentId,
+      ...(fields === undefined ? {} : { fields }),
+    });
     return this.response;
   }
 }
@@ -119,6 +141,7 @@ class InMemoryTaskCreator implements TaskCreationGateway {
       token: string;
       target: TaskCreationTarget;
       mutation: TaskMutation;
+      fields?: readonly string[];
     }>
   > = [];
 
@@ -133,15 +156,26 @@ class InMemoryTaskCreator implements TaskCreationGateway {
     token: string,
     target: TaskCreationTarget,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
-    this.calls.push({ token, target, mutation });
+    this.calls.push({
+      token,
+      target,
+      mutation,
+      ...(fields === undefined ? {} : { fields }),
+    });
     return this.response;
   }
 }
 
 class StagedTaskWriter implements TaskMutationGateway {
   public calls: Array<
-    Readonly<{ token: string; taskId: string; mutation: TaskMutation }>
+    Readonly<{
+      token: string;
+      taskId: string;
+      mutation: TaskMutation;
+      fields?: readonly string[];
+    }>
   > = [];
 
   constructor(
@@ -152,8 +186,14 @@ class StagedTaskWriter implements TaskMutationGateway {
     token: string,
     taskId: string,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
-    this.calls.push({ token, taskId, mutation });
+    this.calls.push({
+      token,
+      taskId,
+      mutation,
+      ...(fields === undefined ? {} : { fields }),
+    });
     return (
       this.responses[this.calls.length - 1] ??
       err({ kind: "invalid_response", message: "Missing fake response" })
@@ -1655,7 +1695,7 @@ describe("tasks update command", () => {
     },
   );
 
-  test("returns JSON output and rejects --fields", async () => {
+  test("returns JSON output and sends no fields by default", async () => {
     const writer = new InMemoryTaskWriter(ok(updatedTask));
     const json = await execute(
       ["--json", "tasks", "update", "123", "--name", "Updated"],
@@ -1669,17 +1709,117 @@ describe("tasks update command", () => {
       data: updatedTask,
       meta: { applied: { name: "Updated" } },
     });
+    expect(writer.calls[0]?.fields).toBeUndefined();
+  });
 
-    const unsupported = await execute(
-      ["--fields", "name", "tasks", "update", "123", "--name", "Updated"],
+  test.each([
+    [
+      [
+        "--fields",
+        "due_on",
+        "tasks",
+        "update",
+        "123",
+        "--due-on",
+        "2026-08-15",
+      ],
+    ],
+    [
+      [
+        "tasks",
+        "update",
+        "123",
+        "--due-on",
+        "2026-08-15",
+        "--fields",
+        "due_on",
+      ],
+    ],
+  ])("passes --fields to the writer for %o", async (argv) => {
+    const narrowed = { gid: "123", due_on: "2026-08-15" };
+    const writer = new InMemoryTaskWriter(ok(narrowed));
+    const result = await execute(["--json", ...argv], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskWriter: writer,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls[0]?.fields).toEqual(["due_on"]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: narrowed,
+      meta: { applied: { due_on: "2026-08-15" } },
+    });
+  });
+
+  test("passes --fields to the parent writer", async () => {
+    const narrowed = { gid: "123", name: "Child" };
+    const writer = new InMemoryTaskParentWriter(ok(narrowed));
+    const result = await execute(
+      ["--json", "--fields", "name", "tasks", "update", "123", "--parent", "9"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskParentWriter: writer,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls[0]?.fields).toEqual(["name"]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: narrowed,
+      meta: { applied: { parent: "9" } },
+    });
+  });
+
+  test.each([",", " ", "name,,notes"])(
+    "rejects malformed --fields %p before any write or token access",
+    async (fields) => {
+      const writer = new InMemoryTaskWriter(ok(updatedTask));
+      const result = await execute(
+        ["--fields", fields, "tasks", "update", "123", "--name", "Updated"],
+        { environment: {}, identity, taskWriter: writer },
+      );
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("invalid_usage");
+      expect(writer.calls).toHaveLength(0);
+    },
+  );
+
+  test("renders human output for a narrowed update response", async () => {
+    const writer = new InMemoryTaskWriter(
+      ok({ gid: "123", due_on: "2026-08-15" }),
+    );
+    const result = await execute(
+      [
+        "--fields",
+        "due_on",
+        "tasks",
+        "update",
+        "123",
+        "--due-on",
+        "2026-08-15",
+      ],
       {
         environment: { ASANA_CLI_TOKEN: "secret" },
         identity,
         taskWriter: writer,
       },
     );
-    expect(unsupported.exitCode).toBe(2);
-    expect(writer.calls).toHaveLength(1);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("due_on");
+    expect(result.stdout).toContain("applied:");
+    expect(result.stdout).not.toContain("undefined");
+  });
+
+  test("still rejects --fields on commands that do not support it", async () => {
+    const result = await execute(["--fields", "name", "whoami"], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+    });
+    expect(result.exitCode).toBe(2);
   });
 
   const temporaryDirectories: string[] = [];
@@ -2501,8 +2641,15 @@ class InMemoryCommentReader {
 
 class InMemoryCommentWriter {
   lastText?: string;
-  async createTaskComment(_token: string, _taskId: string, text: string) {
+  lastFields?: readonly string[];
+  async createTaskComment(
+    _token: string,
+    _taskId: string,
+    text: string,
+    fields: readonly string[],
+  ) {
     this.lastText = text;
+    this.lastFields = fields;
     return ok({
       gid: "9",
       created_at: "2024-01-01T00:00:00.000Z",
@@ -2836,5 +2983,150 @@ describe("workspaces list command", () => {
     expect(workspacesHelp.stdout).toContain(
       "list workspaces visible to the authenticated user",
     );
+  });
+});
+
+describe("tasks comment --fields", () => {
+  const commentIdentity = new InMemoryIdentity(
+    ok({ gid: "1001", name: "Ada" }),
+  );
+
+  test.each([
+    [["--fields", "gid,text", "tasks", "comment", "123", "hi"]],
+    [["tasks", "comment", "123", "hi", "--fields", "gid,text"]],
+  ])("forwards the selected comment fields for %o", async (argv) => {
+    const writer = new InMemoryCommentWriter();
+    const result = await execute(argv, {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity: commentIdentity,
+      commentWriter: writer,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.lastFields).toEqual(["gid", "text"]);
+  });
+
+  test("rejects malformed comment fields before writing", async () => {
+    const writer = new InMemoryCommentWriter();
+    const result = await execute(
+      ["--fields", ",", "tasks", "comment", "123", "hi"],
+      { environment: {}, identity: commentIdentity, commentWriter: writer },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(writer.lastFields).toBeUndefined();
+  });
+});
+
+describe("tasks create --fields", () => {
+  const creatorIdentity = new InMemoryIdentity(
+    ok({ gid: "1001", name: "Ada" }),
+  );
+
+  test("passes selected fields to the creator for a subtask", async () => {
+    const created = { gid: "77", name: "Child" };
+    const creator = new InMemoryTaskCreator(ok(created));
+    const result = await execute(
+      [
+        "--json",
+        "--fields",
+        "name",
+        "tasks",
+        "create",
+        "--name",
+        "Child",
+        "--parent",
+        "9",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity: creatorIdentity,
+        taskCreator: creator,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(creator.calls[0]?.fields).toEqual(["name"]);
+    expect(JSON.parse(result.stdout).data).toEqual(created);
+  });
+
+  test("passes selected fields to the creator for a project task", async () => {
+    const creator = new InMemoryTaskCreator(
+      ok({ gid: "77", due_on: "2026-08-15" }),
+    );
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--name",
+        "Task",
+        "--project",
+        "5",
+        "--fields",
+        "due_on",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity: creatorIdentity,
+        taskCreator: creator,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(creator.calls[0]?.fields).toEqual(["due_on"]);
+  });
+
+  test("passes selected fields to staged creation writes", async () => {
+    const creator = new InMemoryTaskCreator(ok({ gid: "77", name: "Task" }));
+    const writer = new StagedTaskWriter([ok({ gid: "77", name: "Task" })]);
+    const result = await execute(
+      [
+        "--fields",
+        "name",
+        "tasks",
+        "create",
+        "--name",
+        "Task",
+        "--parent",
+        "9",
+        "--assignee",
+        "4242",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity: creatorIdentity,
+        taskCreator: creator,
+        taskWriter: writer,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls[0]?.fields).toEqual(["name"]);
+  });
+
+  test("sends no fields when --fields is omitted", async () => {
+    const creator = new InMemoryTaskCreator(ok({ gid: "77", name: "Task" }));
+    const result = await execute(
+      ["tasks", "create", "--name", "Task", "--parent", "9"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity: creatorIdentity,
+        taskCreator: creator,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(creator.calls[0]?.fields).toBeUndefined();
+  });
+
+  test("rejects malformed --fields before creating anything", async () => {
+    const creator = new InMemoryTaskCreator(ok({ gid: "77", name: "Task" }));
+    const result = await execute(
+      ["--fields", " ", "tasks", "create", "--name", "Task", "--parent", "9"],
+      { environment: {}, identity: creatorIdentity, taskCreator: creator },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(creator.calls).toHaveLength(0);
   });
 });

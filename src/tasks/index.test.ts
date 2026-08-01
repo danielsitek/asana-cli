@@ -1054,3 +1054,170 @@ describe("task creation workflow", () => {
     },
   );
 });
+
+describe("selected response fields", () => {
+  class FieldRecordingWriter implements TaskMutationGateway {
+    calls: Array<readonly string[] | undefined> = [];
+
+    async updateTask(
+      _token: string,
+      taskId: string,
+      _mutation: TaskMutation,
+      fields?: readonly string[],
+    ) {
+      this.calls.push(fields);
+      return ok({ gid: taskId });
+    }
+  }
+
+  class FieldRecordingCreator implements TaskCreationGateway {
+    calls: Array<readonly string[] | undefined> = [];
+
+    async createTask(
+      _token: string,
+      _target: TaskCreationTarget,
+      _mutation: TaskMutation,
+      fields?: readonly string[],
+    ) {
+      this.calls.push(fields);
+      return ok({ gid: "77" });
+    }
+  }
+
+  const materialization = {
+    resolveAuthenticatedUserGid: async () => ok("1001"),
+    readFile: async () => "",
+    readStdin: async () => "",
+  };
+
+  test("prepareTaskUpdate keeps fields out of the mutation payload", () => {
+    const prepared = prepareTaskUpdate("123", { name: "New" }, "due_on");
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.value.fields).toEqual(["due_on"]);
+    expect(prepared.value.mutation).toEqual({ name: "New" });
+  });
+
+  test("prepareTaskUpdate still requires at least one mutation", () => {
+    expect(prepareTaskUpdate("123", {}, "due_on")).toEqual(
+      err({
+        kind: "invalid_usage",
+        message: "At least one task mutation is required",
+      }),
+    );
+  });
+
+  test.each(["", " ", ",", "name,,notes"])(
+    "prepareTaskUpdate rejects malformed fields %p",
+    (fields) => {
+      const prepared = prepareTaskUpdate("123", { name: "New" }, fields);
+      expect(prepared.ok).toBe(false);
+      if (prepared.ok) return;
+      expect(prepared.error.kind).toBe("invalid_usage");
+    },
+  );
+
+  test("prepareTaskParentUpdate carries fields without tripping exclusivity", () => {
+    const prepared = prepareTaskParentUpdate("123", { parent: "9" }, "name");
+    expect(prepared).toEqual(
+      ok({ taskId: "123", parentId: "9", fields: ["name"] }),
+    );
+  });
+
+  test("prepareTaskParentUpdate carries fields when promoting to null", () => {
+    expect(prepareTaskParentUpdate("123", { parent: "null" }, "name")).toEqual(
+      ok({ taskId: "123", parentId: null, fields: ["name"] }),
+    );
+  });
+
+  test("executeTaskParentUpdate forwards fields to the gateway", async () => {
+    const calls: Array<readonly string[] | undefined> = [];
+    const writer: TaskParentMutationGateway = {
+      async setTaskParent(_token, taskId, _parentId, fields) {
+        calls.push(fields);
+        return ok({ gid: taskId });
+      },
+    };
+    await executeTaskParentUpdate(
+      "token",
+      { taskId: "123", parentId: "9", fields: ["name"] },
+      { writer },
+    );
+    expect(calls).toEqual([["name"]]);
+  });
+
+  test("executeTaskUpdate forwards fields to the gateway", async () => {
+    const writer = new FieldRecordingWriter();
+    await executeTaskUpdate(
+      "token",
+      {
+        taskId: "123",
+        mutation: { name: "New" },
+        resolveAssigneeMe: false,
+        customFields: [],
+        fields: ["due_on"],
+      },
+      { writer, ...materialization },
+    );
+    expect(writer.calls).toEqual([["due_on"]]);
+  });
+
+  test("executeTaskUpdate sends no fields when none are selected", async () => {
+    const writer = new FieldRecordingWriter();
+    await executeTaskUpdate(
+      "token",
+      {
+        taskId: "123",
+        mutation: { name: "New" },
+        resolveAssigneeMe: false,
+        customFields: [],
+      },
+      { writer, ...materialization },
+    );
+    expect(writer.calls).toEqual([undefined]);
+  });
+
+  test("executeTaskCreation forwards fields to create and staged writes", async () => {
+    const creator = new FieldRecordingCreator();
+    const writer = new FieldRecordingWriter();
+    const result = await executeTaskCreation(
+      "token",
+      {
+        target: { kind: "subtask", parentId: "9" },
+        mutation: { name: "Task", assignee: "4242" },
+        resolveAssigneeMe: false,
+        customFields: [],
+        fields: ["name"],
+      },
+      { creator, writer, ...materialization },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(creator.calls).toEqual([["name"]]);
+    expect(writer.calls).toEqual([["name"]]);
+  });
+
+  test("prepareTaskCreate carries fields into the prepared create", () => {
+    const prepared = prepareTaskCreate({ name: "Task", parent: "9" }, "due_on");
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.value.fields).toEqual(["due_on"]);
+  });
+
+  test("prepareTaskCreateWithConfig validates fields before reading config", async () => {
+    let configReads = 0;
+    const prepared = await prepareTaskCreateWithConfig(
+      { name: "Task" },
+      async () => {
+        configReads += 1;
+        return ok({ workspaceGid: "5" });
+      },
+      ",",
+    );
+
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.error.kind).toBe("invalid_usage");
+    expect(configReads).toBe(0);
+  });
+});

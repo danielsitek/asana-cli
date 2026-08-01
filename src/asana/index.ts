@@ -31,6 +31,7 @@ import type {
   WorkspaceListError,
 } from "../workspaces/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { projectFields } from "../utils/project-fields.ts";
 import { resolvePath } from "../utils/resolve-path.ts";
 
 const userSchema = z
@@ -97,29 +98,99 @@ const knownTaskFieldsAreValid = (
   (!hasOwn(value, "assignee") ||
     isNullableNamedResource(value.assignee, requestedAssigneeFields));
 
-const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> => {
-  const requestedTopLevelFields = new Set(
-    fields.map((field) => field.split(".", 1)[0] ?? field),
-  );
-  const requestedAssigneeFields = new Set(
+const assigneeFieldsOf = (fields: readonly string[]): ReadonlySet<string> =>
+  new Set(
     fields
       .filter((field) => field === "assignee.gid" || field === "assignee.name")
       .map((field) => field.slice("assignee.".length)),
   );
-  return z.custom<Task>(
-    (value) =>
-      isRecord(value) &&
-      [...requestedTopLevelFields].every((field) => hasOwn(value, field)) &&
-      knownTaskFieldsAreValid(value, requestedAssigneeFields),
+
+const taskMatchesFields = (
+  value: unknown,
+  fields: readonly string[],
+): boolean => {
+  const requestedTopLevelFields = new Set(
+    fields.map((field) => field.split(".", 1)[0] ?? field),
+  );
+  return (
+    isRecord(value) &&
+    [...requestedTopLevelFields].every((field) => hasOwn(value, field)) &&
+    knownTaskFieldsAreValid(value, assigneeFieldsOf(fields))
   );
 };
 
-const createdTaskSchema = z.custom<Task & Readonly<{ gid: string }>>(
-  (value) =>
-    isRecord(value) &&
-    isDigitOnlyGid(value.gid) &&
-    knownTaskFieldsAreValid(value, new Set()),
-);
+const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> =>
+  z.custom<Task>((value) => taskMatchesFields(value, fields));
+
+const projectTaskFields = (
+  value: unknown,
+  fields: readonly string[],
+): Record<string, unknown> | undefined => {
+  const projected = projectFields(value, fields);
+  return projected.found ? projected.value : undefined;
+};
+
+// Mutations narrow the response to the selected paths, so unrequested Asana
+// fields never leak into the output; reads keep their passthrough object.
+const mutatedTaskMatches = (
+  value: unknown,
+  fields: readonly string[],
+): boolean =>
+  isRecord(value) &&
+  knownTaskFieldsAreValid(value, assigneeFieldsOf(fields)) &&
+  projectTaskFields(value, fields) !== undefined;
+
+const buildMutatedTaskSchema = (
+  fields: readonly string[] | undefined,
+): z.ZodType<Task> =>
+  fields === undefined
+    ? buildTaskSchema([])
+    : z
+        .custom<Task>((value) => mutatedTaskMatches(value, fields))
+        .transform((value) => projectTaskFields(value, fields) as Task);
+
+const createdTaskMatches = (
+  value: unknown,
+  fields: readonly string[] | undefined,
+): boolean =>
+  isRecord(value) &&
+  isDigitOnlyGid(value.gid) &&
+  (fields === undefined
+    ? knownTaskFieldsAreValid(value, new Set())
+    : mutatedTaskMatches(value, fields));
+
+const buildCreatedTaskSchema = (
+  fields: readonly string[] | undefined,
+): z.ZodType<Task & Readonly<{ gid: string }>> => {
+  const schema = z.custom<Task & Readonly<{ gid: string }>>((value) =>
+    createdTaskMatches(value, fields),
+  );
+  return fields === undefined
+    ? schema
+    : schema.transform(
+        (value) =>
+          projectTaskFields(value, fields) as Task & Readonly<{ gid: string }>,
+      );
+};
+
+// Asana omits gid unless it is requested, but gid is the stable task identity
+// and the handle staged creation writes need, so it is always selected.
+const withGidField = (fields: readonly string[]): readonly string[] =>
+  fields.includes("gid") ? fields : ["gid", ...fields];
+
+const mutationFieldSelection = (
+  fields: readonly string[] | undefined,
+): Readonly<{
+  searchParams?: Readonly<Record<string, string>>;
+  fields?: readonly string[];
+}> => {
+  if (fields === undefined) return {};
+  const selected = withGidField(fields);
+  return {
+    searchParams: { opt_fields: selected.join(",") },
+    fields: selected,
+  };
+};
 
 const knownCommentFieldsAreValid = (
   value: Record<string, unknown>,
@@ -520,6 +591,7 @@ export class AsanaHttpClient
     token: string,
     taskId: string,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
@@ -528,11 +600,18 @@ export class AsanaHttpClient
       });
     }
 
-    const schema = z.object({ data: buildTaskSchema([]) });
+    const selection = mutationFieldSelection(fields);
+    const schema = z.object({ data: buildMutatedTaskSchema(selection.fields) });
     const result = await this.#request(
       token,
       `tasks/${taskId}`,
-      { method: "PUT", body: { data: mutation } },
+      {
+        method: "PUT",
+        ...(selection.searchParams === undefined
+          ? {}
+          : { searchParams: selection.searchParams }),
+        body: { data: mutation },
+      },
       schema,
     );
     if (!result.ok) {
@@ -552,6 +631,7 @@ export class AsanaHttpClient
     token: string,
     taskId: string,
     parentId: string | null,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
@@ -566,11 +646,18 @@ export class AsanaHttpClient
       });
     }
 
-    const schema = z.object({ data: buildTaskSchema([]) });
+    const selection = mutationFieldSelection(fields);
+    const schema = z.object({ data: buildMutatedTaskSchema(selection.fields) });
     const result = await this.#request(
       token,
       `tasks/${taskId}/setParent`,
-      { method: "POST", body: { data: { parent: parentId } } },
+      {
+        method: "POST",
+        ...(selection.searchParams === undefined
+          ? {}
+          : { searchParams: selection.searchParams }),
+        body: { data: { parent: parentId } },
+      },
       schema,
     );
     if (!result.ok) {
@@ -590,6 +677,7 @@ export class AsanaHttpClient
     token: string,
     target: TaskCreationTarget,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
     const targetGid =
       target.kind === "subtask"
@@ -612,11 +700,18 @@ export class AsanaHttpClient
         : target.kind === "project"
           ? { ...mutation, projects: [target.projectGid] }
           : mutation;
-    const schema = z.object({ data: createdTaskSchema });
+    const selection = mutationFieldSelection(fields);
+    const schema = z.object({ data: buildCreatedTaskSchema(selection.fields) });
     const result = await this.#request(
       token,
       path,
-      { method: "POST", body: { data } },
+      {
+        method: "POST",
+        ...(selection.searchParams === undefined
+          ? {}
+          : { searchParams: selection.searchParams }),
+        body: { data },
+      },
       schema,
     );
     if (!result.ok) {
