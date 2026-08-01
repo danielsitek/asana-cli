@@ -2937,6 +2937,218 @@ describe("tasks comments command", () => {
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("not_found");
   });
+
+  test("--latest returns only the newest N comments, newest first, in JSON", async () => {
+    const reader: TaskStoryGateway = {
+      getTaskStories: async () =>
+        ok({
+          stories: [
+            {
+              gid: "1",
+              created_at: "2024-01-01T00:00:00.000Z",
+              text: "first",
+              created_by: { gid: "1001", name: "Ada" },
+              resource_subtype: "comment_added",
+            },
+            {
+              gid: "2",
+              created_at: "2024-01-02T00:00:00.000Z",
+              text: "second",
+              created_by: { gid: "1001", name: "Ada" },
+              resource_subtype: "comment_added",
+            },
+          ],
+        }),
+    };
+    const result = await execute(
+      [
+        "--json",
+        "tasks",
+        "comments",
+        "1215978111726134",
+        "--max",
+        "10",
+        "--latest",
+        "1",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: [
+        {
+          gid: "2",
+          created_at: "2024-01-02T00:00:00.000Z",
+          text: "second",
+          created_by: { gid: "1001", name: "Ada" },
+        },
+      ],
+      meta: { scanned: 2, returned: 1, scan_truncated: false },
+    });
+  });
+
+  test("--latest renders newest-first in the human table", async () => {
+    const reader: TaskStoryGateway = {
+      getTaskStories: async () =>
+        ok({
+          stories: [
+            {
+              gid: "1",
+              created_at: "2024-01-01T00:00:00.000Z",
+              text: "older",
+              created_by: { gid: "1001", name: "Ada" },
+              resource_subtype: "comment_added",
+            },
+            {
+              gid: "2",
+              created_at: "2024-01-02T00:00:00.000Z",
+              text: "newer",
+              created_by: { gid: "1001", name: "Ada" },
+              resource_subtype: "comment_added",
+            },
+          ],
+        }),
+    };
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--max", "10", "--latest", "2"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.indexOf("newer")).toBeLessThan(
+      result.stdout.indexOf("older"),
+    );
+  });
+
+  test("rejects --latest without --max before any reader call", async () => {
+    const reader = new InMemoryCommentReader();
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--latest", "1"],
+      {
+        environment: new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("authentication must not be read");
+            },
+          },
+        ),
+        identity: new InMemoryIdentity(
+          err({ kind: "authentication", message: "fail" }),
+        ),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toBe(0);
+  });
+
+  test("rejects invalid --latest values before any reader call", async () => {
+    for (const invalid of ["0", "-1", "1.5", "abc"]) {
+      const reader = new InMemoryCommentReader();
+      const result = await execute(
+        [
+          "tasks",
+          "comments",
+          "1215978111726134",
+          "--max",
+          "10",
+          "--latest",
+          invalid,
+        ],
+        {
+          environment: { ASANA_CLI_TOKEN: "valid-token" },
+          identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+          commentReader: reader,
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      expect(reader.calls).toBe(0);
+    }
+  });
+
+  test("rejects --latest with --all before any reader call", async () => {
+    const reader = new InMemoryCommentReader();
+    const result = await execute(
+      [
+        "tasks",
+        "comments",
+        "1215978111726134",
+        "--max",
+        "10",
+        "--latest",
+        "1",
+        "--all",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toBe(0);
+  });
+
+  test("rejects --latest with --offset before any reader call", async () => {
+    const reader = new InMemoryCommentReader();
+    const result = await execute(
+      [
+        "tasks",
+        "comments",
+        "1215978111726134",
+        "--max",
+        "10",
+        "--latest",
+        "1",
+        "--offset",
+        "opaque-token",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toBe(0);
+  });
+
+  test("fails with scan_limit exit 5 and no data when more stories are known at the cap", async () => {
+    const reader: TaskStoryGateway = {
+      getTaskStories: async () =>
+        ok({
+          stories: [
+            {
+              gid: "1",
+              created_at: "2024-01-01T00:00:00.000Z",
+              text: "hi",
+              created_by: { gid: "1001", name: "Ada" },
+              resource_subtype: "comment_added",
+            },
+          ],
+          nextOffset: "page-2",
+        }),
+    };
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--max", "1", "--latest", "1"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(5);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("scan_limit");
+  });
 });
 
 describe("tasks comment command", () => {

@@ -181,6 +181,9 @@ asana-cli tasks get 1215978111726134
 # Read comments without unrelated system activity
 asana-cli tasks comments 1215978111726134
 
+# Read only the newest 3 comments, newest first, scanning up to 200 stories
+asana-cli tasks comments 1215978111726134 --max=200 --latest=3
+
 # List incomplete tasks in a My Tasks section assigned to you
 asana-cli tasks list --my-section=@in_progress --assignee=me
 
@@ -281,6 +284,12 @@ asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
 - Reads are bounded; complete traversal always requires an explicit maximum
   (`tasks comments --max=<n>` and `tasks list --max=<n>`, with `--all`
   requiring `--max`).
+- `tasks comments --latest=<n>` returns only the globally newest `n` comments,
+  newest first, and requires an explicit `--max=<scan-cap>`; it is mutually
+  exclusive with `--all` and `--offset`. It succeeds only after scanning to
+  source exhaustion within the cap; if the cap is reached while more stories
+  are known, it fails with `scan_limit` (exit 5) and returns no data — rerun
+  with a higher `--max`.
 - `GET` and `PUT` retry network errors, `429`, `502`, `503`, and `504`. `POST`
   retries only an explicit `429` response and is never retried
   after an ambiguous timeout, network error, or 5xx — this avoids duplicating
@@ -300,7 +309,7 @@ asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
 | 2    | invalid usage or configuration               |
 | 3    | authentication or authorization failure      |
 | 4    | Asana API, not-found, or network error       |
-| 5    | rate-limit or retry exhaustion               |
+| 5    | rate-limit, retry exhaustion, or scan limit  |
 | 6    | unexpected internal CLI error                |
 
 ## Contributing

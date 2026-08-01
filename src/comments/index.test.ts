@@ -95,7 +95,7 @@ describe("prepareTaskCommentsRead", () => {
         outputFields: DEFAULT_COMMENT_FIELDS,
         requestFields: [...DEFAULT_COMMENT_FIELDS, "resource_subtype"],
         scanCap: 100,
-        resultCap: 20,
+        mode: { kind: "capped", resultCap: 20 },
       },
     });
   });
@@ -143,7 +143,7 @@ describe("prepareTaskCommentsRead", () => {
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) return;
     expect(prepared.value.scanCap).toBe(5);
-    expect(prepared.value.resultCap).toBeUndefined();
+    expect(prepared.value.mode).toEqual({ kind: "all" });
   });
 
   test("--max without --all keeps the default result cap", () => {
@@ -151,7 +151,10 @@ describe("prepareTaskCommentsRead", () => {
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) return;
     expect(prepared.value.scanCap).toBe(50);
-    expect(prepared.value.resultCap).toBe(20);
+    expect(prepared.value.mode).toEqual({
+      kind: "capped",
+      resultCap: 20,
+    });
   });
 
   test("--max must be a positive safe integer", () => {
@@ -169,7 +172,69 @@ describe("prepareTaskCommentsRead", () => {
     const prepared = prepareTaskCommentsRead("123", { offset: "opaque-token" });
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) return;
-    expect(prepared.value.offset).toBe("opaque-token");
+    expect(prepared.value.mode).toEqual({
+      kind: "capped",
+      resultCap: 20,
+      offset: "opaque-token",
+    });
+  });
+
+  test("--latest requires --max", () => {
+    const prepared = prepareTaskCommentsRead("123", { latest: "3" });
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.error.message).toBe("--latest requires --max");
+  });
+
+  test("--latest and --all are mutually exclusive", () => {
+    const prepared = prepareTaskCommentsRead("123", {
+      latest: "3",
+      max: "10",
+      all: true,
+    });
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.error.message).toBe(
+      "--latest and --all are mutually exclusive",
+    );
+  });
+
+  test("--latest and --offset are mutually exclusive", () => {
+    const prepared = prepareTaskCommentsRead("123", {
+      latest: "3",
+      max: "10",
+      offset: "opaque-token",
+    });
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.error.message).toBe(
+      "--latest and --offset are mutually exclusive",
+    );
+  });
+
+  test("--latest must be a positive safe integer", () => {
+    for (const invalid of ["0", "-1", "1.5", "abc", "9007199254740992"]) {
+      const prepared = prepareTaskCommentsRead("123", {
+        latest: invalid,
+        max: "10",
+      });
+      expect(prepared.ok).toBe(false);
+      if (prepared.ok) continue;
+      expect(prepared.error.message).toBe(
+        "--latest must be a positive safe integer",
+      );
+    }
+  });
+
+  test("--latest with --max removes the result cap and sets latest", () => {
+    const prepared = prepareTaskCommentsRead("123", {
+      latest: "3",
+      max: "10",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.value.mode).toEqual({ kind: "latest", count: 3 });
+    expect(prepared.value.scanCap).toBe(10);
   });
 });
 
@@ -181,9 +246,21 @@ describe("executeTaskCommentsRead", () => {
     outputFields: DEFAULT_COMMENT_FIELDS,
     requestFields: [...DEFAULT_COMMENT_FIELDS, "resource_subtype"],
     scanCap: 100,
-    resultCap: 20,
+    mode: { kind: "capped", resultCap: 20 },
     ...overrides,
   });
+
+  const preparedLatest = (
+    latest: number,
+    scanCap: number,
+    overrides: Partial<PreparedTaskCommentsRead> = {},
+  ): PreparedTaskCommentsRead => {
+    return {
+      ...prepared(overrides),
+      scanCap,
+      mode: { kind: "latest", count: latest },
+    };
+  };
 
   test("filters to resource_subtype=comment_added only", async () => {
     const reader = new QueuedReader([
@@ -235,7 +312,7 @@ describe("executeTaskCommentsRead", () => {
     ]);
     const result = await executeTaskCommentsRead(
       "t",
-      prepared({ resultCap: 2 }),
+      prepared({ mode: { kind: "capped", resultCap: 2 } }),
       { reader },
     );
     expect(result.ok).toBe(true);
@@ -277,7 +354,7 @@ describe("executeTaskCommentsRead", () => {
     ]);
     const result = await executeTaskCommentsRead(
       "t",
-      prepared({ resultCap: 2 }),
+      prepared({ mode: { kind: "capped", resultCap: 2 } }),
       { reader },
     );
     expect(result.ok).toBe(true);
@@ -298,7 +375,10 @@ describe("executeTaskCommentsRead", () => {
     ]);
     const result = await executeTaskCommentsRead(
       "t",
-      prepared({ resultCap: 2, scanCap: 2 }),
+      prepared({
+        mode: { kind: "capped", resultCap: 2 },
+        scanCap: 2,
+      }),
       { reader },
     );
     expect(result.ok).toBe(true);
@@ -357,7 +437,9 @@ describe("executeTaskCommentsRead", () => {
     ]);
     const result = await executeTaskCommentsRead(
       "t",
-      prepared({ offset: "same-page" }),
+      prepared({
+        mode: { kind: "capped", resultCap: 20, offset: "same-page" },
+      }),
       { reader },
     );
     expect(result).toEqual({
@@ -380,7 +462,9 @@ describe("executeTaskCommentsRead", () => {
     ]);
     const result = await executeTaskCommentsRead(
       "t",
-      prepared({ offset: "first-page" }),
+      prepared({
+        mode: { kind: "capped", resultCap: 20, offset: "first-page" },
+      }),
       { reader },
     );
     expect(result).toEqual({
@@ -452,6 +536,7 @@ describe("executeTaskCommentsRead", () => {
         outputFields: DEFAULT_COMMENT_FIELDS,
         requestFields: [...DEFAULT_COMMENT_FIELDS, "resource_subtype"],
         scanCap: 3,
+        mode: { kind: "all" },
       },
       { reader },
     );
@@ -502,6 +587,201 @@ describe("executeTaskCommentsRead", () => {
     expect(result).toEqual({
       ok: false,
       error: { kind: "not_found", message: "Task not found", status: 404 },
+    });
+  });
+
+  describe("--latest mode", () => {
+    test("latest=1 across mixed multi-page stories returns only the final comment", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [
+            story(1, "comment_added"),
+            story(2, "assigned"),
+            story(3, "comment_added"),
+          ],
+          nextOffset: "page-2",
+        }),
+        ok({ stories: [story(4, "assigned"), story(5, "comment_added")] }),
+      ]);
+      const result = await executeTaskCommentsRead(
+        "t",
+        preparedLatest(1, 100),
+        { reader },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.comments.map((c) => c.gid)).toEqual(["5"]);
+      expect(result.value.meta).toEqual({
+        scanned: 5,
+        returned: 1,
+        scan_truncated: false,
+      });
+    });
+
+    test("latest=3 returns up to three newest-first, bounding retained comments", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: Array.from({ length: 30 }, (_, index) =>
+            story(index + 1, "comment_added"),
+          ),
+        }),
+      ]);
+      const result = await executeTaskCommentsRead(
+        "t",
+        preparedLatest(3, 100),
+        { reader },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.comments.map((c) => c.gid)).toEqual([
+        "30",
+        "29",
+        "28",
+      ]);
+      expect(result.value.meta).toEqual({
+        scanned: 30,
+        returned: 3,
+        scan_truncated: false,
+      });
+    });
+
+    test("projects custom fields strictly in latest mode", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [
+            story(1, "comment_added"),
+            story(2, "comment_added", {
+              created_by: { gid: "u1", name: "Ada", email: "ada@example.com" },
+            }),
+          ],
+        }),
+      ]);
+      const result = await executeTaskCommentsRead(
+        "t",
+        preparedLatest(1, 100, {
+          outputFields: ["gid", "created_by.email"],
+          requestFields: ["gid", "created_by.email", "resource_subtype"],
+        }),
+        { reader },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.comments).toEqual([
+        { gid: "2", created_by: { email: "ada@example.com" } },
+      ]);
+    });
+
+    test("returns zero comments when the source is exhausted with none", async () => {
+      const reader = new QueuedReader([
+        ok({ stories: [story(1, "assigned")] }),
+      ]);
+      const result = await executeTaskCommentsRead(
+        "t",
+        preparedLatest(5, 100),
+        { reader },
+      );
+      expect(result).toEqual({
+        ok: true,
+        value: {
+          comments: [],
+          meta: { scanned: 1, returned: 0, scan_truncated: false },
+        },
+      });
+    });
+
+    test("returns fewer than N when fewer comments exist before exhaustion", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [story(1, "comment_added"), story(2, "comment_added")],
+        }),
+      ]);
+      const result = await executeTaskCommentsRead(
+        "t",
+        preparedLatest(5, 100),
+        { reader },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.comments.map((c) => c.gid)).toEqual(["2", "1"]);
+      expect(result.value.meta).toEqual({
+        scanned: 2,
+        returned: 2,
+        scan_truncated: false,
+      });
+    });
+
+    test("succeeds on exact exhaustion at the scan cap", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [story(1, "comment_added"), story(2, "comment_added")],
+        }),
+      ]);
+      const result = await executeTaskCommentsRead("t", preparedLatest(5, 2), {
+        reader,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.comments.map((c) => c.gid)).toEqual(["2", "1"]);
+      expect(result.value.meta).toEqual({
+        scanned: 2,
+        returned: 2,
+        scan_truncated: false,
+      });
+    });
+
+    test("fails with scan_limit and no data when the cap ends mid-page", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [
+            story(1, "comment_added"),
+            story(2, "comment_added"),
+            story(3, "comment_added"),
+          ],
+        }),
+      ]);
+      const result = await executeTaskCommentsRead("t", preparedLatest(1, 2), {
+        reader,
+      });
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          kind: "scan_limit",
+          message:
+            "Reached --max=2 before confirming the newest 1 comment(s); rerun with a higher --max",
+        },
+      });
+    });
+
+    test("fails with scan_limit and no data when nextOffset proves more stories at cap", async () => {
+      const reader = new QueuedReader([
+        ok({
+          stories: [story(1, "comment_added"), story(2, "comment_added")],
+          nextOffset: "page-2",
+        }),
+      ]);
+      const result = await executeTaskCommentsRead("t", preparedLatest(1, 2), {
+        reader,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toEqual({
+        kind: "scan_limit",
+        message:
+          "Reached --max=2 before confirming the newest 1 comment(s); rerun with a higher --max",
+      });
+    });
+
+    test("propagates reader errors before any scan_limit determination", async () => {
+      const reader = new QueuedReader([
+        err({ kind: "rate_limit", message: "Retries exhausted" }),
+      ]);
+      const result = await executeTaskCommentsRead("t", preparedLatest(1, 2), {
+        reader,
+      });
+      expect(result).toEqual({
+        ok: false,
+        error: { kind: "rate_limit", message: "Retries exhausted" },
+      });
     });
   });
 });

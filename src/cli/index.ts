@@ -989,10 +989,19 @@ export const execute = async (
     .option("--max <n>", "cap stories scanned")
     .option("--offset <token>", "start from an Asana offset")
     .option("--all", "return all comments within the scan cap")
+    .option(
+      "--latest <n>",
+      "return the newest N comments after exhausting the source within --max",
+    )
     .action(
       async (
         idArg: string,
-        options: Readonly<{ max?: string; offset?: string; all?: boolean }>,
+        options: Readonly<{
+          max?: string;
+          offset?: string;
+          all?: boolean;
+          latest?: string;
+        }>,
       ) => {
         invoked = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
@@ -1003,6 +1012,7 @@ export const execute = async (
           ...(options.max === undefined ? {} : { max: options.max }),
           ...(options.offset === undefined ? {} : { offset: options.offset }),
           ...(options.all === undefined ? {} : { all: options.all }),
+          ...(options.latest === undefined ? {} : { latest: options.latest }),
         });
         if (!prepared.ok) {
           result = usageError(prepared.error.message);
@@ -1039,7 +1049,17 @@ export const execute = async (
           },
         );
         if (!read.ok) {
-          result = renderTaskReadFailure(read.error.kind);
+          result =
+            read.error.kind === "scan_limit"
+              ? {
+                  stdout: "",
+                  stderr: renderError({
+                    code: "scan_limit",
+                    message: read.error.message,
+                  }),
+                  exitCode: 5,
+                }
+              : renderTaskReadFailure(read.error.kind);
           return;
         }
         result = {
