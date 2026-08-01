@@ -19,6 +19,7 @@ import {
   type Task,
   type TaskGateway,
   type TaskCreationGateway,
+  type TaskCreationTarget,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskReadError,
@@ -545,23 +546,37 @@ export class AsanaHttpClient
     return ok(result.value.data);
   }
 
-  async createSubtask(
+  async createTask(
     token: string,
-    parentId: string,
+    target: TaskCreationTarget,
     mutation: TaskMutation,
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
-    if (!/^\d+$/.test(parentId)) {
+    const targetGid =
+      target.kind === "subtask"
+        ? target.parentId
+        : target.kind === "workspace"
+          ? target.workspaceGid
+          : target.projectGid;
+    if (!/^\d+$/.test(targetGid)) {
       return err({
         kind: "invalid_response",
-        message: "Task GID is not digit-only",
+        message: "Task creation target GID is not digit-only",
       });
     }
 
+    const path =
+      target.kind === "subtask" ? `tasks/${target.parentId}/subtasks` : "tasks";
+    const data =
+      target.kind === "workspace"
+        ? { ...mutation, workspace: target.workspaceGid }
+        : target.kind === "project"
+          ? { ...mutation, projects: [target.projectGid] }
+          : mutation;
     const schema = z.object({ data: createdTaskSchema });
     const result = await this.#request(
       token,
-      `tasks/${parentId}/subtasks`,
-      { method: "POST", body: { data: mutation } },
+      path,
+      { method: "POST", body: { data } },
       schema,
     );
     if (!result.ok) {

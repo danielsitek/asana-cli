@@ -8,13 +8,14 @@ import {
   parseTaskId,
   prepareTaskUpdate,
   prepareTaskCreate,
-  prepareTaskCreateWithDefault,
+  prepareTaskCreateWithConfig,
   validateFieldList,
   type PreparedTaskUpdate,
   type PreparedTaskCreate,
   type Task,
   type TaskCreationDependencies,
   type TaskCreationGateway,
+  type TaskCreationTarget,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskReadError,
@@ -35,7 +36,11 @@ class RecordingWriter implements TaskMutationGateway {
 
 class RecordingCreator implements TaskCreationGateway {
   calls: Array<
-    Readonly<{ token: string; parentId: string; mutation: TaskMutation }>
+    Readonly<{
+      token: string;
+      target: TaskCreationTarget;
+      mutation: TaskMutation;
+    }>
   > = [];
 
   constructor(
@@ -45,8 +50,12 @@ class RecordingCreator implements TaskCreationGateway {
     }),
   ) {}
 
-  async createSubtask(token: string, parentId: string, mutation: TaskMutation) {
-    this.calls.push({ token, parentId, mutation });
+  async createTask(
+    token: string,
+    target: TaskCreationTarget,
+    mutation: TaskMutation,
+  ) {
+    this.calls.push({ token, target, mutation });
     return this.response;
   }
 }
@@ -458,10 +467,13 @@ describe("task update workflow", () => {
 });
 
 describe("task creation preparation", () => {
-  test("requires a parent and name", () => {
+  test("requires a landing target and name", () => {
     expect(prepareTaskCreate({ name: "Child" })).toEqual({
       ok: false,
-      error: { kind: "invalid_usage", message: "--parent is required" },
+      error: {
+        kind: "invalid_usage",
+        message: "One of --parent, --my-section, or --project is required",
+      },
     });
     expect(prepareTaskCreate({ parent: "123" })).toEqual({
       ok: false,
@@ -484,7 +496,7 @@ describe("task creation preparation", () => {
     ).toEqual({
       ok: true,
       value: {
-        parentId: "222",
+        target: { kind: "subtask", parentId: "222" },
         mutation: {
           name: "Child",
           due_on: "2028-02-29",
@@ -512,9 +524,46 @@ describe("task creation preparation", () => {
       ).toBe(false);
     }
   });
+
+  test("prepares a standalone project task", () => {
+    expect(prepareTaskCreate({ project: "456", name: "Top level" })).toEqual({
+      ok: true,
+      value: {
+        target: { kind: "project", projectGid: "456" },
+        mutation: { name: "Top level" },
+        resolveAssigneeMe: false,
+        customFields: [],
+      },
+    });
+  });
+
+  test("rejects ambiguous landing targets", () => {
+    expect(
+      prepareTaskCreate({ parent: "123", project: "456", name: "Task" }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--parent and --project are mutually exclusive",
+      },
+    });
+    expect(
+      prepareTaskCreate({
+        project: "456",
+        mySection: "@todo",
+        name: "Task",
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--project and --my-section are mutually exclusive",
+      },
+    });
+  });
 });
 
-describe("prepareTaskCreateWithDefault", () => {
+describe("prepareTaskCreateWithConfig", () => {
   const optionsWithMySection = {
     parent: "123",
     name: "Child",
@@ -522,15 +571,15 @@ describe("prepareTaskCreateWithDefault", () => {
   } as const;
 
   test("applies validated me and GID defaults", async () => {
-    const ownTask = await prepareTaskCreateWithDefault(
+    const ownTask = await prepareTaskCreateWithConfig(
       optionsWithMySection,
-      async () => ok("me"),
+      async () => ok({ defaultAssignee: "me" }),
     );
     expect(ownTask.ok && ownTask.value.resolveAssigneeMe).toBe(true);
 
-    const delegatedTask = await prepareTaskCreateWithDefault(
+    const delegatedTask = await prepareTaskCreateWithConfig(
       optionsWithMySection,
-      async () => ok("9001"),
+      async () => ok({ defaultAssignee: "9001" }),
     );
     expect(delegatedTask.ok && delegatedTask.value.mutation.assignee).toBe(
       "9001",
@@ -540,11 +589,11 @@ describe("prepareTaskCreateWithDefault", () => {
   test("never resolves a default for an explicit assignee", async () => {
     for (const assignee of ["me", "9001", "null"] as const) {
       let resolverCalls = 0;
-      const prepared = await prepareTaskCreateWithDefault(
+      const prepared = await prepareTaskCreateWithConfig(
         { parent: "123", name: "Child", assignee },
         async () => {
           resolverCalls += 1;
-          return ok("8002");
+          return ok({ defaultAssignee: "8002" });
         },
       );
       expect(prepared.ok).toBe(true);
@@ -554,11 +603,11 @@ describe("prepareTaskCreateWithDefault", () => {
 
   test("keeps an explicit null from satisfying the My Tasks precondition", async () => {
     let resolverCalls = 0;
-    const prepared = await prepareTaskCreateWithDefault(
+    const prepared = await prepareTaskCreateWithConfig(
       { ...optionsWithMySection, assignee: "null" },
       async () => {
         resolverCalls += 1;
-        return ok("me");
+        return ok({ defaultAssignee: "me" });
       },
     );
     expect(prepared.ok).toBe(false);
@@ -566,9 +615,9 @@ describe("prepareTaskCreateWithDefault", () => {
   });
 
   test("rejects an invalid resolved default", async () => {
-    const prepared = await prepareTaskCreateWithDefault(
+    const prepared = await prepareTaskCreateWithConfig(
       { parent: "123", name: "Child" },
-      async () => ok("not-a-gid"),
+      async () => ok({ defaultAssignee: "not-a-gid" }),
     );
     expect(prepared).toEqual({
       ok: false,
@@ -580,13 +629,40 @@ describe("prepareTaskCreateWithDefault", () => {
   });
 
   test("propagates default resolution failures", async () => {
-    const prepared = await prepareTaskCreateWithDefault(
+    const prepared = await prepareTaskCreateWithConfig(
       { parent: "123", name: "Child" },
       async () => err({ kind: "configuration", message: "invalid config" }),
     );
     expect(prepared).toEqual({
       ok: false,
       error: { kind: "configuration", message: "invalid config" },
+    });
+  });
+
+  test("uses the configured workspace for a My Tasks task", async () => {
+    const prepared = await prepareTaskCreateWithConfig(
+      { name: "Standalone", mySection: "@todo", assignee: "me" },
+      async () => ok({ workspaceGid: "700" }),
+    );
+
+    expect(prepared.ok && prepared.value.target).toEqual({
+      kind: "workspace",
+      workspaceGid: "700",
+    });
+  });
+
+  test("requires a configured workspace for a My Tasks task", async () => {
+    const prepared = await prepareTaskCreateWithConfig(
+      { name: "Standalone", mySection: "@todo", assignee: "me" },
+      async () => ok({}),
+    );
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "configuration",
+        message: "workspace.gid is required to create a task in My Tasks",
+      },
     });
   });
 });
@@ -626,6 +702,10 @@ describe("task creation workflow", () => {
       },
     });
     expect(creator.calls).toHaveLength(1);
+    expect(creator.calls[0]?.target).toEqual({
+      kind: "subtask",
+      parentId: "123",
+    });
   });
 
   test("requires a writer for requested stages before the POST", async () => {
@@ -665,7 +745,7 @@ describe("task creation workflow", () => {
         ok: false,
         error: {
           kind: "internal_error",
-          message: "Task writer is required for staged subtask mutations",
+          message: "Task writer is required for staged task mutations",
         },
       });
       expect(creator.calls).toHaveLength(0);
