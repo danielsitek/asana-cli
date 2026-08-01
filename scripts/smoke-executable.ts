@@ -82,7 +82,7 @@ export const runExecutableSmoke = async (
     await runCommand(binary, ["tasks", "get", "invalid"]),
     {
       exitCode: 2,
-      stderrIncludes: '"message": "Invalid task identifier"',
+      stderrIncludes: '"message":"Invalid task identifier"',
     },
     "invalid usage",
   );
@@ -117,7 +117,7 @@ export const runExecutableSmoke = async (
       }),
       {
         exitCode: 3,
-        stderrIncludes: '"message": "ASANA_CLI_TOKEN is required"',
+        stderrIncludes: '"message":"ASANA_CLI_TOKEN is required"',
       },
       "configuration isolation",
     );

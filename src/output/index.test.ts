@@ -18,12 +18,17 @@ import {
 describe("configuration output", () => {
   test("renderJson prints standard JSON with trailing newline", () => {
     const data = { foo: "bar" };
-    expect(renderJson(data)).toBe(
-      JSON.stringify({ data, meta: {} }, null, 2) + "\n",
-    );
+    expect(renderJson(data)).toBe(JSON.stringify({ data, meta: {} }) + "\n");
     expect(renderJson(data, { version: "1" })).toBe(
-      JSON.stringify({ data, meta: { version: "1" } }, null, 2) + "\n",
+      JSON.stringify({ data, meta: { version: "1" } }) + "\n",
     );
+  });
+
+  test("renderJson escapes newlines within a single line", () => {
+    const data = { notes: "line 1\nline 2" };
+    const result = renderJson(data);
+    expect(result).toBe(JSON.stringify({ data, meta: {} }) + "\n");
+    expect(result.split("\n")).toHaveLength(2);
   });
 
   test("renderIdentity formats identity correctly", () => {
@@ -61,11 +66,16 @@ describe("configuration output", () => {
     expect(renderResolvedMyTasks(myTasks)).toBe(expected);
   });
 
-  test("renderError renders a formatted JSON error", () => {
+  test("renderError renders compact JSON on a single line", () => {
     const err = { code: "ERR_1", message: "something failed" };
-    expect(renderError(err)).toBe(
-      JSON.stringify({ error: err }, null, 2) + "\n",
-    );
+    expect(renderError(err)).toBe(JSON.stringify({ error: err }) + "\n");
+  });
+
+  test("renderError escapes embedded newlines within a single line", () => {
+    const err = { code: "ERR_1", message: "line 1\nline 2" };
+    const result = renderError(err);
+    expect(result).toBe(JSON.stringify({ error: err }) + "\n");
+    expect(result.split("\n")).toHaveLength(2);
   });
 
   test("renderConfigValue JSON output and multi-source rendering", () => {

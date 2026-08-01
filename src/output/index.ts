@@ -15,7 +15,7 @@ type ValueSource = Readonly<{
 export const renderJson = (
   data: unknown,
   meta: Readonly<Record<string, unknown>> = {},
-): string => `${JSON.stringify({ data, meta }, null, 2)}\n`;
+): string => `${JSON.stringify({ data, meta })}\n`;
 
 export const renderIdentity = (identity: {
   gid: string;
@@ -47,7 +47,7 @@ export const renderResolvedMyTasks = (myTasks: {
 };
 
 export const renderError = (error: CliError): string =>
-  `${JSON.stringify({ error }, null, 2)}\n`;
+  `${JSON.stringify({ error })}\n`;
 
 const renderValue = (value: unknown): string =>
   value === null
