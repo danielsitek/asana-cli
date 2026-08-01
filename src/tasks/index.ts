@@ -71,6 +71,30 @@ export interface TaskCreationGateway {
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
 }
 
+export interface TaskParentMutationGateway {
+  setTaskParent(
+    token: string,
+    taskId: string,
+    parentId: string | null,
+  ): Promise<Result<Task, TaskReadError>>;
+}
+
+export type TaskParentUpdateOptions = Readonly<{ parent: string }>;
+
+export type PreparedTaskParentUpdate = Readonly<{
+  taskId: string;
+  parentId: string | null;
+}>;
+
+export type TaskParentUpdateDependencies = Readonly<{
+  writer: TaskParentMutationGateway;
+}>;
+
+export type TaskParentUpdateResult = Readonly<{
+  task: Task;
+  applied: Readonly<{ parent: string | null }>;
+}>;
+
 export type TaskCreationTarget = Readonly<
   | { kind: "subtask"; parentId: string }
   | { kind: "workspace"; workspaceGid: string }
@@ -270,6 +294,60 @@ export const prepareTaskUpdate = (
   const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
   return ok({ taskId: taskId.value, ...prepared.value });
+};
+
+export const prepareTaskParentUpdate = (
+  taskIdInput: string,
+  options: TaskUpdateOptions & TaskParentUpdateOptions,
+): Result<
+  PreparedTaskParentUpdate,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const combined = Object.entries(options).some(
+    ([key, value]) =>
+      key !== "parent" &&
+      value !== undefined &&
+      (key !== "customFields" || value.length > 0),
+  );
+  if (combined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--parent cannot be combined with other task update flags",
+    });
+  }
+
+  const taskId = parseTaskId(taskIdInput);
+  if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
+
+  if (options.parent === "null") {
+    return ok({ taskId: taskId.value, parentId: null });
+  }
+  const parentId = parseTaskId(options.parent);
+  if (!parentId.ok) {
+    return err({ kind: "invalid_usage", message: "Invalid parent identifier" });
+  }
+  if (parentId.value === taskId.value) {
+    return err({
+      kind: "invalid_usage",
+      message: "--parent cannot reference the task itself",
+    });
+  }
+  return ok({ taskId: taskId.value, parentId: parentId.value });
+};
+
+export const executeTaskParentUpdate = async (
+  token: string,
+  prepared: PreparedTaskParentUpdate,
+  dependencies: TaskParentUpdateDependencies,
+): Promise<Result<TaskParentUpdateResult, TaskUpdateError>> => {
+  const updated = await dependencies.writer.setTaskParent(
+    token,
+    prepared.taskId,
+    prepared.parentId,
+  );
+  return updated.ok
+    ? ok({ task: updated.value, applied: { parent: prepared.parentId } })
+    : updated;
 };
 
 type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;

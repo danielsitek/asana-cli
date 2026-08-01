@@ -31,12 +31,16 @@ import {
   type TaskGateway,
   type TaskCreationGateway,
   type TaskMutationGateway,
+  type TaskParentMutationGateway,
   type TaskReadError,
   type TaskUpdateError,
+  type TaskUpdateOptions,
   executeTaskUpdate,
   executeTaskCreation,
+  executeTaskParentUpdate,
   parseTaskId,
   prepareTaskUpdate,
+  prepareTaskParentUpdate,
   prepareTaskCreateWithConfig,
   validateFieldList,
   DEFAULT_FIELDS,
@@ -74,6 +78,7 @@ export type ExecuteDependencies = Readonly<{
   taskReader?: TaskGateway;
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
+  taskParentWriter?: TaskParentMutationGateway;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
   workspaceReader?: WorkspaceGateway;
@@ -697,22 +702,43 @@ export const execute = async (
 
   const tasksUpdate = withTaskMutationOptions(
     tasks.command("update <id>").description("update a task's fields"),
-  ).action(async (idArg: string, options: TaskMutationCliOptions) => {
-    invoked = true;
-    json = program.opts<{ json?: boolean }>().json ?? false;
+  )
+    .option(
+      "--parent <id>",
+      "reparent to a task GID or URL, or null to promote; exclusive with other flags",
+    )
+    .action(
+      async (
+        idArg: string,
+        options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
+      ) => {
+        invoked = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
 
-    const prepared = prepareTaskUpdate(idArg, {
-      ...options,
-      ...(options.customField ? { customFields: options.customField } : {}),
-    });
-    if (!prepared.ok) {
-      result = usageError(prepared.error.message);
-      return;
-    }
+        const { customField, parent, ...rest } = options;
+        if (parent !== undefined) {
+          result = await runTaskParentUpdate(idArg, {
+            ...rest,
+            parent,
+            ...(customField ? { customFields: customField } : {}),
+          });
+          return;
+        }
+
+        result = await runTaskUpdate(idArg, options);
+      },
+    );
+
+  const runTaskParentUpdate = async (
+    idArg: string,
+    options: TaskUpdateOptions & Readonly<{ parent: string }>,
+  ): Promise<Execution> => {
+    const prepared = prepareTaskParentUpdate(idArg, options);
+    if (!prepared.ok) return usageError(prepared.error.message);
 
     const tokenResult = resolveToken(dependencies.environment);
     if (!tokenResult.ok) {
-      result = {
+      return {
         stdout: "",
         stderr: renderError({
           code: "authentication",
@@ -720,10 +746,56 @@ export const execute = async (
         }),
         exitCode: 3,
       };
-      return;
+    }
+    if (!dependencies.taskParentWriter) {
+      return {
+        stdout: "",
+        stderr: renderError({
+          code: "internal_error",
+          message: "Task parent writer is required",
+        }),
+        exitCode: 6,
+      };
+    }
+
+    const updated = await executeTaskParentUpdate(
+      tokenResult.value,
+      prepared.value,
+      { writer: dependencies.taskParentWriter },
+    );
+    if (!updated.ok) return renderTaskWorkflowFailure(updated.error);
+    return {
+      stdout: json
+        ? renderJson(updated.value.task, { applied: updated.value.applied })
+        : renderTaskUpdate(updated.value.task, updated.value.applied),
+      stderr: "",
+      exitCode: 0,
+    };
+  };
+
+  const runTaskUpdate = async (
+    idArg: string,
+    options: TaskMutationCliOptions,
+  ): Promise<Execution> => {
+    const prepared = prepareTaskUpdate(idArg, {
+      ...options,
+      ...(options.customField ? { customFields: options.customField } : {}),
+    });
+    if (!prepared.ok) return usageError(prepared.error.message);
+
+    const tokenResult = resolveToken(dependencies.environment);
+    if (!tokenResult.ok) {
+      return {
+        stdout: "",
+        stderr: renderError({
+          code: "authentication",
+          message: tokenResult.error.message,
+        }),
+        exitCode: 3,
+      };
     }
     if (!dependencies.taskWriter) {
-      result = {
+      return {
         stdout: "",
         stderr: renderError({
           code: "internal_error",
@@ -731,7 +803,6 @@ export const execute = async (
         }),
         exitCode: 6,
       };
-      return;
     }
 
     const hasMyTasksMutation =
@@ -749,11 +820,8 @@ export const execute = async (
         ((path) => readFile(path, { encoding: "utf8" })),
       readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
     });
-    if (!updated.ok) {
-      result = renderTaskWorkflowFailure(updated.error);
-      return;
-    }
-    result = {
+    if (!updated.ok) return renderTaskWorkflowFailure(updated.error);
+    return {
       stdout: json
         ? renderJson(updated.value.task, {
             applied: updated.value.applied,
@@ -762,7 +830,7 @@ export const execute = async (
       stderr: "",
       exitCode: 0,
     };
-  });
+  };
 
   tasksUpdate.exitOverride();
   tasksUpdate.configureOutput(captureOutput);

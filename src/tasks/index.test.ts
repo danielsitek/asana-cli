@@ -5,8 +5,10 @@ import {
   DEFAULT_FIELDS,
   executeTaskCreation,
   executeTaskUpdate,
+  executeTaskParentUpdate,
   parseTaskId,
   prepareTaskUpdate,
+  prepareTaskParentUpdate,
   prepareTaskCreate,
   prepareTaskCreateWithConfig,
   validateFieldList,
@@ -18,6 +20,7 @@ import {
   type TaskCreationTarget,
   type TaskMutation,
   type TaskMutationGateway,
+  type TaskParentMutationGateway,
   type TaskReadError,
   type TaskUpdateDependencies,
   type TaskUpdateOptions,
@@ -56,6 +59,24 @@ class RecordingCreator implements TaskCreationGateway {
     mutation: TaskMutation,
   ) {
     this.calls.push({ token, target, mutation });
+    return this.response;
+  }
+}
+
+class RecordingParentWriter implements TaskParentMutationGateway {
+  calls: Array<
+    Readonly<{ token: string; taskId: string; parentId: string | null }>
+  > = [];
+
+  constructor(
+    private readonly response: Result<Task, TaskReadError> = ok({
+      gid: "222",
+      name: "Moved",
+    }),
+  ) {}
+
+  async setTaskParent(token: string, taskId: string, parentId: string | null) {
+    this.calls.push({ token, taskId, parentId });
     return this.response;
   }
 }
@@ -463,6 +484,124 @@ describe("task update workflow", () => {
       assignee: "9001",
       assignee_section: "300",
     });
+  });
+});
+
+describe("task parent update workflow", () => {
+  test.each([
+    ["invalid task identifier", "not-a-gid", { parent: "456" }],
+    ["malformed parent", "123", { parent: "not-a-gid" }],
+    ["empty parent", "123", { parent: "" }],
+    [
+      "unsupported parent URL",
+      "123",
+      { parent: "https://app.asana.com/0/222" },
+    ],
+    ["self parent by GID", "123", { parent: "123" }],
+    [
+      "self parent by URL",
+      "123",
+      { parent: "https://app.asana.com/0/111/123" },
+    ],
+    ["combined name", "123", { parent: "456", name: "Renamed" }],
+    ["combined notes", "123", { parent: "456", notes: "text" }],
+    ["combined notes file", "123", { parent: "456", notesFile: "notes.md" }],
+    ["combined assignee", "123", { parent: "456", assignee: "me" }],
+    ["combined due date", "123", { parent: "456", dueOn: "2028-02-29" }],
+    ["combined completed", "123", { parent: "456", completed: "true" }],
+    ["combined My Tasks section", "123", { parent: "456", mySection: "300" }],
+    [
+      "combined custom field",
+      "123",
+      { parent: "456", customFields: ["500:2.5"] },
+    ],
+  ])("rejects %s during preparation", (_, taskId, options) => {
+    const result = prepareTaskParentUpdate(taskId, options);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("invalid_usage");
+  });
+
+  test("ignores an empty custom field list alongside --parent", () => {
+    expect(
+      prepareTaskParentUpdate("123", { parent: "456", customFields: [] }),
+    ).toEqual({ ok: true, value: { taskId: "123", parentId: "456" } });
+  });
+
+  test.each([
+    ["a GID", "456", "456"],
+    ["a task URL", "https://app.asana.com/0/111/456", "456"],
+    ["a focus task URL", "https://app.asana.com/0/111/456/f", "456"],
+    ["literal null", "null", null],
+  ])("prepares %s as the new parent", (_, parent, expected) => {
+    expect(prepareTaskParentUpdate("222", { parent })).toEqual({
+      ok: true,
+      value: { taskId: "222", parentId: expected },
+    });
+  });
+
+  test("reparents with exactly one write", async () => {
+    const writer = new RecordingParentWriter();
+    const prepared = prepareTaskParentUpdate(
+      "https://app.asana.com/0/111/222",
+      { parent: "456" },
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    const result = await executeTaskParentUpdate("secret", prepared.value, {
+      writer,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "222", name: "Moved" },
+        applied: { parent: "456" },
+      },
+    });
+    expect(writer.calls).toEqual([
+      { token: "secret", taskId: "222", parentId: "456" },
+    ]);
+  });
+
+  test("promotes a subtask to a top-level task", async () => {
+    const writer = new RecordingParentWriter();
+    const prepared = prepareTaskParentUpdate("222", { parent: "null" });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    const result = await executeTaskParentUpdate("secret", prepared.value, {
+      writer,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "222", name: "Moved" },
+        applied: { parent: null },
+      },
+    });
+    expect(writer.calls).toEqual([
+      { token: "secret", taskId: "222", parentId: null },
+    ]);
+  });
+
+  test("propagates gateway failures without leaking details", async () => {
+    const writer = new RecordingParentWriter(
+      err({ kind: "not_found", status: 404, message: "Task not found" }),
+    );
+    const result = await executeTaskParentUpdate(
+      "secret",
+      { taskId: "222", parentId: "456" },
+      { writer },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Task not found" },
+    });
+    expect(writer.calls).toHaveLength(1);
   });
 });
 

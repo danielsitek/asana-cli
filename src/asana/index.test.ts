@@ -920,6 +920,167 @@ describe("AsanaHttpClient", () => {
     });
   });
 
+  test("reparents a task with the exact setParent POST request", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(async (request) => {
+      calls += 1;
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("authorization")).toBe("Bearer secret-token");
+      expect(request.headers.get("content-type")).toBe("application/json");
+      expect(new URL(request.url).pathname).toBe(
+        "/api/1.0/tasks/222/setParent",
+      );
+      expect(await request.json()).toEqual({ data: { parent: "456" } });
+      return Response.json({
+        data: { gid: "222", name: "Moved", completed: false },
+      });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).setTaskParent(
+      "secret-token",
+      "222",
+      "456",
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "222", name: "Moved", completed: false },
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("promotes a task with a null parent", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).pathname).toBe(
+        "/api/1.0/tasks/222/setParent",
+      );
+      expect(await request.json()).toEqual({ data: { parent: null } });
+      return Response.json({ data: { gid: "222", name: "Promoted" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).setTaskParent(
+      "secret-token",
+      "222",
+      null,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "222", name: "Promoted" },
+    });
+  });
+
+  test("rejects non-digit setParent GIDs without any request", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(() => {
+      calls += 1;
+      return Response.json({ data: { gid: "222" } });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+
+    expect(await client.setTaskParent("token", "not-a-gid", "456")).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Task GID is not digit-only",
+      },
+    });
+    expect(await client.setTaskParent("token", "222", "not-a-gid")).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Parent task GID is not digit-only",
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("maps a setParent 404 to not_found without retrying", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(() => {
+      calls += 1;
+      return new Response("unsafe response details", { status: 404 });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).setTaskParent(
+      "token",
+      "222",
+      "456",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Task not found" },
+    });
+    expect(calls).toBe(1);
+  });
+
+  test.each([500, 502, 503, 504])(
+    "does not retry ambiguous setParent %i failures",
+    async (status) => {
+      let calls = 0;
+      const baseUrl = serverFor(() => {
+        calls += 1;
+        return new Response("unsafe response details", { status });
+      });
+
+      const result = await new AsanaHttpClient({
+        baseUrl,
+        sleep: async () => undefined,
+      }).setTaskParent("token", "222", "456");
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          kind: "api",
+          status,
+          message: `Asana API request failed (${status})`,
+        },
+      });
+      expect(calls).toBe(1);
+    },
+  );
+
+  test("retries a 429 setParent response honoring Retry-After", async () => {
+    let calls = 0;
+    const waits: number[] = [];
+    const baseUrl = serverFor(() => {
+      calls += 1;
+      return calls === 1
+        ? new Response(null, { status: 429, headers: { "Retry-After": "2" } })
+        : Response.json({ data: { gid: "222", name: "Moved" } });
+    });
+
+    const result = await new AsanaHttpClient({
+      baseUrl,
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }).setTaskParent("token", "222", "456");
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(waits).toEqual([2000]);
+  });
+
+  test("returns a safe failure for a malformed setParent response", async () => {
+    const baseUrl = serverFor(() => Response.json({ data: "invalid" }));
+
+    expect(
+      await new AsanaHttpClient({ baseUrl }).setTaskParent(
+        "token",
+        "222",
+        "456",
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
   test("creates a subtask with the exact POST request", async () => {
     const baseUrl = serverFor(async (request) => {
       expect(request.method).toBe("POST");
