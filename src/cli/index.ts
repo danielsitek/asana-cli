@@ -11,6 +11,7 @@ import {
   type ConfigContext,
   type ConfigError,
   type ConfigLayer,
+  type MyTaskSectionsDiscoveryGateway,
   type MyTasksDiscoveryGateway,
   type StageFailureError,
 } from "../config/index.ts";
@@ -18,7 +19,10 @@ import type {
   IdentityError as AsanaError,
   IdentityGateway,
 } from "../identity/index.ts";
-import { createMyTasksMutationResolver } from "../my-tasks/index.ts";
+import {
+  createMyTasksMutationResolver,
+  createMySectionResolver,
+} from "../my-tasks/index.ts";
 import {
   type TaskCommentCreationGateway,
   type TaskStoryGateway,
@@ -30,6 +34,7 @@ import {
 import {
   type TaskGateway,
   type TaskCreationGateway,
+  type TaskListGateway,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
@@ -38,10 +43,12 @@ import {
   executeTaskUpdate,
   executeTaskCreation,
   executeTaskParentUpdate,
+  executeTaskListRead,
   parseTaskId,
   prepareTaskUpdate,
   prepareTaskParentUpdate,
   prepareTaskCreateWithConfig,
+  prepareTaskListRead,
   validateFieldList,
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
@@ -58,6 +65,8 @@ import {
   renderTaskDetail,
   renderTaskUpdate,
   renderTaskCreation,
+  renderTaskList,
+  renderTaskListScanWarning,
   renderWorkspaceList,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
@@ -79,12 +88,14 @@ export type ExecuteDependencies = Readonly<{
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
   taskParentWriter?: TaskParentMutationGateway;
+  taskListReader?: TaskListGateway;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
   workspaceReader?: WorkspaceGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
+  myTaskSectionsDiscovery?: MyTaskSectionsDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
 }>;
@@ -288,12 +299,28 @@ export const execute = async (
       : undefined;
   };
 
+  const mySectionResolverFor = (required: boolean) => {
+    if (!required) return undefined;
+    const configuration = dependencies.configuration;
+    const discovery = dependencies.myTaskSectionsDiscovery;
+    return configuration && discovery
+      ? createMySectionResolver({ configuration, discovery })
+      : undefined;
+  };
+
   program.option("--json", "output JSON");
   program.option("--fields <fields>", "select explicit Asana fields");
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
-      const fieldsCommands = ["get", "comments", "comment", "update", "create"];
+      const fieldsCommands = [
+        "get",
+        "comments",
+        "comment",
+        "update",
+        "create",
+        "list",
+      ];
       const supportsFields =
         actionCommand.parent?.name() === "tasks" &&
         fieldsCommands.includes(actionCommand.name());
@@ -1109,6 +1136,115 @@ export const execute = async (
 
   tasksComment.exitOverride();
   tasksComment.configureOutput(captureOutput);
+
+  const tasksList = tasks
+    .command("list")
+    .description("list tasks from a My Tasks section, section, or project")
+    .option("--my-section <alias>", "list a My Tasks section by @alias")
+    .option("--section <gid>", "list a section by GID")
+    .option("--project <gid>", "list a project by GID")
+    .option("--assignee <value>", "filter by me or a user GID")
+    .option("--completed <boolean>", "filter by completed true or false")
+    .option("--max <n>", "cap tasks scanned")
+    .option("--all", "return all tasks within the scan cap")
+    .action(
+      async (
+        options: Readonly<{
+          mySection?: string;
+          section?: string;
+          project?: string;
+          assignee?: string;
+          completed?: string;
+          max?: string;
+          all?: boolean;
+        }>,
+      ) => {
+        invoked = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+
+        const prepared = prepareTaskListRead(
+          {
+            ...(options.mySection === undefined
+              ? {}
+              : { mySection: options.mySection }),
+            ...(options.section === undefined
+              ? {}
+              : { section: options.section }),
+            ...(options.project === undefined
+              ? {}
+              : { project: options.project }),
+            ...(options.assignee === undefined
+              ? {}
+              : { assignee: options.assignee }),
+            ...(options.completed === undefined
+              ? {}
+              : { completed: options.completed }),
+            ...(options.max === undefined ? {} : { max: options.max }),
+            ...(options.all === undefined ? {} : { all: options.all }),
+          },
+          program.opts<{ fields?: string }>().fields,
+        );
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+
+        const tokenResult = resolveToken(dependencies.environment);
+        if (!tokenResult.ok) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "authentication",
+              message: tokenResult.error.message,
+            }),
+            exitCode: 3,
+          };
+          return;
+        }
+
+        if (!dependencies.taskListReader) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Task list reader is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+
+        const mySectionResolver = mySectionResolverFor(
+          prepared.value.source.kind === "my_section",
+        );
+
+        const listed = await executeTaskListRead(
+          tokenResult.value,
+          prepared.value,
+          {
+            reader: dependencies.taskListReader,
+            ...(mySectionResolver ? { mySectionResolver } : {}),
+            resolveAuthenticatedUserGid,
+          },
+        );
+        if (!listed.ok) {
+          result = renderTaskWorkflowFailure(listed.error);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(listed.value.tasks, listed.value.meta)
+            : renderTaskList(listed.value.tasks, prepared.value.outputFields),
+          stderr: json
+            ? ""
+            : renderTaskListScanWarning(listed.value.meta.scan_truncated),
+          exitCode: 0,
+        };
+      },
+    );
+
+  tasksList.exitOverride();
+  tasksList.configureOutput(captureOutput);
 
   const workspaces = program
     .command("workspaces")

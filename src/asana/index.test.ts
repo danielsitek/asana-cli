@@ -339,6 +339,46 @@ describe("AsanaHttpClient", () => {
     expect(fieldsCalled).toBe(true);
   });
 
+  test("discovers My Tasks sections without requesting custom fields", async () => {
+    const requestedPaths: string[] = [];
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      requestedPaths.push(url.pathname);
+      if (url.pathname.endsWith("/users/me/user_task_list")) {
+        return Response.json({
+          data: {
+            gid: "1213894072990299",
+            workspace: { gid: "1201947864389005" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/projects/1213894072990299/sections")) {
+        return Response.json({
+          data: [{ gid: "1213894072991394", name: "In Progress" }],
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await client.discoverMyTaskSections(
+      "secret-token",
+      "1201947864389005",
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        userTaskListGid: "1213894072990299",
+        sections: [{ gid: "1213894072991394", name: "In Progress" }],
+      },
+    });
+    expect(requestedPaths).toHaveLength(2);
+    expect(requestedPaths.some((path) => path.includes("custom_field"))).toBe(
+      false,
+    );
+  });
+
   test("discoverMyTasks fails if next_page pagination is non-null for sections", async () => {
     const baseUrl = serverFor((request) => {
       const url = new URL(request.url);
@@ -1926,6 +1966,133 @@ describe("AsanaHttpClient comments", () => {
       ["gid", "text"],
     );
     expect(result).toEqual({ ok: true, value: { gid: "9", text: "hello" } });
+  });
+});
+
+describe("AsanaHttpClient task list", () => {
+  test("gets section tasks with exact query and schema", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/sections/500/tasks");
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,name,completed,assignee.gid",
+      );
+      expect(url.searchParams.get("completed_since")).toBe(
+        "2026-01-01T00:00:00.000Z",
+      );
+      expect(url.searchParams.get("offset")).toBe("abc");
+      return Response.json({
+        data: [
+          {
+            gid: "1",
+            name: "Task 1",
+            completed: false,
+            assignee: { gid: "9001" },
+          },
+        ],
+        next_page: { offset: "next-token" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getSectionTasks(
+      "token",
+      "500",
+      {
+        fields: ["gid", "name", "completed", "assignee.gid"],
+        limit: 50,
+        offset: "abc",
+        completedSince: "2026-01-01T00:00:00.000Z",
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        tasks: [
+          {
+            gid: "1",
+            name: "Task 1",
+            completed: false,
+            assignee: { gid: "9001" },
+          },
+        ],
+        nextOffset: "next-token",
+      },
+    });
+  });
+
+  test("gets project tasks with exact query and schema", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/projects/600/tasks");
+      return Response.json({ data: [], next_page: null });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getProjectTasks(
+      "token",
+      "600",
+      {
+        fields: ["gid"],
+        limit: 100,
+        completedSince: "1970-01-01T00:00:00.000Z",
+      },
+    );
+    expect(result).toEqual({ ok: true, value: { tasks: [] } });
+  });
+
+  test("rejects a non digit-only section or project GID before requesting", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const options = {
+      fields: ["gid"],
+      limit: 10,
+      completedSince: "1970-01-01T00:00:00.000Z",
+    };
+    expect(
+      (await client.getSectionTasks("token", "not-a-gid", options)).ok,
+    ).toBe(false);
+    expect(
+      (await client.getProjectTasks("token", "not-a-gid", options)).ok,
+    ).toBe(false);
+    expect(attempts).toBe(0);
+  });
+
+  test("validates page limits before making a request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    for (const limit of [0, 101, 1.5]) {
+      const result = await client.getSectionTasks("token", "1", {
+        fields: ["gid"],
+        limit,
+        completedSince: "1970-01-01T00:00:00.000Z",
+      });
+      expect(result.ok).toBe(false);
+    }
+    expect(attempts).toBe(0);
+  });
+
+  test("maps 404 to not_found for section and project task lists", async () => {
+    const baseUrl = serverFor(() => new Response(null, { status: 404 }));
+    const client = new AsanaHttpClient({ baseUrl });
+    const options = {
+      fields: ["gid"],
+      limit: 100,
+      completedSince: "1970-01-01T00:00:00.000Z",
+    };
+    expect(await client.getSectionTasks("token", "1", options)).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Resource not found" },
+    });
+    expect(await client.getProjectTasks("token", "1", options)).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Resource not found" },
+    });
   });
 });
 

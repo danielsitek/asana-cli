@@ -3,26 +3,36 @@ import { describe, expect, test } from "bun:test";
 import { err, ok, type Result } from "../shared/result.ts";
 import {
   DEFAULT_FIELDS,
+  DEFAULT_TASK_LIST_FIELDS,
   executeTaskCreation,
   executeTaskUpdate,
   executeTaskParentUpdate,
+  executeTaskListRead,
   parseTaskId,
   prepareTaskUpdate,
   prepareTaskParentUpdate,
   prepareTaskCreate,
   prepareTaskCreateWithConfig,
+  prepareTaskListRead,
   validateFieldList,
+  type MySectionResolver,
+  type PreparedTaskListRead,
   type PreparedTaskUpdate,
   type PreparedTaskCreate,
+  type ResolvedMySection,
   type Task,
   type TaskCreationDependencies,
   type TaskCreationGateway,
   type TaskCreationTarget,
+  type TaskListDependencies,
+  type TaskListGateway,
+  type TaskListPage,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
   type TaskUpdateDependencies,
+  type TaskUpdateError,
   type TaskUpdateOptions,
 } from "./index.ts";
 
@@ -1230,5 +1240,642 @@ describe("selected response fields", () => {
     if (prepared.ok) return;
     expect(prepared.error.kind).toBe("invalid_usage");
     expect(configReads).toBe(0);
+  });
+});
+
+const listTask = (
+  gid: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): Task => ({
+  gid,
+  name: `Task ${gid}`,
+  completed: false,
+  assignee: { gid: "9001", name: "Ada" },
+  ...extra,
+});
+
+type TaskListPageOptions = Readonly<{
+  fields: readonly string[];
+  limit: number;
+  offset?: string;
+  completedSince: string;
+}>;
+
+class QueuedTaskListReader implements TaskListGateway {
+  calls: Array<
+    Readonly<{
+      kind: "section" | "project";
+      gid: string;
+      options: TaskListPageOptions;
+    }>
+  > = [];
+
+  constructor(
+    private readonly pages: readonly Result<TaskListPage, TaskReadError>[],
+  ) {}
+
+  #respond(
+    kind: "section" | "project",
+    gid: string,
+    options: TaskListPageOptions,
+  ): Result<TaskListPage, TaskReadError> {
+    this.calls.push({ kind, gid, options });
+    const page = this.pages[this.calls.length - 1];
+    if (!page) throw new Error("no more pages queued");
+    return page;
+  }
+
+  async getSectionTasks(
+    _token: string,
+    sectionGid: string,
+    options: TaskListPageOptions,
+  ) {
+    return this.#respond("section", sectionGid, options);
+  }
+
+  async getProjectTasks(
+    _token: string,
+    projectGid: string,
+    options: TaskListPageOptions,
+  ) {
+    return this.#respond("project", projectGid, options);
+  }
+}
+
+class FakeMySectionResolver implements MySectionResolver {
+  calls: Array<Readonly<{ token: string; selector: unknown }>> = [];
+
+  constructor(
+    private readonly response: Result<ResolvedMySection, TaskUpdateError>,
+  ) {}
+
+  async resolve(
+    token: string,
+    selector: Parameters<MySectionResolver["resolve"]>[1],
+  ) {
+    this.calls.push({ token, selector });
+    return this.response;
+  }
+}
+
+const listDependenciesFor = (
+  reader: TaskListGateway,
+  overrides: Partial<TaskListDependencies> = {},
+): TaskListDependencies => ({
+  reader,
+  resolveAuthenticatedUserGid: async () => ok("9001"),
+  ...overrides,
+});
+
+const preparedListFor = (
+  options: Parameters<typeof prepareTaskListRead>[0],
+  fieldsInput?: string,
+): PreparedTaskListRead => {
+  const prepared = prepareTaskListRead(options, fieldsInput);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) throw new Error(prepared.error.message);
+  return prepared.value;
+};
+
+describe("DEFAULT_TASK_LIST_FIELDS", () => {
+  test("selects gid, name, completed, and assignee", () => {
+    expect(DEFAULT_TASK_LIST_FIELDS).toEqual([
+      "gid",
+      "name",
+      "completed",
+      "assignee.gid",
+      "assignee.name",
+    ]);
+  });
+});
+
+describe("prepareTaskListRead", () => {
+  test("requires exactly one source", () => {
+    expect(prepareTaskListRead({})).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message:
+          "Exactly one of --my-section, --section, or --project is required",
+      },
+    });
+    expect(prepareTaskListRead({ section: "1", project: "2" })).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message:
+          "Exactly one of --my-section, --section, or --project is required",
+      },
+    });
+    expect(
+      prepareTaskListRead({ mySection: "@todo", section: "1", project: "2" }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message:
+          "Exactly one of --my-section, --section, or --project is required",
+      },
+    });
+  });
+
+  test.each([
+    ["raw My Tasks section", { mySection: "300" }],
+    ["empty My Tasks alias", { mySection: "@" }],
+    ["non-digit section GID", { section: "abc" }],
+    ["non-digit project GID", { project: "abc" }],
+    ["invalid assignee", { section: "1", assignee: "ada@example.com" }],
+    ["invalid completed", { section: "1", completed: "yes" }],
+    ["--all without --max", { section: "1", all: true }],
+    ["non-integer --max", { section: "1", max: "abc" }],
+    ["zero --max", { section: "1", max: "0" }],
+    ["negative --max", { section: "1", max: "-1" }],
+  ])("rejects %s during preparation", (_, options) => {
+    const result = prepareTaskListRead(options);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("invalid_usage");
+  });
+
+  test("defaults completed false, default fields, and default caps", () => {
+    expect(prepareTaskListRead({ section: "123" })).toEqual({
+      ok: true,
+      value: {
+        source: { kind: "section", sectionGid: "123" },
+        completed: false,
+        outputFields: DEFAULT_TASK_LIST_FIELDS,
+        requestFields: DEFAULT_TASK_LIST_FIELDS,
+        scanCap: 100,
+        resultCap: 20,
+      },
+    });
+  });
+
+  test("parses a My Tasks alias source", () => {
+    expect(prepareTaskListRead({ mySection: "@in_review" })).toEqual({
+      ok: true,
+      value: {
+        source: {
+          kind: "my_section",
+          selector: { kind: "alias", value: "in_review" },
+        },
+        completed: false,
+        outputFields: DEFAULT_TASK_LIST_FIELDS,
+        requestFields: DEFAULT_TASK_LIST_FIELDS,
+        scanCap: 100,
+        resultCap: 20,
+      },
+    });
+  });
+
+  test("parses a project source", () => {
+    expect(prepareTaskListRead({ project: "456" })).toEqual({
+      ok: true,
+      value: {
+        source: { kind: "project", projectGid: "456" },
+        completed: false,
+        outputFields: DEFAULT_TASK_LIST_FIELDS,
+        requestFields: DEFAULT_TASK_LIST_FIELDS,
+        scanCap: 100,
+        resultCap: 20,
+      },
+    });
+  });
+
+  test("parses assignee me and GID filters", () => {
+    const me = prepareTaskListRead({ section: "1", assignee: "me" });
+    expect(me.ok && me.value.assigneeFilter).toEqual({ kind: "me" });
+    const gid = prepareTaskListRead({ section: "1", assignee: "9001" });
+    expect(gid.ok && gid.value.assigneeFilter).toEqual({
+      kind: "gid",
+      value: "9001",
+    });
+    const none = prepareTaskListRead({ section: "1" });
+    expect(none.ok && none.value.assigneeFilter).toBeUndefined();
+  });
+
+  test("adds assignee.gid to request fields only when filtering by assignee", () => {
+    const withFilter = prepareTaskListRead(
+      { section: "1", assignee: "me" },
+      "gid,name",
+    );
+    expect(withFilter.ok && withFilter.value.requestFields).toEqual([
+      "gid",
+      "name",
+      "completed",
+      "assignee.gid",
+    ]);
+    const withoutFilter = prepareTaskListRead({ section: "1" }, "gid,name");
+    expect(withoutFilter.ok && withoutFilter.value.requestFields).toEqual([
+      "gid",
+      "name",
+      "completed",
+    ]);
+  });
+
+  test("never duplicates internal fields already present in --fields", () => {
+    const prepared = prepareTaskListRead(
+      { section: "1", assignee: "me" },
+      "completed,assignee.gid,name",
+    );
+    expect(prepared.ok && prepared.value.requestFields).toEqual([
+      "completed",
+      "assignee.gid",
+      "name",
+    ]);
+  });
+
+  test("parses completed true and false", () => {
+    const trueResult = prepareTaskListRead({
+      section: "1",
+      completed: "true",
+    });
+    expect(trueResult.ok && trueResult.value.completed).toBe(true);
+    const falseResult = prepareTaskListRead({
+      section: "1",
+      completed: "false",
+    });
+    expect(falseResult.ok && falseResult.value.completed).toBe(false);
+  });
+
+  test("--max sets the scan cap and keeps the default result cap", () => {
+    const prepared = prepareTaskListRead({ section: "1", max: "5" });
+    expect(prepared.ok && prepared.value.scanCap).toBe(5);
+    expect(prepared.ok && prepared.value.resultCap).toBe(20);
+  });
+
+  test("--all with --max removes the result cap", () => {
+    expect(prepareTaskListRead({ section: "1", max: "5", all: true })).toEqual({
+      ok: true,
+      value: {
+        source: { kind: "section", sectionGid: "1" },
+        completed: false,
+        outputFields: DEFAULT_TASK_LIST_FIELDS,
+        requestFields: DEFAULT_TASK_LIST_FIELDS,
+        scanCap: 5,
+      },
+    });
+  });
+
+  test("rejects malformed --fields", () => {
+    const prepared = prepareTaskListRead({ section: "1" }, ",");
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.error.kind).toBe("invalid_usage");
+  });
+});
+
+describe("executeTaskListRead sources", () => {
+  test("reads directly from a section without a My Tasks resolver", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: [listTask("1"), listTask("2")] }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "500" }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    expect(reader.calls).toEqual([
+      {
+        kind: "section",
+        gid: "500",
+        options: {
+          fields: DEFAULT_TASK_LIST_FIELDS,
+          limit: 100,
+          completedSince: "now",
+        },
+      },
+    ]);
+  });
+
+  test("reads directly from a project", async () => {
+    const reader = new QueuedTaskListReader([ok({ tasks: [] })]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ project: "600" }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    expect(reader.calls[0]).toMatchObject({ kind: "project", gid: "600" });
+  });
+
+  test("resolves a My Tasks alias section before reading", async () => {
+    const reader = new QueuedTaskListReader([ok({ tasks: [] })]);
+    const resolver = new FakeMySectionResolver(ok({ sectionGid: "777" }));
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ mySection: "@in_review" }),
+      listDependenciesFor(reader, { mySectionResolver: resolver }),
+    );
+    expect(result.ok).toBe(true);
+    expect(resolver.calls).toEqual([
+      { token: "secret", selector: { kind: "alias", value: "in_review" } },
+    ]);
+    expect(reader.calls[0]).toMatchObject({ kind: "section", gid: "777" });
+  });
+
+  test("fails without reading when the My Tasks resolver is unavailable", async () => {
+    const reader = new QueuedTaskListReader([]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ mySection: "@todo" }),
+      listDependenciesFor(reader),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "internal_error",
+        message: "My Tasks section resolution dependencies are unavailable",
+      },
+    });
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("propagates My Tasks resolution failures without reading", async () => {
+    const reader = new QueuedTaskListReader([]);
+    const resolver = new FakeMySectionResolver(
+      err({ kind: "configuration", message: "stale config" }),
+    );
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ mySection: "@todo" }),
+      listDependenciesFor(reader, { mySectionResolver: resolver }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "configuration", message: "stale config" },
+    });
+    expect(reader.calls).toHaveLength(0);
+  });
+});
+
+describe("executeTaskListRead filtering", () => {
+  test("resolves assignee=me via identity and filters client-side", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({
+        tasks: [
+          listTask("1", { assignee: { gid: "9001" } }),
+          listTask("2", { assignee: { gid: "9002" } }),
+        ],
+      }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", assignee: "me" }),
+      listDependenciesFor(reader, {
+        resolveAuthenticatedUserGid: async () => ok("9001"),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks.map((task) => task.gid)).toEqual(["1"]);
+  });
+
+  test("filters by an explicit assignee GID without resolving identity", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({
+        tasks: [
+          listTask("1", { assignee: { gid: "9001" } }),
+          listTask("2", { assignee: { gid: "9002" } }),
+        ],
+      }),
+    ]);
+    let identityCalls = 0;
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", assignee: "9002" }),
+      listDependenciesFor(reader, {
+        resolveAuthenticatedUserGid: async () => {
+          identityCalls += 1;
+          return ok("9001");
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks.map((task) => task.gid)).toEqual(["2"]);
+    expect(identityCalls).toBe(0);
+  });
+
+  test("does not read tasks when assignee=me identity resolution fails", async () => {
+    const reader = new QueuedTaskListReader([]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", assignee: "me" }),
+      listDependenciesFor(reader, {
+        resolveAuthenticatedUserGid: async () =>
+          err({ kind: "authentication", message: "unsafe detail" }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("uses the epoch completed_since and filters completed tasks client-side", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({
+        tasks: [
+          listTask("1", { completed: true }),
+          listTask("2", { completed: false }),
+        ],
+      }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", completed: "true" }),
+      listDependenciesFor(reader),
+    );
+    expect(reader.calls[0]?.options.completedSince).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks.map((task) => task.gid)).toEqual(["1"]);
+  });
+
+  test("uses the Asana now keyword as completed_since for incomplete tasks", async () => {
+    const reader = new QueuedTaskListReader([ok({ tasks: [] })]);
+    await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(reader.calls[0]?.options.completedSince).toBe("now");
+  });
+
+  test("projects only the requested output fields", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: [listTask("1", { notes: "internal" })] }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }, "gid,name"),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks).toEqual([{ gid: "1", name: "Task 1" }]);
+  });
+
+  test("filters completed and assignee even when --fields omits them", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({
+        tasks: [
+          listTask("1", { completed: false, due_on: "2026-01-01" }),
+          listTask("2", { completed: true, due_on: "2026-01-02" }),
+        ],
+      }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }, "gid,due_on"),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks).toEqual([{ gid: "1", due_on: "2026-01-01" }]);
+  });
+
+  test("returns an empty list with meta when nothing matches", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: [listTask("1", { completed: true })] }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        tasks: [],
+        meta: { scanned: 1, returned: 0, scan_truncated: false },
+      },
+    });
+  });
+});
+
+describe("executeTaskListRead pagination", () => {
+  test("stops at the default result cap and reports it accurately", async () => {
+    const tasks = Array.from({ length: 25 }, (_, index) =>
+      listTask(`${index + 1}`),
+    );
+    const reader = new QueuedTaskListReader([ok({ tasks })]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks).toHaveLength(20);
+    expect(result.value.meta).toEqual({
+      scanned: 20,
+      returned: 20,
+      scan_truncated: false,
+    });
+  });
+
+  test("bounds scanning by --max across pages and reports truncation", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({
+        tasks: [listTask("1"), listTask("2"), listTask("3")],
+        nextOffset: "page2",
+      }),
+      ok({ tasks: [listTask("4"), listTask("5")] }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", max: "4", all: true }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks.map((task) => task.gid)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+    ]);
+    expect(result.value.meta).toEqual({
+      scanned: 4,
+      returned: 4,
+      scan_truncated: true,
+    });
+    expect(reader.calls).toHaveLength(2);
+    expect(reader.calls[1]?.options.limit).toBe(1);
+  });
+
+  test("--all removes the result cap and collects more than the default 20", async () => {
+    const tasks = Array.from({ length: 30 }, (_, index) =>
+      listTask(`${index + 1}`),
+    );
+    const reader = new QueuedTaskListReader([ok({ tasks })]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", max: "30", all: true }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tasks).toHaveLength(30);
+    expect(result.value.meta).toEqual({
+      scanned: 30,
+      returned: 30,
+      scan_truncated: false,
+    });
+  });
+
+  test("stops with invalid_response when pagination does not advance", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: [listTask("1")], nextOffset: "loop" }),
+      ok({ tasks: [], nextOffset: "loop" }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Task pagination did not advance",
+      },
+    });
+  });
+
+  test("stops with invalid_response when the offset repeats", async () => {
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: [listTask("1")], nextOffset: "same" }),
+      ok({ tasks: [listTask("2")], nextOffset: "same" }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Task pagination did not advance",
+      },
+    });
+  });
+
+  test("propagates a task page failure", async () => {
+    const reader = new QueuedTaskListReader([
+      err<TaskReadError>({ kind: "api", message: "boom", status: 500 }),
+    ]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ project: "1" }),
+      listDependenciesFor(reader),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "api", message: "boom", status: 500 },
+    });
   });
 });

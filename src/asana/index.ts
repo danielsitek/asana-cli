@@ -6,7 +6,9 @@ import type {
   TaskStoryGateway,
 } from "../comments/index.ts";
 import type {
+  DiscoveredMyTaskSections,
   MyTasksDiscoveryGateway,
+  MyTaskSectionsDiscoveryGateway,
   DiscoveredMyTasks,
   DiscoveryError,
 } from "../config/index.ts";
@@ -20,6 +22,8 @@ import {
   type TaskGateway,
   type TaskCreationGateway,
   type TaskCreationTarget,
+  type TaskListGateway,
+  type TaskListPage,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
@@ -239,6 +243,16 @@ const buildStoriesPageSchema = (fields: readonly string[]) =>
       .optional(),
   });
 
+const buildTaskListPageSchema = (fields: readonly string[]) =>
+  z.object({
+    data: z.array(buildTaskSchema(fields)),
+    next_page: z
+      .object({ offset: z.string() })
+      .passthrough()
+      .nullable()
+      .optional(),
+  });
+
 const workspaceSchema = z
   .custom<Workspace>(
     (value) =>
@@ -261,8 +275,10 @@ export class AsanaHttpClient
   implements
     IdentityGateway,
     MyTasksDiscoveryGateway,
+    MyTaskSectionsDiscoveryGateway,
     TaskGateway,
     TaskCreationGateway,
+    TaskListGateway,
     TaskMutationGateway,
     TaskParentMutationGateway,
     TaskStoryGateway,
@@ -420,10 +436,10 @@ export class AsanaHttpClient
     });
   }
 
-  async discoverMyTasks(
+  async discoverMyTaskSections(
     token: string,
     workspaceGid: string,
-  ): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
+  ): Promise<Result<DiscoveredMyTaskSections, DiscoveryError>> {
     const utlSchema = z
       .object({
         data: z
@@ -492,6 +508,23 @@ export class AsanaHttpClient
         message: "Asana returned more than 100 sections; next_page is present",
       });
     }
+
+    return ok({
+      userTaskListGid: utlGid,
+      sections: sectionsResult.value.data.map((section) => ({
+        gid: section.gid,
+        name: section.name,
+      })),
+    });
+  }
+
+  async discoverMyTasks(
+    token: string,
+    workspaceGid: string,
+  ): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
+    const sections = await this.discoverMyTaskSections(token, workspaceGid);
+    if (!sections.ok) return sections;
+    const utlGid = sections.value.userTaskListGid;
 
     const enumOptionSchema = z
       .object({
@@ -585,10 +618,7 @@ export class AsanaHttpClient
 
     return ok({
       userTaskListGid: utlGid,
-      sections: sectionsResult.value.data.map((s) => ({
-        gid: s.gid,
-        name: s.name,
-      })),
+      sections: sections.value.sections,
       customFields,
     });
   }
@@ -830,6 +860,105 @@ export class AsanaHttpClient
         ? {}
         : { nextOffset: result.value.next_page.offset }),
     });
+  }
+
+  async #getTasksForResource(
+    token: string,
+    path: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+      completedSince: string;
+    }>,
+  ): Promise<Result<TaskListPage, TaskReadError>> {
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Task page limit must be between 1 and 100",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      path,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(options.limit),
+          opt_fields: options.fields.join(","),
+          completed_since: options.completedSince,
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+        },
+      },
+      buildTaskListPageSchema(options.fields),
+    );
+    if (!result.ok) {
+      if (result.error.kind === "api" && result.error.status === 404) {
+        return err({
+          kind: "not_found",
+          status: 404,
+          message: "Resource not found",
+        });
+      }
+      return result;
+    }
+    return ok({
+      tasks: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async getSectionTasks(
+    token: string,
+    sectionGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+      completedSince: string;
+    }>,
+  ): Promise<Result<TaskListPage, TaskReadError>> {
+    if (!/^\d+$/.test(sectionGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Section GID is not digit-only",
+      });
+    }
+    return this.#getTasksForResource(
+      token,
+      `sections/${sectionGid}/tasks`,
+      options,
+    );
+  }
+
+  async getProjectTasks(
+    token: string,
+    projectGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+      completedSince: string;
+    }>,
+  ): Promise<Result<TaskListPage, TaskReadError>> {
+    if (!/^\d+$/.test(projectGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Project GID is not digit-only",
+      });
+    }
+    return this.#getTasksForResource(
+      token,
+      `projects/${projectGid}/tasks`,
+      options,
+    );
   }
 
   async createTaskComment(

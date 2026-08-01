@@ -3,7 +3,8 @@ import {
   type ConfigContext,
   type ConfigError,
   type DiscoveredCustomField,
-  type DiscoveredMyTasks,
+  type DiscoveredMyTaskSections,
+  type MyTaskSectionsDiscoveryGateway,
   type MyTasksDiscoveryGateway,
 } from "../config/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
@@ -12,9 +13,12 @@ import type {
   MyTasksMutationRequest,
   MyTasksMutationResolver,
   MyTasksMutationResult,
+  MySectionResolver,
+  ResolvedMySection,
   ResourceSelector,
   TaskGateway,
   TaskReadError,
+  TaskUpdateError,
 } from "../tasks/index.ts";
 
 export type MyTasksMutationDependencies = Readonly<{
@@ -48,7 +52,7 @@ const resolveAlias = (
 };
 
 const validateDiscoveredResources = (
-  discovered: DiscoveredMyTasks,
+  discovered: DiscoveredMyTaskSections,
   configuredUserTaskListGid: string,
   sectionGid: string | undefined,
 ): Result<void, ConfigError> => {
@@ -285,4 +289,59 @@ export const createMyTasksMutationResolver = (
   dependencies: MyTasksMutationDependencies,
 ): MyTasksMutationResolver => ({
   resolve: (request) => resolveMutation(request, dependencies),
+});
+
+export type MySectionResolverDependencies = Readonly<{
+  configuration: ConfigContext;
+  discovery: MyTaskSectionsDiscoveryGateway;
+}>;
+
+const resolveMySection = async (
+  token: string,
+  selector: ResourceSelector,
+  dependencies: MySectionResolverDependencies,
+): Promise<Result<ResolvedMySection, TaskUpdateError>> => {
+  const resolved = await resolveConfig(dependencies.configuration);
+  if (!resolved.ok) return resolved;
+  const workspaceGid = resolved.value.value.workspace?.gid;
+  const configuredMyTasks = resolved.value.value.myTasks;
+  if (!workspaceGid) {
+    return err(
+      configurationError("workspace.gid is required in configuration"),
+    );
+  }
+  if (!configuredMyTasks?.userTaskListGid) {
+    return err(
+      configurationError(
+        "myTasks.userTaskListGid is required in local configuration",
+      ),
+    );
+  }
+
+  const sectionGid = resolveAlias(
+    selector,
+    configuredMyTasks.sections,
+    "My Tasks section",
+  );
+  if (!sectionGid.ok) return sectionGid;
+
+  const discovered = await dependencies.discovery.discoverMyTaskSections(
+    token,
+    workspaceGid,
+  );
+  if (!discovered.ok) return discovered;
+  const validated = validateDiscoveredResources(
+    discovered.value,
+    configuredMyTasks.userTaskListGid,
+    sectionGid.value,
+  );
+  if (!validated.ok) return validated;
+
+  return ok({ sectionGid: sectionGid.value });
+};
+
+export const createMySectionResolver = (
+  dependencies: MySectionResolverDependencies,
+): MySectionResolver => ({
+  resolve: (token, selector) => resolveMySection(token, selector, dependencies),
 });

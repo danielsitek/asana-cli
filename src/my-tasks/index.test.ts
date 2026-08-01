@@ -5,12 +5,15 @@ import { join } from "node:path";
 
 import type {
   DiscoveredMyTasks,
+  MyTaskSectionsDiscoveryGateway,
   MyTasksDiscoveryGateway,
 } from "../config/index.ts";
 import { err, ok } from "../shared/result.ts";
 import type { TaskGateway } from "../tasks/index.ts";
 import {
+  createMySectionResolver,
   createMyTasksMutationResolver,
+  type MySectionResolverDependencies,
   type MyTasksMutationDependencies,
 } from "./index.ts";
 
@@ -436,5 +439,143 @@ describe("My Tasks mutation resolution", () => {
 
     expect((await discoveryFailure.resolver.resolve(request)).ok).toBe(false);
     expect((await readFailure.resolver.resolve(request)).ok).toBe(false);
+  });
+});
+
+const setupSectionResolver = async (
+  overrides: Partial<MySectionResolverDependencies> = {},
+  myTasks: Record<string, unknown> = {
+    userTaskListGid: "200",
+    sections: { in_review: "300" },
+  },
+) => {
+  const root = await mkdtemp(join(tmpdir(), "asana-cli-my-section-"));
+  temporaryDirectories.push(root);
+  await mkdir(join(root, ".git"));
+  await writeFile(
+    join(root, ".asana-cli.json"),
+    JSON.stringify({ workspace: { gid: "100" } }),
+  );
+  await writeFile(
+    join(root, ".asana-cli.local.json"),
+    JSON.stringify({ myTasks }),
+  );
+  const calls = { discovery: 0 };
+  const discovery: MyTaskSectionsDiscoveryGateway = {
+    discoverMyTaskSections: async (token, workspaceGid) => {
+      calls.discovery += 1;
+      expect({ token, workspaceGid }).toEqual({
+        token: "secret",
+        workspaceGid: "100",
+      });
+      const { userTaskListGid, sections } = discoveredMyTasks();
+      return ok({ userTaskListGid, sections });
+    },
+  };
+  return {
+    calls,
+    resolver: createMySectionResolver({
+      configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      discovery,
+      ...overrides,
+    }),
+  };
+};
+
+describe("My Tasks section resolution", () => {
+  test("resolves an alias to its section GID after validating discovery", async () => {
+    const { resolver, calls } = await setupSectionResolver();
+    const result = await resolver.resolve("secret", {
+      kind: "alias",
+      value: "in_review",
+    });
+    expect(result).toEqual({ ok: true, value: { sectionGid: "300" } });
+    expect(calls.discovery).toBe(1);
+  });
+
+  test("resolves a raw GID without an alias lookup", async () => {
+    const { resolver } = await setupSectionResolver();
+    const result = await resolver.resolve("secret", {
+      kind: "gid",
+      value: "300",
+    });
+    expect(result).toEqual({ ok: true, value: { sectionGid: "300" } });
+  });
+
+  test("rejects an unknown alias", async () => {
+    const { resolver } = await setupSectionResolver();
+    const result = await resolver.resolve("secret", {
+      kind: "alias",
+      value: "missing",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("is not configured");
+    }
+  });
+
+  test("rejects a section GID absent from the live My Tasks list", async () => {
+    const { resolver } = await setupSectionResolver();
+    const result = await resolver.resolve("secret", {
+      kind: "gid",
+      value: "999",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("is not present");
+  });
+
+  test("rejects a stale configured user task list", async () => {
+    const discovery: MyTaskSectionsDiscoveryGateway = {
+      discoverMyTaskSections: async () => {
+        const { userTaskListGid, sections } = discoveredMyTasks({
+          userTaskListGid: "201",
+        });
+        return ok({ userTaskListGid, sections });
+      },
+    };
+    const { resolver } = await setupSectionResolver({ discovery });
+    const result = await resolver.resolve("secret", {
+      kind: "gid",
+      value: "300",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("does not match");
+  });
+
+  test("requires configured workspace and user task list before discovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-my-section-empty-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    let discoveryCalls = 0;
+    const resolver = createMySectionResolver({
+      configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      discovery: {
+        discoverMyTaskSections: async () => {
+          discoveryCalls += 1;
+          const { userTaskListGid, sections } = discoveredMyTasks();
+          return ok({ userTaskListGid, sections });
+        },
+      },
+    });
+    const result = await resolver.resolve("secret", {
+      kind: "gid",
+      value: "300",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("workspace.gid");
+    expect(discoveryCalls).toBe(0);
+  });
+
+  test("propagates discovery failures", async () => {
+    const discovery: MyTaskSectionsDiscoveryGateway = {
+      discoverMyTaskSections: async () =>
+        err({ kind: "network", message: "offline" }),
+    };
+    const { resolver } = await setupSectionResolver({ discovery });
+    const result = await resolver.resolve("secret", {
+      kind: "gid",
+      value: "300",
+    });
+    expect(result.ok).toBe(false);
   });
 });

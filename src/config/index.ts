@@ -614,6 +614,11 @@ export type DiscoveredMyTasks = Readonly<{
   customFields: readonly DiscoveredCustomField[];
 }>;
 
+export type DiscoveredMyTaskSections = Pick<
+  DiscoveredMyTasks,
+  "userTaskListGid" | "sections"
+>;
+
 export type DiscoveryError = Readonly<{
   kind:
     | "authentication"
@@ -630,6 +635,13 @@ export interface MyTasksDiscoveryGateway {
     token: string,
     workspaceGid: string,
   ): Promise<Result<DiscoveredMyTasks, DiscoveryError>>;
+}
+
+export interface MyTaskSectionsDiscoveryGateway {
+  discoverMyTaskSections(
+    token: string,
+    workspaceGid: string,
+  ): Promise<Result<DiscoveredMyTaskSections, DiscoveryError>>;
 }
 
 export type LocalConfigInitResult = Readonly<{

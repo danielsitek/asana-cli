@@ -183,13 +183,13 @@ const renderLeafValue = (value: unknown): string =>
       ? value
       : JSON.stringify(value);
 
-export const renderCommentList = (
-  comments: readonly Record<string, unknown>[],
+const renderRecordTable = (
+  records: readonly Record<string, unknown>[],
   fields: readonly string[],
 ): string => {
-  const rows = comments.map((comment) =>
+  const rows = records.map((record) =>
     fields.map((field) => {
-      const resolved = resolvePath(comment, field.split("."));
+      const resolved = resolvePath(record, field.split("."));
       return renderLeafValue(resolved.found ? resolved.value : undefined);
     }),
   );
@@ -219,6 +219,16 @@ export const renderCommentList = (
   return [header, ...body].join("\n") + "\n";
 };
 
+export const renderCommentList = (
+  comments: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): string => renderRecordTable(comments, fields);
+
+export const renderTaskList = (
+  tasks: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): string => renderRecordTable(tasks, fields);
+
 export const renderWorkspaceList = (
   workspaces: readonly Readonly<{ gid: string; name: string }>[],
 ): string => {
@@ -242,6 +252,11 @@ export const renderWorkspaceList = (
 export const renderCommentScanWarning = (scanTruncated: boolean): string =>
   scanTruncated
     ? "Warning: story scan cap reached; more comments may exist.\n"
+    : "";
+
+export const renderTaskListScanWarning = (scanTruncated: boolean): string =>
+  scanTruncated
+    ? "Warning: task scan cap reached; more tasks may exist.\n"
     : "";
 
 export const renderCommentDetail = (comment: Record<string, unknown>): string =>
