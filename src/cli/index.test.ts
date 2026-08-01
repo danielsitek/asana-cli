@@ -1531,7 +1531,6 @@ describe("tasks update command", () => {
       ["tasks", "update", "123", "--due-on", "2026-02-29"],
       ["tasks", "update", "123", "--completed", "yes"],
       ["tasks", "update", "123", "--my-section", "section"],
-      ["tasks", "update", "123", "--custom-field", "400:1e3"],
       [
         "tasks",
         "update",
@@ -1837,7 +1836,7 @@ describe("tasks update command", () => {
     localMyTasks: Record<string, unknown> = {
       userTaskListGid: "200",
       sections: { in_review: "300" },
-      customFields: { estimate: "400" },
+      customFields: { estimate: "400", priority: "600" },
     },
   ): Promise<ExecuteDependencies> => {
     const root = await mkdtemp(join(tmpdir(), "asana-cli-update-"));
@@ -1874,6 +1873,17 @@ describe("tasks update command", () => {
               name: "Cost",
               resourceSubtype: "number",
               isReadOnly: false,
+            },
+            {
+              gid: "600",
+              name: "Priority",
+              resourceSubtype: "enum",
+              isReadOnly: false,
+              enumOptions: [
+                { gid: "601", name: "Low", enabled: true },
+                { gid: "602", name: "High", enabled: true },
+                { gid: "603", name: "Archived", enabled: false },
+              ],
             },
           ],
         }),
@@ -1957,6 +1967,111 @@ describe("tasks update command", () => {
     expect(writer.calls).toHaveLength(0);
   });
 
+  test("resolves enum custom fields by option GID and by exact name", async () => {
+    const dependencies = await myTasksDependencies();
+    const writer = dependencies.taskWriter as InMemoryTaskWriter;
+    const result = await execute(
+      [
+        "tasks",
+        "update",
+        "123",
+        "--custom-field",
+        "600:601",
+        "--custom-field",
+        "@estimate:null",
+      ],
+      dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls).toEqual([
+      {
+        token: "secret",
+        taskId: "123",
+        mutation: { custom_fields: { "400": null, "600": "601" } },
+      },
+    ]);
+
+    const byName = await myTasksDependencies();
+    const nameWriter = byName.taskWriter as InMemoryTaskWriter;
+    const nameResult = await execute(
+      ["tasks", "update", "123", "--custom-field", "@priority:High"],
+      byName,
+    );
+
+    expect(nameResult.exitCode).toBe(0);
+    expect(nameWriter.calls).toEqual([
+      {
+        token: "secret",
+        taskId: "123",
+        mutation: { custom_fields: { "600": "602" } },
+      },
+    ]);
+  });
+
+  test("rejects malformed numeric, unknown, ambiguous, and disabled enum values without writing", async () => {
+    for (const value of ["1e3", "1,5", "NaN"]) {
+      const dependencies = await myTasksDependencies();
+      const writer = dependencies.taskWriter as InMemoryTaskWriter;
+      const result = await execute(
+        ["tasks", "update", "123", "--custom-field", `500:${value}`],
+        dependencies,
+      );
+      expect(result.exitCode).toBe(2);
+      expect(writer.calls).toHaveLength(0);
+    }
+
+    const unknown = await myTasksDependencies();
+    const unknownWriter = unknown.taskWriter as InMemoryTaskWriter;
+    const unknownResult = await execute(
+      ["tasks", "update", "123", "--custom-field", "600:Medium"],
+      unknown,
+    );
+    expect(unknownResult.exitCode).toBe(2);
+    expect(unknownResult.stderr).toContain("is unknown");
+    expect(unknownResult.stderr).toContain("High");
+    expect(unknownResult.stderr).toContain("Low");
+    expect(unknownWriter.calls).toHaveLength(0);
+
+    const disabled = await myTasksDependencies();
+    const disabledWriter = disabled.taskWriter as InMemoryTaskWriter;
+    const disabledResult = await execute(
+      ["tasks", "update", "123", "--custom-field", "600:Archived"],
+      disabled,
+    );
+    expect(disabledResult.exitCode).toBe(2);
+    expect(disabledWriter.calls).toHaveLength(0);
+
+    const ambiguous = await myTasksDependencies({
+      discovery: new InMemoryDiscovery(
+        ok({
+          userTaskListGid: "200",
+          sections: [{ gid: "300", name: "In Review" }],
+          customFields: [
+            {
+              gid: "600",
+              name: "Priority",
+              resourceSubtype: "enum",
+              isReadOnly: false,
+              enumOptions: [
+                { gid: "601", name: "Low", enabled: true },
+                { gid: "604", name: "Low", enabled: true },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+    const ambiguousWriter = ambiguous.taskWriter as InMemoryTaskWriter;
+    const ambiguousResult = await execute(
+      ["tasks", "update", "123", "--custom-field", "600:Low"],
+      ambiguous,
+    );
+    expect(ambiguousResult.exitCode).toBe(2);
+    expect(ambiguousResult.stderr).toContain("is ambiguous");
+    expect(ambiguousWriter.calls).toHaveLength(0);
+  });
+
   test("plain updates do not access My Tasks dependencies", async () => {
     const writer = new InMemoryTaskWriter(ok(updatedTask));
     const dependencies: ExecuteDependencies = {
@@ -2022,7 +2137,7 @@ describe("tasks create command", () => {
     myTasks: {
       userTaskListGid: "200",
       sections: { in_progress: "300" },
-      customFields: { estimate: "400" },
+      customFields: { estimate: "400", priority: "600" },
     },
   } as const;
 
@@ -2073,6 +2188,16 @@ describe("tasks create command", () => {
                 name: "Estimate",
                 resourceSubtype: "number",
                 isReadOnly: false,
+              },
+              {
+                gid: "600",
+                name: "Priority",
+                resourceSubtype: "enum",
+                isReadOnly: false,
+                enumOptions: [
+                  { gid: "601", name: "Low", enabled: true },
+                  { gid: "602", name: "High", enabled: true },
+                ],
               },
             ],
           }),
@@ -2180,16 +2305,6 @@ describe("tasks create command", () => {
         "@in_progress",
         "--assignee",
         "ada@example.com",
-      ],
-      [
-        "tasks",
-        "create",
-        "--parent",
-        "123",
-        "--name",
-        "Child",
-        "--custom-field",
-        "400:1e3",
       ],
     ]) {
       const result = await execute(argv, dependencies);
@@ -2346,6 +2461,55 @@ describe("tasks create command", () => {
         ],
       },
     });
+  });
+
+  test("resolves an enum custom field by exact name on creation", async () => {
+    const setup = await dependenciesFor();
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "me",
+        "--custom-field",
+        "@priority:High",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(setup.writer.calls.map((call) => call.mutation)).toEqual([
+      { assignee: "9001" },
+      { custom_fields: { "600": "602" } },
+    ]);
+  });
+
+  test("rejects an unknown enum option on creation without any writes", async () => {
+    const setup = await dependenciesFor();
+    const result = await execute(
+      [
+        "tasks",
+        "create",
+        "--parent",
+        "123",
+        "--name",
+        "Child",
+        "--assignee",
+        "me",
+        "--custom-field",
+        "600:Medium",
+      ],
+      setup.dependencies,
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("is unknown");
+    expect(setup.creator.calls).toHaveLength(0);
+    expect(setup.writer.calls).toHaveLength(0);
   });
 
   test("renders a useful human result for a basic subtask", async () => {

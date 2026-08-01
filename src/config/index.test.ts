@@ -673,8 +673,18 @@ describe("initializeLocalConfig", () => {
         {
           gid: "1213894072991501",
           name: "Text Field",
-          resourceSubtype: "text",
+          resourceSubtype: "unsupported",
+          originalResourceSubtype: "text",
           isReadOnly: false,
+        },
+        {
+          gid: "1213894072991502",
+          name: "Priority",
+          resourceSubtype: "enum",
+          isReadOnly: false,
+          enumOptions: [
+            { gid: "1213894072991600", name: "High", enabled: true },
+          ],
         },
       ],
     };
@@ -706,6 +716,7 @@ describe("initializeLocalConfig", () => {
         },
         customFields: {
           hours_estimate: "1213894072991499",
+          priority: "1213894072991502",
         },
       },
     });

@@ -188,6 +188,10 @@ asana-cli tasks update 1215978111726134 --notes-file=task-description.md
 asana-cli tasks update 1215978111726134 --my-section=@in_review
 asana-cli tasks comment 1215978111726134 "Ready for review"
 
+# Set an enum custom field by field GID and exact option name
+asana-cli tasks update 1215978111726134 \
+  --custom-field=1214188195173899:"In Review"
+
 # Reparent a task under another task, or promote it to top level
 asana-cli tasks update 1215978111726134 --parent=1209876543210987
 asana-cli tasks update 1215978111726134 --parent=null
@@ -229,9 +233,11 @@ other `tasks update` flag; a task cannot be its own parent.
 explicitly, with no read-modify-write append. `--notes-file=-` and
 `tasks comment --file=-` read from stdin.
 
-`--custom-field=(<field-gid>|@<alias>):<value>` is repeatable and currently
-writes only number custom fields (finite integers, dot-decimal numbers, or
-`null`); the field definition is live-validated before writing.
+`--custom-field=(<field-gid>|@<alias>):<value>` is repeatable and writes number
+or enum custom fields. Number values use finite integer or dot-decimal syntax.
+Enum values resolve enabled options by GID first, then by case-sensitive exact
+name; invalid or ambiguous names list the valid options. `null` clears either
+type. Field definitions and options are live-validated before writing.
 
 Use `--json` for the stable `{ "data": ..., "meta": ... }` response and
 `--fields` for explicit Asana fields. Both flags, along with `--help`/`-h`

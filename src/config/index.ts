@@ -583,12 +583,30 @@ export type DiscoveredSection = Readonly<{
   name: string;
 }>;
 
-export type DiscoveredCustomField = Readonly<{
+export type DiscoveredEnumOption = Readonly<{
   gid: string;
   name: string;
-  resourceSubtype: string;
+  enabled: boolean;
+}>;
+
+type DiscoveredCustomFieldBase = Readonly<{
+  gid: string;
+  name: string;
   isReadOnly: boolean;
 }>;
+
+export type DiscoveredCustomField =
+  | (DiscoveredCustomFieldBase & Readonly<{ resourceSubtype: "number" }>)
+  | (DiscoveredCustomFieldBase &
+      Readonly<{
+        resourceSubtype: "enum";
+        enumOptions: readonly DiscoveredEnumOption[];
+      }>)
+  | (DiscoveredCustomFieldBase &
+      Readonly<{
+        resourceSubtype: "unsupported";
+        originalResourceSubtype: string;
+      }>);
 
 export type DiscoveredMyTasks = Readonly<{
   userTaskListGid: string;
@@ -698,10 +716,12 @@ export const initializeLocalConfig = async (
   }
 
   const customFieldsMap: Record<string, string> = {};
-  const writableNumberFields = discovered.customFields.filter(
-    (cf) => cf.resourceSubtype === "number" && !cf.isReadOnly,
+  const writableFields = discovered.customFields.filter(
+    (cf) =>
+      (cf.resourceSubtype === "number" || cf.resourceSubtype === "enum") &&
+      !cf.isReadOnly,
   );
-  for (const field of writableNumberFields) {
+  for (const field of writableFields) {
     const alias = generateAlias(field.name);
     if (!alias) {
       return err({

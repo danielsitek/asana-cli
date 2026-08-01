@@ -41,7 +41,7 @@ export type TaskMutation = Readonly<{
   due_on?: string | null;
   completed?: boolean;
   assignee_section?: string;
-  custom_fields?: Readonly<Record<string, number | null>>;
+  custom_fields?: Readonly<Record<string, number | string | null>>;
 }>;
 
 export type TaskUpdateOptions = Readonly<{
@@ -211,7 +211,7 @@ export type ResourceSelector = Readonly<
 
 export type PreparedCustomField = Readonly<{
   field: ResourceSelector;
-  value: number | null;
+  value: string | null;
 }>;
 
 export type MyTasksMutationRequest = Readonly<{
@@ -225,7 +225,7 @@ export type MyTasksMutationRequest = Readonly<{
 
 export type MyTasksMutationResult = Readonly<{
   assignee_section?: string;
-  custom_fields?: Readonly<Record<string, number | null>>;
+  custom_fields?: Readonly<Record<string, number | string | null>>;
 }>;
 
 export interface MyTasksMutationResolver {
@@ -245,22 +245,11 @@ const parseResourceSelector = (
   return err(`${flag} must use a digit-only GID or @alias`);
 };
 
-const parseNumberValue = (input: string): Result<number | null, string> => {
-  if (input === "null") return ok(null);
-  if (!/^-?\d+(?:\.\d+)?$/.test(input)) {
-    return err("Custom field value must be an integer, dot-decimal, or null");
-  }
-  const value = Number(input);
-  return Number.isFinite(value)
-    ? ok(value)
-    : err("Custom field value must be finite");
-};
-
 const parseCustomField = (
   input: string,
 ): Result<PreparedCustomField, string> => {
   const delimiter = input.indexOf(":");
-  if (delimiter <= 0 || delimiter !== input.lastIndexOf(":")) {
+  if (delimiter <= 0) {
     return err("--custom-field must use <field-gid|@alias>:<value>");
   }
   const field = parseResourceSelector(
@@ -268,9 +257,12 @@ const parseCustomField = (
     "--custom-field",
   );
   if (!field.ok) return field;
-  const value = parseNumberValue(input.slice(delimiter + 1));
-  if (!value.ok) return value;
-  return ok({ field: field.value, value: value.value });
+  const rawValue = input.slice(delimiter + 1);
+  if (rawValue === "") {
+    return err("--custom-field value must not be empty");
+  }
+  const value = rawValue === "null" ? null : rawValue;
+  return ok({ field: field.value, value });
 };
 
 const realDate = (value: string): boolean => {
