@@ -12,6 +12,7 @@ import {
   renderCommentList,
   renderCommentScanWarning,
   renderCommentDetail,
+  renderWorkspaceList,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -229,5 +230,22 @@ describe("comment output", () => {
     expect(
       renderCommentDetail({ gid: "1", text: "hi", created_by: null }),
     ).toBe("gid: 1\ntext: hi\ncreated_by: —\n");
+  });
+});
+
+describe("workspace output", () => {
+  test("renderWorkspaceList renders a borderless table with padded columns", () => {
+    const workspaces = [
+      { gid: "1", name: "Acme" },
+      { gid: "22", name: "Umbrella Corp" },
+    ];
+    expect(renderWorkspaceList(workspaces)).toBe(
+      ["gid  name         ", "1    Acme", "22   Umbrella Corp"].join("\n") +
+        "\n",
+    );
+  });
+
+  test("renderWorkspaceList renders a header-only table for an empty list", () => {
+    expect(renderWorkspaceList([])).toBe("gid  name\n");
   });
 });

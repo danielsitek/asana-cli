@@ -113,6 +113,13 @@ and create a replacement.
 
 ## Configuration
 
+Discover the workspace GIDs visible to the authenticated user, needed for
+`config init --shared --workspace=<gid>`:
+
+```sh
+asana-cli workspaces list --json
+```
+
 Initialize the shared workspace configuration:
 
 ```sh
