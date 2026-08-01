@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  type MyTaskSectionsDiscoveryGateway,
   type MyTasksDiscoveryGateway,
   type DiscoveredMyTasks,
   type DiscoveryError,
@@ -24,6 +25,8 @@ import {
   type TaskCreationGateway,
   type TaskCreationTarget,
   type TaskGateway,
+  type TaskListGateway,
+  type TaskListPage,
   type TaskMutation,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
@@ -48,13 +51,21 @@ class InMemoryIdentity implements IdentityGateway {
   }
 }
 
-class InMemoryDiscovery implements MyTasksDiscoveryGateway {
+class InMemoryDiscovery
+  implements MyTasksDiscoveryGateway, MyTaskSectionsDiscoveryGateway
+{
   constructor(
     private readonly response: Result<DiscoveredMyTasks, DiscoveryError>,
   ) {}
 
   async discoverMyTasks(): Promise<Result<DiscoveredMyTasks, DiscoveryError>> {
     return this.response;
+  }
+
+  async discoverMyTaskSections() {
+    if (!this.response.ok) return this.response;
+    const { userTaskListGid, sections } = this.response.value;
+    return ok({ userTaskListGid, sections });
   }
 }
 
@@ -2977,6 +2988,344 @@ describe("tasks comment command", () => {
     });
     expect(result.exitCode).toBe(2);
     expect(writer.lastText).toBeUndefined();
+  });
+});
+
+class InMemoryTaskListReader implements TaskListGateway {
+  calls: Array<
+    Readonly<{
+      kind: "section" | "project";
+      gid: string;
+      options: Readonly<{
+        fields: readonly string[];
+        limit: number;
+        offset?: string;
+        completedSince: string;
+      }>;
+    }>
+  > = [];
+
+  constructor(
+    private readonly response: Result<TaskListPage, TaskReadError> = ok({
+      tasks: [],
+    }),
+  ) {}
+
+  async getSectionTasks(
+    _token: string,
+    sectionGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+      completedSince: string;
+    }>,
+  ) {
+    this.calls.push({ kind: "section", gid: sectionGid, options });
+    return this.response;
+  }
+
+  async getProjectTasks(
+    _token: string,
+    projectGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+      completedSince: string;
+    }>,
+  ) {
+    this.calls.push({ kind: "project", gid: projectGid, options });
+    return this.response;
+  }
+}
+
+describe("tasks list command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
+
+  test("lists tasks from a section and outputs a human-readable table", async () => {
+    const reader = new InMemoryTaskListReader(
+      ok({
+        tasks: [
+          {
+            gid: "1",
+            name: "Write docs",
+            completed: false,
+            assignee: { gid: "9001", name: "Ada" },
+          },
+        ],
+      }),
+    );
+    const result = await execute(["tasks", "list", "--section", "500"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      taskListReader: reader,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Write docs");
+    expect(result.stderr).toBe("");
+    expect(reader.calls).toEqual([
+      {
+        kind: "section",
+        gid: "500",
+        options: expect.objectContaining({ limit: 100 }),
+      },
+    ]);
+  });
+
+  test("lists tasks from a project", async () => {
+    const reader = new InMemoryTaskListReader(ok({ tasks: [] }));
+    const result = await execute(["tasks", "list", "--project", "600"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      taskListReader: reader,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(reader.calls[0]?.kind).toBe("project");
+    expect(reader.calls[0]?.gid).toBe("600");
+  });
+
+  test("outputs stable JSON data and scan metadata", async () => {
+    const reader = new InMemoryTaskListReader(
+      ok({
+        tasks: [
+          {
+            gid: "1",
+            name: "Write docs",
+            completed: false,
+            assignee: { gid: "9001", name: "Ada" },
+          },
+        ],
+      }),
+    );
+    const result = await execute(
+      ["--json", "tasks", "list", "--section", "500"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: reader,
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: [
+        {
+          gid: "1",
+          name: "Write docs",
+          completed: false,
+          assignee: { gid: "9001", name: "Ada" },
+        },
+      ],
+      meta: { scanned: 1, returned: 1, scan_truncated: false },
+    });
+  });
+
+  test("filters by --completed and --assignee", async () => {
+    const reader = new InMemoryTaskListReader(
+      ok({
+        tasks: [
+          {
+            gid: "1",
+            completed: true,
+            assignee: { gid: "9001" },
+          },
+          {
+            gid: "2",
+            completed: true,
+            assignee: { gid: "9002" },
+          },
+        ],
+      }),
+    );
+    const result = await execute(
+      [
+        "--json",
+        "tasks",
+        "list",
+        "--section",
+        "500",
+        "--completed",
+        "true",
+        "--assignee",
+        "me",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: reader,
+      },
+    );
+    expect(JSON.parse(result.stdout).data).toEqual([
+      { gid: "1", completed: true, assignee: { gid: "9001" } },
+    ]);
+  });
+
+  test("warns in human output when the task scan cap is reached", async () => {
+    const reader = new InMemoryTaskListReader(
+      ok({
+        tasks: [{ gid: "1", completed: false }],
+        nextOffset: "page-2",
+      }),
+    );
+    const result = await execute(
+      ["tasks", "list", "--section", "500", "--max", "1"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("Warning:");
+    expect(result.stderr).toBe(
+      "Warning: task scan cap reached; more tasks may exist.\n",
+    );
+  });
+
+  test("rejects a missing or multiple source before any token read", async () => {
+    const reader = new InMemoryTaskListReader();
+    const noSource = await execute(["tasks", "list"], {
+      environment: new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("authentication must not be read");
+          },
+        },
+      ),
+      identity: new InMemoryIdentity(
+        err({ kind: "authentication", message: "fail" }),
+      ),
+      taskListReader: reader,
+    });
+    expect(noSource.exitCode).toBe(2);
+
+    const multipleSources = await execute(
+      ["tasks", "list", "--section", "1", "--project", "2"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: reader,
+      },
+    );
+    expect(multipleSources.exitCode).toBe(2);
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("requires a task list reader dependency", async () => {
+    const result = await execute(["tasks", "list", "--section", "500"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+    });
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain("internal_error");
+  });
+
+  test("maps a not_found task list reader error", async () => {
+    const failingReader: TaskListGateway = {
+      getSectionTasks: async () =>
+        err<TaskReadError>({
+          kind: "not_found",
+          status: 404,
+          message: "Resource not found",
+        }),
+      getProjectTasks: async () =>
+        err<TaskReadError>({
+          kind: "not_found",
+          status: 404,
+          message: "Resource not found",
+        }),
+    };
+    const result = await execute(["tasks", "list", "--section", "500"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      taskListReader: failingReader,
+    });
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("not_found");
+  });
+
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  test("resolves a My Tasks section by alias via live discovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-list-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      JSON.stringify({ workspace: { gid: "100" } }),
+    );
+    await writeFile(
+      join(root, ".asana-cli.local.json"),
+      JSON.stringify({
+        myTasks: { userTaskListGid: "200", sections: { in_review: "300" } },
+      }),
+    );
+    const reader = new InMemoryTaskListReader(ok({ tasks: [] }));
+    const result = await execute(
+      ["tasks", "list", "--my-section", "@in_review"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskListReader: reader,
+        myTaskSectionsDiscovery: new InMemoryDiscovery(
+          ok({
+            userTaskListGid: "200",
+            sections: [{ gid: "300", name: "In Review" }],
+            customFields: [],
+          }),
+        ),
+        configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(reader.calls[0]).toEqual({
+      kind: "section",
+      gid: "300",
+      options: expect.objectContaining({ limit: 100 }),
+    });
+  });
+
+  test("rejects an unresolvable My Tasks alias without listing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-list-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      JSON.stringify({ workspace: { gid: "100" } }),
+    );
+    await writeFile(
+      join(root, ".asana-cli.local.json"),
+      JSON.stringify({
+        myTasks: { userTaskListGid: "200", sections: { in_review: "300" } },
+      }),
+    );
+    const reader = new InMemoryTaskListReader(ok({ tasks: [] }));
+    const result = await execute(
+      ["tasks", "list", "--my-section", "@unknown"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskListReader: reader,
+        myTaskSectionsDiscovery: new InMemoryDiscovery(
+          ok({
+            userTaskListGid: "200",
+            sections: [{ gid: "300", name: "In Review" }],
+            customFields: [],
+          }),
+        ),
+        configuration: { cwd: root, home: join(root, "home"), environment: {} },
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toHaveLength(0);
   });
 });
 

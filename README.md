@@ -181,6 +181,13 @@ asana-cli tasks get 1215978111726134
 # Read comments without unrelated system activity
 asana-cli tasks comments 1215978111726134
 
+# List incomplete tasks in a My Tasks section assigned to you
+asana-cli tasks list --my-section=@in_progress --assignee=me
+
+# List completed tasks in a project, up to 50, with explicit fields
+asana-cli tasks list --project=1201947864389005 --completed=true --max=50 \
+  --fields=gid,name,due_on
+
 # Replace a description safely from a file
 asana-cli tasks update 1215978111726134 --notes-file=task-description.md
 
@@ -229,6 +236,17 @@ URL moves it under that parent, and literal `null` promotes it to a top-level
 task. It is a dedicated single-write operation and cannot be combined with any
 other `tasks update` flag; a task cannot be its own parent.
 
+`tasks list` requires exactly one source: `--my-section=@<alias>` for a My
+Tasks section, `--section=<gid>` for any section, or `--project=<gid>` for a
+project. `--my-section` accepts only `@alias` and is resolved and validated
+against your live My Tasks the same way as `tasks update --my-section`.
+`--assignee=me|<gid>` and `--completed=true|false` (default `false`) filter
+client-side, so they work even when `--fields` omits `assignee` or
+`completed`. Reads are bounded the same way as `tasks comments`: a default
+scan cap of 100 and result cap of 20, `--max=<n>` to raise the scan cap, and
+`--all` (which requires `--max`) to remove the result cap. Default fields are
+`gid,name,completed,assignee.gid,assignee.name`.
+
 `--notes` and `--notes-file` are mutually exclusive; notes are replaced
 explicitly, with no read-modify-write append. `--notes-file=-` and
 `tasks comment --file=-` read from stdin.
@@ -261,7 +279,8 @@ asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
 - Notes are replaced explicitly; there is no implicit append.
 - Long notes and comments may be read from a file or stdin.
 - Reads are bounded; complete traversal always requires an explicit maximum
-  (`tasks comments --max=<n>`, with `--all` requiring `--max`).
+  (`tasks comments --max=<n>` and `tasks list --max=<n>`, with `--all`
+  requiring `--max`).
 - `GET` and `PUT` retry network errors, `429`, `502`, `503`, and `504`. `POST`
   retries only an explicit `429` response and is never retried
   after an ambiguous timeout, network error, or 5xx — this avoids duplicating

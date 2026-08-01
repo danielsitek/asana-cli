@@ -11,6 +11,8 @@ import {
   renderTaskUpdate,
   renderCommentList,
   renderCommentScanWarning,
+  renderTaskList,
+  renderTaskListScanWarning,
   renderCommentDetail,
   renderWorkspaceList,
 } from "./index.ts";
@@ -240,6 +242,41 @@ describe("comment output", () => {
     expect(
       renderCommentDetail({ gid: "1", text: "hi", created_by: null }),
     ).toBe("gid: 1\ntext: hi\ncreated_by: —\n");
+  });
+});
+
+describe("task list output", () => {
+  test("renderTaskList renders a borderless table with padded columns", () => {
+    const tasks = [
+      { gid: "1", name: "Write docs", completed: false },
+      { gid: "22", name: "Ship it", completed: true },
+    ];
+    expect(renderTaskList(tasks, ["gid", "name", "completed"])).toBe(
+      [
+        "gid  name        completed",
+        "1    Write docs  false",
+        "22   Ship it     true",
+      ].join("\n") + "\n",
+    );
+  });
+
+  test("renderTaskList renders unavailable nested values as an em dash", () => {
+    expect(
+      renderTaskList(
+        [{ gid: "1", assignee: null }],
+        ["gid", "assignee.gid", "assignee.name"],
+      ),
+    ).toBe(
+      ["gid  assignee.gid  assignee.name", "1    —             —"].join("\n") +
+        "\n",
+    );
+  });
+
+  test("renderTaskListScanWarning renders diagnostics only for truncation", () => {
+    expect(renderTaskListScanWarning(true)).toBe(
+      "Warning: task scan cap reached; more tasks may exist.\n",
+    );
+    expect(renderTaskListScanWarning(false)).toBe("");
   });
 });
 

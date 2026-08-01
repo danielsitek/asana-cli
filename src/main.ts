@@ -14,10 +14,12 @@ const result = await execute(Bun.argv.slice(2), {
   taskCreator: client,
   taskWriter: client,
   taskParentWriter: client,
+  taskListReader: client,
   commentReader: client,
   commentWriter: client,
   workspaceReader: client,
   discovery: client,
+  myTaskSectionsDiscovery: client,
   configuration: {
     cwd: process.cwd(),
     home: homedir(),
