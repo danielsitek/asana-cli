@@ -219,6 +219,26 @@ export const renderCommentList = (
   return [header, ...body].join("\n") + "\n";
 };
 
+export const renderWorkspaceList = (
+  workspaces: readonly Readonly<{ gid: string; name: string }>[],
+): string => {
+  const fields = ["gid", "name"] as const;
+  const rows = workspaces.map((workspace) => [workspace.gid, workspace.name]);
+  const widths = fields.map((field, index) =>
+    Math.max(field.length, ...rows.map((row) => row[index]!.length)),
+  );
+  const header = fields
+    .map((field, index) => field.padEnd(widths[index]!))
+    .join("  ");
+  const body = rows.map((row) =>
+    row
+      .map((cell, index) => cell.padEnd(widths[index]!))
+      .join("  ")
+      .trimEnd(),
+  );
+  return [header, ...body].join("\n") + "\n";
+};
+
 export const renderCommentScanWarning = (scanTruncated: boolean): string =>
   scanTruncated
     ? "Warning: story scan cap reached; more comments may exist.\n"

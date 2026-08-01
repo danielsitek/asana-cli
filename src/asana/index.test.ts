@@ -1217,3 +1217,151 @@ describe("AsanaHttpClient comments", () => {
     expect(result).toEqual({ ok: true, value: { gid: "9", text: "hello" } });
   });
 });
+
+describe("AsanaHttpClient workspaces", () => {
+  test("lists workspaces with exact pagination query and schema", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/workspaces");
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,name");
+      expect(url.searchParams.get("offset")).toBe("abc");
+      return Response.json({
+        data: [{ gid: "1", name: "Acme" }],
+        next_page: { offset: "next-token" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+      "token",
+      { limit: 50, offset: "abc" },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        workspaces: [{ gid: "1", name: "Acme" }],
+        nextOffset: "next-token",
+      },
+    });
+  });
+
+  test("omits nextOffset when there is no next page", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({ data: [], next_page: null }),
+    );
+    const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+      "token",
+      { limit: 100 },
+    );
+    expect(result).toEqual({ ok: true, value: { workspaces: [] } });
+  });
+
+  test("rejects an empty next_page offset before another request can be made", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({
+        data: [{ gid: "1", name: "Acme" }],
+        next_page: { offset: "" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+      "token",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+    expect(attempts).toBe(1);
+  });
+
+  test("tolerates unrelated Asana fields but omits them from the projected workspace", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [
+          {
+            gid: "1",
+            name: "Acme",
+            resource_type: "workspace",
+            is_organization: true,
+          },
+        ],
+      }),
+    );
+    const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+      "token",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: { workspaces: [{ gid: "1", name: "Acme" }] },
+    });
+  });
+
+  test("rejects a workspace with a non-digit gid or missing name", async () => {
+    let response: unknown = {
+      data: [{ gid: "not-a-gid", name: "Acme" }],
+    };
+    const baseUrl = serverFor(() => Response.json(response));
+    const client = new AsanaHttpClient({ baseUrl });
+
+    const invalidGid = await client.listWorkspaces("token", { limit: 100 });
+    expect(invalidGid).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+
+    response = { data: [{ gid: "1" }] };
+    const missingName = await client.listWorkspaces("token", { limit: 100 });
+    expect(missingName).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
+  test("validates page limits before making a request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    for (const limit of [0, 101, 1.5]) {
+      const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+        "token",
+        { limit },
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(attempts).toBe(0);
+  });
+
+  test("maps authentication failures without retrying", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 401 });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listWorkspaces(
+      "token",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "authentication",
+        status: 401,
+        message: "Asana authentication failed",
+      },
+    });
+    expect(attempts).toBe(1);
+  });
+});

@@ -14,6 +14,11 @@ import type {
   IdentityGateway,
 } from "../identity/index.ts";
 import type { TaskStoryGateway } from "../comments/index.ts";
+import type {
+  Workspace,
+  WorkspaceGateway,
+  WorkspaceListError,
+} from "../workspaces/index.ts";
 import {
   type Task,
   type TaskCreationGateway,
@@ -130,6 +135,27 @@ class StagedTaskWriter implements TaskMutationGateway {
       this.responses[this.calls.length - 1] ??
       err({ kind: "invalid_response", message: "Missing fake response" })
     );
+  }
+}
+
+class InMemoryWorkspaceReader implements WorkspaceGateway {
+  public calls: Array<Readonly<{ limit: number; offset?: string }>> = [];
+
+  constructor(
+    private readonly pages: readonly Result<
+      Readonly<{ workspaces: readonly Workspace[]; nextOffset?: string }>,
+      WorkspaceListError
+    >[],
+  ) {}
+
+  async listWorkspaces(
+    _token: string,
+    options: Readonly<{ limit: number; offset?: string }>,
+  ) {
+    this.calls.push(options);
+    const page = this.pages[this.calls.length - 1];
+    if (!page) throw new Error("no more pages queued");
+    return page;
   }
 }
 
@@ -2082,5 +2108,175 @@ describe("tasks comment command", () => {
     });
     expect(result.exitCode).toBe(2);
     expect(writer.lastText).toBeUndefined();
+  });
+});
+
+describe("workspaces list command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+
+  test("lists workspaces and renders a human-readable table", async () => {
+    const reader = new InMemoryWorkspaceReader([
+      ok({ workspaces: [{ gid: "1", name: "Acme" }] }),
+    ]);
+    const result = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result).toEqual({
+      stdout: "gid  name\n1    Acme\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("outputs stable JSON", async () => {
+    const reader = new InMemoryWorkspaceReader([
+      ok({ workspaces: [{ gid: "1", name: "Acme" }] }),
+    ]);
+    const result = await execute(["workspaces", "list", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      '{\n  "data": [\n    {\n      "gid": "1",\n      "name": "Acme"\n    }\n  ],\n  "meta": {}\n}\n',
+    );
+  });
+
+  test("fetches multiple pages exactly once and combines them in API order", async () => {
+    const reader = new InMemoryWorkspaceReader([
+      ok({ workspaces: [{ gid: "1", name: "Acme" }], nextOffset: "page-2" }),
+      ok({ workspaces: [{ gid: "2", name: "Umbrella Corp" }] }),
+    ]);
+    const result = await execute(["workspaces", "list", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: [
+        { gid: "1", name: "Acme" },
+        { gid: "2", name: "Umbrella Corp" },
+      ],
+      meta: {},
+    });
+    expect(reader.calls).toEqual([
+      { limit: 100 },
+      { limit: 100, offset: "page-2" },
+    ]);
+  });
+
+  test("rejects a non-advancing pagination offset instead of looping", async () => {
+    const reader = new InMemoryWorkspaceReader([
+      ok({ workspaces: [{ gid: "1", name: "Acme" }], nextOffset: "page-2" }),
+      ok({
+        workspaces: [{ gid: "2", name: "Umbrella Corp" }],
+        nextOffset: "page-2",
+      }),
+    ]);
+    const result = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result.exitCode).toBe(4);
+    expect(reader.calls).toHaveLength(2);
+  });
+
+  test("rejects a missing token before any reader call", async () => {
+    const reader = new InMemoryWorkspaceReader([]);
+    const result = await execute(["workspaces", "list"], {
+      environment: {},
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result.exitCode).toBe(3);
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("maps API and retry exhaustion failures to their exit codes", async () => {
+    const api = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: new InMemoryWorkspaceReader([
+        err({ kind: "api", message: "body with secret", status: 500 }),
+      ]),
+    });
+    expect(api.exitCode).toBe(4);
+    expect(api.stderr).not.toContain("secret");
+
+    const exhausted = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: new InMemoryWorkspaceReader([
+        err({ kind: "rate_limit", message: "secret", status: 429 }),
+      ]),
+    });
+    expect(exhausted.exitCode).toBe(5);
+  });
+
+  test("fails with an internal error when the workspace reader dependency is missing", async () => {
+    const result = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+    });
+    expect(result.exitCode).toBe(6);
+  });
+
+  test("rejects the global --fields option, which this command does not support", async () => {
+    const reader = new InMemoryWorkspaceReader([]);
+    const result = await execute(["workspaces", "list", "--fields", "gid"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("does not write configuration or use any writer dependency", async () => {
+    const reader = new InMemoryWorkspaceReader([
+      ok({ workspaces: [{ gid: "1", name: "Acme" }] }),
+    ]);
+    const result = await execute(["workspaces", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      workspaceReader: reader,
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+      taskWriter: {
+        updateTask: async () => {
+          throw new Error("task writer called");
+        },
+      },
+      commentWriter: {
+        createTaskComment: async () => {
+          throw new Error("comment writer called");
+        },
+      },
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("root help lists the workspaces command and its list subcommand is discoverable", async () => {
+    const rootHelp = await execute(["--help"], {
+      environment: {},
+      identity,
+    });
+    expect(rootHelp.stdout).toContain("workspaces");
+
+    const workspacesHelp = await execute(["workspaces", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(workspacesHelp.exitCode).toBe(0);
+    expect(workspacesHelp.stdout).toContain("list");
+    expect(workspacesHelp.stdout).toContain(
+      "list workspaces visible to the authenticated user",
+    );
   });
 });

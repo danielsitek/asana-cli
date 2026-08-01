@@ -54,8 +54,13 @@ import {
   renderTaskDetail,
   renderTaskUpdate,
   renderTaskCreation,
+  renderWorkspaceList,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
+import {
+  executeWorkspacesList,
+  type WorkspaceGateway,
+} from "../workspaces/index.ts";
 
 export type Execution = Readonly<{
   stdout: string;
@@ -71,6 +76,7 @@ export type ExecuteDependencies = Readonly<{
   taskWriter?: TaskMutationGateway;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
+  workspaceReader?: WorkspaceGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -996,6 +1002,64 @@ export const execute = async (
 
   tasksComment.exitOverride();
   tasksComment.configureOutput(captureOutput);
+
+  const workspaces = program
+    .command("workspaces")
+    .description("inspect workspaces");
+  workspaces.exitOverride();
+  workspaces.configureOutput(captureOutput);
+
+  const workspacesList = workspaces
+    .command("list")
+    .description("list workspaces visible to the authenticated user")
+    .action(async () => {
+      invoked = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      if (!dependencies.workspaceReader) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Workspace reader is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const listed = await executeWorkspacesList(tokenResult.value, {
+        reader: dependencies.workspaceReader,
+      });
+      if (!listed.ok) {
+        result = renderIdentityFailure(listed.error.kind);
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(listed.value)
+          : renderWorkspaceList(listed.value),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+
+  workspacesList.exitOverride();
+  workspacesList.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);

@@ -23,6 +23,11 @@ import {
   type TaskMutationGateway,
   type TaskReadError,
 } from "../tasks/index.ts";
+import type {
+  Workspace,
+  WorkspaceGateway,
+  WorkspaceListError,
+} from "../workspaces/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { resolvePath } from "../utils/resolve-path.ts";
 
@@ -161,6 +166,24 @@ const buildStoriesPageSchema = (fields: readonly string[]) =>
       .optional(),
   });
 
+const workspaceSchema = z
+  .custom<Workspace>(
+    (value) =>
+      isRecord(value) &&
+      isDigitOnlyGid(value.gid) &&
+      typeof value.name === "string",
+  )
+  .transform((value): Workspace => ({ gid: value.gid, name: value.name }));
+
+const workspacesPageSchema = z.object({
+  data: z.array(workspaceSchema),
+  next_page: z
+    .object({ offset: z.string().min(1) })
+    .passthrough()
+    .nullable()
+    .optional(),
+});
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
@@ -169,7 +192,8 @@ export class AsanaHttpClient
     TaskCreationGateway,
     TaskMutationGateway,
     TaskStoryGateway,
-    TaskCommentCreationGateway
+    TaskCommentCreationGateway,
+    WorkspaceGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -278,6 +302,48 @@ export class AsanaHttpClient
     );
     if (!result.ok) return result;
     return ok({ gid: result.value.data.gid, name: result.value.data.name });
+  }
+
+  async listWorkspaces(
+    token: string,
+    options: Readonly<{ limit: number; offset?: string }>,
+  ): Promise<
+    Result<
+      Readonly<{ workspaces: readonly Workspace[]; nextOffset?: string }>,
+      WorkspaceListError
+    >
+  > {
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Workspace page limit must be between 1 and 100",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      "workspaces",
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(options.limit),
+          opt_fields: "gid,name",
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+        },
+      },
+      workspacesPageSchema,
+    );
+    if (!result.ok) return result;
+    return ok({
+      workspaces: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
   }
 
   async discoverMyTasks(

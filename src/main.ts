@@ -15,6 +15,7 @@ const result = await execute(Bun.argv.slice(2), {
   taskWriter: client,
   commentReader: client,
   commentWriter: client,
+  workspaceReader: client,
   discovery: client,
   configuration: {
     cwd: process.cwd(),
