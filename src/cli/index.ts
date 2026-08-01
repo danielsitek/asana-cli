@@ -293,16 +293,11 @@ export const execute = async (
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
-      const isTasksGet =
-        actionCommand.name() === "get" &&
-        actionCommand.parent?.name() === "tasks";
-      const isTasksComments =
-        actionCommand.name() === "comments" &&
-        actionCommand.parent?.name() === "tasks";
-      const isTasksComment =
-        actionCommand.name() === "comment" &&
-        actionCommand.parent?.name() === "tasks";
-      if (!isTasksGet && !isTasksComments && !isTasksComment) {
+      const fieldsCommands = ["get", "comments", "comment", "update", "create"];
+      const supportsFields =
+        actionCommand.parent?.name() === "tasks" &&
+        fieldsCommands.includes(actionCommand.name());
+      if (!supportsFields) {
         throw new CommanderError(
           2,
           "commander.fieldsNotSupported",
@@ -715,25 +710,31 @@ export const execute = async (
         invoked = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
+        const fieldsInput = program.opts<{ fields?: string }>().fields;
         const { customField, parent, ...rest } = options;
         if (parent !== undefined) {
-          result = await runTaskParentUpdate(idArg, {
-            ...rest,
-            parent,
-            ...(customField ? { customFields: customField } : {}),
-          });
+          result = await runTaskParentUpdate(
+            idArg,
+            {
+              ...rest,
+              parent,
+              ...(customField ? { customFields: customField } : {}),
+            },
+            fieldsInput,
+          );
           return;
         }
 
-        result = await runTaskUpdate(idArg, options);
+        result = await runTaskUpdate(idArg, options, fieldsInput);
       },
     );
 
   const runTaskParentUpdate = async (
     idArg: string,
     options: TaskUpdateOptions & Readonly<{ parent: string }>,
+    fieldsInput?: string,
   ): Promise<Execution> => {
-    const prepared = prepareTaskParentUpdate(idArg, options);
+    const prepared = prepareTaskParentUpdate(idArg, options, fieldsInput);
     if (!prepared.ok) return usageError(prepared.error.message);
 
     const tokenResult = resolveToken(dependencies.environment);
@@ -776,11 +777,17 @@ export const execute = async (
   const runTaskUpdate = async (
     idArg: string,
     options: TaskMutationCliOptions,
+    fieldsInput?: string,
   ): Promise<Execution> => {
-    const prepared = prepareTaskUpdate(idArg, {
-      ...options,
-      ...(options.customField ? { customFields: options.customField } : {}),
-    });
+    const { customField, ...rest } = options;
+    const prepared = prepareTaskUpdate(
+      idArg,
+      {
+        ...rest,
+        ...(customField ? { customFields: customField } : {}),
+      },
+      fieldsInput,
+    );
     if (!prepared.ok) return usageError(prepared.error.message);
 
     const tokenResult = resolveToken(dependencies.environment);
@@ -876,6 +883,7 @@ export const execute = async (
               }
             : resolved;
         },
+        program.opts<{ fields?: string }>().fields,
       );
       if (!prepared.ok) {
         result =

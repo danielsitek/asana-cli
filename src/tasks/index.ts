@@ -60,6 +60,7 @@ export interface TaskMutationGateway {
     token: string,
     taskId: string,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>>;
 }
 
@@ -68,6 +69,7 @@ export interface TaskCreationGateway {
     token: string,
     target: TaskCreationTarget,
     mutation: TaskMutation,
+    fields?: readonly string[],
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
 }
 
@@ -76,6 +78,7 @@ export interface TaskParentMutationGateway {
     token: string,
     taskId: string,
     parentId: string | null,
+    fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>>;
 }
 
@@ -84,6 +87,7 @@ export type TaskParentUpdateOptions = Readonly<{ parent: string }>;
 export type PreparedTaskParentUpdate = Readonly<{
   taskId: string;
   parentId: string | null;
+  fields?: readonly string[];
 }>;
 
 export type TaskParentUpdateDependencies = Readonly<{
@@ -133,6 +137,7 @@ export type PreparedTaskUpdate = Readonly<{
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
   customFields: readonly PreparedCustomField[];
+  fields?: readonly string[];
 }>;
 
 export type TaskCreateOptions = TaskUpdateOptions &
@@ -163,6 +168,7 @@ export type PreparedTaskCreate = Readonly<{
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
   customFields: readonly PreparedCustomField[];
+  fields?: readonly string[];
 }>;
 
 type ParsedTaskCreate = Omit<PreparedTaskCreate, "target"> &
@@ -281,28 +287,54 @@ const realDate = (value: string): boolean => {
   );
 };
 
+const prepareSelectedFields = (
+  fieldsInput: string | undefined,
+): Result<
+  readonly string[] | undefined,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  if (fieldsInput === undefined) return ok(undefined);
+  const validated = validateFieldList(fieldsInput);
+  return validated.ok
+    ? ok(validated.value)
+    : err({ kind: "invalid_usage", message: validated.error });
+};
+
 export const prepareTaskUpdate = (
   taskIdInput: string,
   options: TaskUpdateOptions,
+  fieldsInput?: string,
 ): Result<
   PreparedTaskUpdate,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
+  const fields = prepareSelectedFields(fieldsInput);
+  if (!fields.ok) return fields;
+
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
   const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
-  return ok({ taskId: taskId.value, ...prepared.value });
+  return ok({
+    taskId: taskId.value,
+    ...prepared.value,
+    ...(fields.value === undefined ? {} : { fields: fields.value }),
+  });
 };
 
 export const prepareTaskParentUpdate = (
   taskIdInput: string,
   options: TaskUpdateOptions & TaskParentUpdateOptions,
+  fieldsInput?: string,
 ): Result<
   PreparedTaskParentUpdate,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
+  const fields = prepareSelectedFields(fieldsInput);
+  if (!fields.ok) return fields;
+  const selected = fields.value === undefined ? {} : { fields: fields.value };
+
   const combined = Object.entries(options).some(
     ([key, value]) =>
       key !== "parent" &&
@@ -320,7 +352,7 @@ export const prepareTaskParentUpdate = (
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
   if (options.parent === "null") {
-    return ok({ taskId: taskId.value, parentId: null });
+    return ok({ taskId: taskId.value, parentId: null, ...selected });
   }
   const parentId = parseTaskId(options.parent);
   if (!parentId.ok) {
@@ -332,7 +364,7 @@ export const prepareTaskParentUpdate = (
       message: "--parent cannot reference the task itself",
     });
   }
-  return ok({ taskId: taskId.value, parentId: parentId.value });
+  return ok({ taskId: taskId.value, parentId: parentId.value, ...selected });
 };
 
 export const executeTaskParentUpdate = async (
@@ -344,6 +376,7 @@ export const executeTaskParentUpdate = async (
     token,
     prepared.taskId,
     prepared.parentId,
+    prepared.fields,
   );
   return updated.ok
     ? ok({ task: updated.value, applied: { parent: prepared.parentId } })
@@ -466,10 +499,13 @@ const prepareTaskMutation = (
 
 const parseTaskCreateInput = (
   options: TaskCreateOptions,
+  fieldsInput?: string,
 ): Result<
   ParsedTaskCreate,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
+  const fields = prepareSelectedFields(fieldsInput);
+  if (!fields.ok) return fields;
   if (options.name === undefined) {
     return err({ kind: "invalid_usage", message: "--name is required" });
   }
@@ -530,6 +566,7 @@ const parseTaskCreateInput = (
       ? {}
       : { mySection: prepared.value.mySection }),
     customFields: prepared.value.customFields,
+    ...(fields.value === undefined ? {} : { fields: fields.value }),
   });
 };
 
@@ -575,8 +612,9 @@ const finalizeTaskCreate = (
 
 export const prepareTaskCreate = (
   options: TaskCreateOptions,
+  fieldsInput?: string,
 ): Result<PreparedTaskCreate, TaskCreatePreparationError> => {
-  const prepared = parseTaskCreateInput(options);
+  const prepared = parseTaskCreateInput(options, fieldsInput);
   if (!prepared.ok) return prepared;
   if (prepared.value.target === undefined) {
     return err({
@@ -592,8 +630,9 @@ export const prepareTaskCreate = (
 export const prepareTaskCreateWithConfig = async (
   options: TaskCreateOptions,
   resolveConfig?: TaskCreateConfigResolver,
+  fieldsInput?: string,
 ): Promise<Result<PreparedTaskCreate, TaskCreatePreparationError>> => {
-  const prepared = parseTaskCreateInput(options);
+  const prepared = parseTaskCreateInput(options, fieldsInput);
   if (!prepared.ok) return prepared;
   const needsDefaultAssignee = options.assignee === undefined;
   if (
@@ -769,6 +808,7 @@ export const executeTaskCreation = async (
     token,
     prepared.target,
     createMutation,
+    prepared.fields,
   );
   if (!created.ok) return created;
 
@@ -798,7 +838,12 @@ export const executeTaskCreation = async (
       });
       continue;
     }
-    const updated = await writer.updateTask(token, taskId, applied);
+    const updated = await writer.updateTask(
+      token,
+      taskId,
+      applied,
+      prepared.fields,
+    );
     if (!updated.ok) {
       stages.push({
         stage,
@@ -831,6 +876,7 @@ export const executeTaskUpdate = async (
     token,
     prepared.taskId,
     applied,
+    prepared.fields,
   );
   return updated.ok ? ok({ task: updated.value, applied }) : updated;
 };

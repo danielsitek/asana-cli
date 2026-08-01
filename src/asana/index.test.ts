@@ -779,6 +779,391 @@ describe("AsanaHttpClient", () => {
     });
   });
 
+  test("sends no opt_fields when no fields are selected", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).searchParams.has("opt_fields")).toBe(false);
+      return Response.json({ data: { gid: "123", name: "Renamed" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Renamed" },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("requests the selected fields plus gid on update", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "gid,due_on",
+      );
+      return Response.json({ data: { gid: "123", due_on: "2026-08-15" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { due_on: "2026-08-15" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", due_on: "2026-08-15" },
+    });
+  });
+
+  test("drops unrequested fields from a narrowed update response", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "123",
+          due_on: "2026-08-15",
+          name: "Leaked",
+          notes: "Leaked notes",
+          completed: false,
+          custom_fields: [{ gid: "500", number_value: 3 }],
+          memberships: [{ project: { gid: "9" } }],
+          permalink_url: "https://app.asana.com/0/9/123",
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { due_on: "2026-08-15" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", due_on: "2026-08-15" },
+    });
+  });
+
+  test("keeps only the requested leaves of a nested selected object", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "123",
+          name: "Kept",
+          assignee: {
+            gid: "1001",
+            name: "Ada",
+            email: "ada@example.com",
+            photo: { image_60x60: "https://example.com/a.png" },
+          },
+          workspace: { gid: "5", name: "Acme" },
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Kept" },
+      ["name", "assignee.gid"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", name: "Kept", assignee: { gid: "1001" } },
+    });
+  });
+
+  test("projects arbitrary nested paths outside the known task fields", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "123",
+          workspace: { gid: "5", name: "Acme", is_organization: true },
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Kept" },
+      ["workspace.name"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", workspace: { name: "Acme" } },
+    });
+  });
+
+  test("projects selected paths through arrays", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "123",
+          memberships: [
+            {
+              project: { gid: "9", name: "Alpha" },
+              section: { gid: "10", name: "Doing" },
+            },
+            {
+              project: { gid: "11", name: "Beta" },
+              section: null,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Kept" },
+      ["memberships.project.name", "memberships.section.name"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        gid: "123",
+        memberships: [
+          { project: { name: "Alpha" }, section: { name: "Doing" } },
+          { project: { name: "Beta" }, section: null },
+        ],
+      },
+    });
+  });
+
+  test("rejects an update response whose requested nested leaf is absent", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: { gid: "123", assignee: { name: "Ada" } },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Kept" },
+      ["assignee.gid"],
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
+  test("keeps a null nullable resource on a requested nested path", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: { gid: "123", assignee: null, name: "Leaked" },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { assignee: null },
+      ["assignee.gid", "assignee.name"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", assignee: null },
+    });
+  });
+
+  test("returns the full response when no fields are selected", async () => {
+    const verbose = {
+      gid: "123",
+      name: "Renamed",
+      custom_fields: [{ gid: "500" }],
+      permalink_url: "https://app.asana.com/0/9/123",
+    };
+    const baseUrl = serverFor(async () => Response.json({ data: verbose }));
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Renamed" },
+    );
+
+    expect(result).toEqual({ ok: true, value: verbose });
+  });
+
+  test("does not duplicate an explicitly selected gid on update", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "gid,name",
+      );
+      return Response.json({ data: { gid: "123", name: "Renamed" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { name: "Renamed" },
+      ["gid", "name"],
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects an update response missing a selected field", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({ data: { gid: "123" } }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      { due_on: "2026-08-15" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
+  test("requests the selected fields plus gid on setParent", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "gid,name",
+      );
+      return Response.json({ data: { gid: "222", name: "Child" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).setTaskParent(
+      "secret-token",
+      "222",
+      "456",
+      ["name"],
+    );
+
+    expect(result).toEqual({ ok: true, value: { gid: "222", name: "Child" } });
+  });
+
+  test("requests the selected fields plus gid on create", async () => {
+    const baseUrl = serverFor(async (request) => {
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        "gid,due_on",
+      );
+      return Response.json({ data: { gid: "777", due_on: "2026-08-15" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
+      "secret-token",
+      { kind: "subtask", parentId: "9" },
+      { name: "Child" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "777", due_on: "2026-08-15" },
+    });
+  });
+
+  test("narrows a setParent response to gid and the selected fields", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "222",
+          name: "Child",
+          parent: { gid: "456", name: "Parent" },
+          permalink_url: "https://app.asana.com/0/9/222",
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).setTaskParent(
+      "secret-token",
+      "222",
+      "456",
+      ["name"],
+    );
+
+    expect(result).toEqual({ ok: true, value: { gid: "222", name: "Child" } });
+  });
+
+  test("narrows a create response to gid and the selected fields", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({
+        data: {
+          gid: "777",
+          due_on: "2026-08-15",
+          name: "Leaked",
+          projects: [{ gid: "9" }],
+          permalink_url: "https://app.asana.com/0/9/777",
+        },
+      }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
+      "secret-token",
+      { kind: "subtask", parentId: "9" },
+      { name: "Child" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "777", due_on: "2026-08-15" },
+    });
+  });
+
+  test("rejects a create response whose requested nested leaf is absent", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({ data: { gid: "777", assignee: { name: "Ada" } } }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
+      "secret-token",
+      { kind: "subtask", parentId: "9" },
+      { name: "Child" },
+      ["assignee.gid"],
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
+  test("rejects a create response missing a selected field", async () => {
+    const baseUrl = serverFor(async () =>
+      Response.json({ data: { gid: "777" } }),
+    );
+
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
+      "secret-token",
+      { kind: "subtask", parentId: "9" },
+      { name: "Child" },
+      ["due_on"],
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
   test("combines My Tasks fields in one exact PUT request", async () => {
     let calls = 0;
     const baseUrl = serverFor(async (request) => {

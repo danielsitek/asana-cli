@@ -4,7 +4,7 @@ import {
   validateFieldList,
   type TaskReadError,
 } from "../tasks/index.ts";
-import { resolvePath } from "../utils/resolve-path.ts";
+import { projectFields } from "../utils/project-fields.ts";
 
 export type Comment = Readonly<{
   gid?: string;
@@ -125,51 +125,15 @@ const withInternalFields = (fields: readonly string[]): readonly string[] =>
     ? fields
     : [...fields, RESOURCE_SUBTYPE_FIELD];
 
-const setPath = (
-  value: Record<string, unknown>,
-  path: readonly string[],
-  leaf: unknown,
-): void => {
-  let current = value;
-  for (const segment of path.slice(0, -1)) {
-    const existing = current[segment];
-    if (
-      typeof existing !== "object" ||
-      existing === null ||
-      Array.isArray(existing)
-    ) {
-      current[segment] = {};
-    }
-    current = current[segment] as Record<string, unknown>;
-  }
-  const tail = path[path.length - 1];
-  if (tail !== undefined) current[tail] = leaf;
-};
-
 const projectCommentFields = (
   comment: Comment,
   fields: readonly string[],
 ): Comment => {
-  const projected: Record<string, unknown> = {};
-  for (const field of fields) {
-    const path = field.split(".");
-    const resolved = resolvePath(comment, path);
-    if (resolved.found) {
-      setPath(projected, path, resolved.value);
-      continue;
-    }
-    const root = path[0];
-    if (
-      path.length > 1 &&
-      root !== undefined &&
-      Object.hasOwn(comment, root) &&
-      comment[root] === null &&
-      !Object.hasOwn(projected, root)
-    ) {
-      projected[root] = null;
-    }
-  }
-  return projected;
+  const availableFields = fields.filter(
+    (field) => projectFields(comment, [field]).found,
+  );
+  const projected = projectFields(comment, availableFields);
+  return projected.found ? projected.value : {};
 };
 
 export const prepareTaskCommentsRead = (
