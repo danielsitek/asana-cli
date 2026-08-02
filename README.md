@@ -1,25 +1,13 @@
 # Asana CLI
 
-Fast, script-friendly CLI for working with Asana from a terminal or autonomous
-agent. It favors explicit fields, bounded reads, deterministic JSON, and
-honest reporting of partial writes.
-
-> **Status:** 0.1.0 release candidate. The commands below are implemented and
-> tested. **v0.1.0 is not yet public** — release assets and the Homebrew
-> formula exist only after a maintainer publishes the draft GitHub release.
+Fast, script-friendly CLI for working with Asana from a terminal or autonomous agent. It favors explicit fields, bounded reads, deterministic JSON, and honest reporting of partial writes.
 
 ## Install
 
 ### macOS (Homebrew)
 
-Available only after the `v0.1.0` draft release is published:
-
 ```sh
-brew tap-new --no-git danielsitek/asana-cli-local
-formula_dir="$(brew --repository danielsitek/asana-cli-local)/Formula"
-curl -L https://github.com/danielsitek/asana-cli/releases/download/v0.1.0/asana-cli.rb \
-  -o "$formula_dir/asana-cli.rb"
-brew install danielsitek/asana-cli-local/asana-cli
+brew install danielsitek/homebrew-tap/asana-cli
 ```
 
 ### Direct archive (macOS, Linux, WSL2)
@@ -49,27 +37,16 @@ sudo install -m 0755 asana-cli /usr/local/bin/asana-cli
 ```
 
 Replace `<target>` with the value from the table above (e.g. `darwin-arm64`).
+To upgrade, repeat these steps with the newer archive.
 
 macOS binaries carry an ad-hoc signature (no Developer ID signing or
 notarization yet); Gatekeeper may require an explicit approval on first run.
-
-### Upgrade
-
-Download the newer archive or overwrite the Formula in the local tap. Then
-upgrade the Homebrew installation explicitly:
-
-```sh
-formula_dir="$(brew --repository danielsitek/asana-cli-local)/Formula"
-curl -L https://github.com/danielsitek/asana-cli/releases/download/v0.2.0/asana-cli.rb \
-  -o "$formula_dir/asana-cli.rb"
-brew upgrade danielsitek/asana-cli-local/asana-cli
-```
 
 ### Uninstall
 
 ```sh
 brew uninstall asana-cli                         # Homebrew package
-brew untap danielsitek/asana-cli-local           # optional local tap cleanup
+brew untap danielsitek/homebrew-tap              # optional tap cleanup
 sudo rm /usr/local/bin/asana-cli                 # direct archive install
 ```
 
@@ -87,12 +64,9 @@ automatically from a `.env` file.
    description such as `asana-cli`.
 3. Copy the token when Asana displays it and store it as a secret.
 
-The Asana account must be able to read and edit the relevant tasks, access
-its My Tasks list and sections, read its custom-field definitions, and read
-and write task comments — PATs act with the same access as the creating
-user. See Asana's
-[PAT guide](https://developers.asana.com/docs/personal-access-token) and
-[authentication guide](https://developers.asana.com/docs/authentication).
+The account must be able to read/edit the relevant tasks, access its My Tasks
+list and sections, read custom-field definitions, and read/write comments.
+See Asana's [PAT guide](https://developers.asana.com/docs/personal-access-token).
 
 ### Set the token
 
@@ -113,28 +87,18 @@ and create a replacement.
 
 ## Configuration
 
-Discover the workspace GIDs visible to the authenticated user, needed for
-`config init --shared --workspace=<gid>`:
-
 ```sh
+# Discover workspace GIDs
 asana-cli workspaces list --json
-```
 
-Initialize the shared workspace configuration:
-
-```sh
+# Initialize shared config (.asana-cli.json, committed)
 asana-cli config init --shared --workspace=1201947864389005
-```
 
-Then resolve your personal My Tasks list, sections, and custom-field aliases
-into the local gitignored configuration:
-
-```sh
+# Resolve personal My Tasks config (.asana-cli.local.json, gitignored)
 asana-cli config init --local --write-gitignore
 ```
 
-Shared data lives in `.asana-cli.json`. Personal My Tasks data lives in
-`.asana-cli.local.json` and must not be committed. For example:
+Example `.asana-cli.local.json`:
 
 ```json
 {
@@ -151,35 +115,31 @@ Shared data lives in `.asana-cli.json`. Personal My Tasks data lives in
 }
 ```
 
-Inspect resolved configuration and its winning source:
+Inspect resolved configuration and its source:
 
 ```sh
-asana-cli config get myTasks.userTaskListGid --source
-asana-cli config set workspace.gid 1201947864389005 --shared
 asana-cli config show --json --sources
-asana-cli config resolve my-tasks
+asana-cli config get myTasks.userTaskListGid --source
 ```
 
-Set a personal default assignee for `tasks create` (stored locally, alongside
-`myTasks`, and never read by `tasks update`):
+Set a default assignee for `tasks create` (ignored by `tasks update`):
 
 ```sh
 asana-cli config set defaultAssignee me
 asana-cli config set defaultAssignee 1201947864389005 --local
 ```
 
-The value must be exactly `me` or a digit-only user GID. `tasks create` only
-applies it when `--assignee` is omitted; an explicit `--assignee`, including
-`--assignee=null`, always overrides it.
+Value must be `me` or a digit-only user GID; an explicit `--assignee`
+(including `--assignee=null`) always overrides it.
 
 ## Usage
+
+Run `asana-cli <command> --help` for the full flag reference. Common
+workflows:
 
 ```sh
 # Read a task, including its description
 asana-cli tasks get 1215978111726134
-
-# Read comments without unrelated system activity
-asana-cli tasks comments 1215978111726134
 
 # Read only the newest 3 comments, newest first, scanning up to 200 stories
 asana-cli tasks comments 1215978111726134 --max=200 --latest=3
@@ -187,24 +147,12 @@ asana-cli tasks comments 1215978111726134 --max=200 --latest=3
 # List incomplete tasks in a My Tasks section assigned to you
 asana-cli tasks list --my-section=@in_progress --assignee=me
 
-# List completed tasks in a project, up to 50, with explicit fields
-asana-cli tasks list --project=1201947864389005 --completed=true --max=50 \
-  --fields=gid,name,due_on
-
-# Replace a description safely from a file
-asana-cli tasks update 1215978111726134 --notes-file=task-description.md
-
 # Move the task in your personal My Tasks board and comment
 asana-cli tasks update 1215978111726134 --my-section=@in_review
 asana-cli tasks comment 1215978111726134 "Ready for review"
 
-# Set an enum custom field by field GID and exact option name
-asana-cli tasks update 1215978111726134 \
-  --custom-field=1214188195173899:"In Review"
-
-# Reparent a task under another task, or promote it to top level
-asana-cli tasks update 1215978111726134 --parent=1209876543210987
-asana-cli tasks update 1215978111726134 --parent=null
+# Replace a description safely from a file
+asana-cli tasks update 1215978111726134 --notes-file=task-description.md
 
 # Create a subtask, assign it to yourself, and set a numeric custom field
 asana-cli tasks create \
@@ -213,12 +161,6 @@ asana-cli tasks create \
   --assignee=me \
   --my-section=@in_progress \
   --custom-field=@hours_estimate:4
-
-# Create a standalone task in My Tasks
-asana-cli tasks create \
-  --name="Investigate the issue" \
-  --assignee=me \
-  --my-section=@in_progress
 
 # Create a standalone task in a project
 asana-cli tasks create \
@@ -260,57 +202,27 @@ Enum values resolve enabled options by GID first, then by case-sensitive exact
 name; invalid or ambiguous names list the valid options. `null` clears either
 type. Field definitions and options are live-validated before writing.
 
-Use `--json` for the stable `{ "data": ..., "meta": ... }` response and
-`--fields` for explicit Asana fields. Both flags, along with `--help`/`-h`
-and `--version`/`-v`, may appear before or after a subcommand.
-
-### JSON output and agents
-
-`--json` output is compact, single-line, minified JSON — no `--pretty` option
-is offered; pipe through `jq` for a human-readable view. It is stable and
-script-parseable — safe to pipe or call from an autonomous agent (stdout/stderr
-split covered in Safety below). All JSON the CLI writes, including errors on
-stderr and partial-write results, is minified the same way.
-
-```sh
-asana-cli tasks get 1215978111726134 --json | jq '.data.notes'
-```
+`--json` returns `{ "data": ..., "meta": ... }` as compact, single-line JSON;
+`--fields` selects explicit Asana fields.
 
 ## Safety and mutation contract
 
-- The CLI is non-interactive; missing required input fails with exit code 2.
-- Notes are replaced explicitly; there is no implicit append.
-- Long notes and comments may be read from a file or stdin.
+- The CLI is non-interactive; missing required input fails immediately.
 - Reads are bounded; complete traversal always requires an explicit maximum
   (`tasks comments --max=<n>` and `tasks list --max=<n>`, with `--all`
   requiring `--max`).
 - `tasks comments --latest=<n>` returns only the globally newest `n` comments,
   newest first, and requires an explicit `--max=<scan-cap>`; it is mutually
-  exclusive with `--all` and `--offset`. It succeeds only after scanning to
-  source exhaustion within the cap; if the cap is reached while more stories
-  are known, it fails with `scan_limit` (exit 5) and returns no data — rerun
-  with a higher `--max`.
-- `GET` and `PUT` retry network errors, `429`, `502`, `503`, and `504`. `POST`
-  retries only an explicit `429` response and is never retried
-  after an ambiguous timeout, network error, or 5xx — this avoids duplicating
-  a task, subtask, or comment.
+  exclusive with `--all` and `--offset`. If the cap is reached before the
+  source is fully scanned, it fails and returns no data — rerun with a higher
+  `--max`.
+- `POST` is never retried after an ambiguous timeout, network error, or 5xx —
+  this avoids duplicating a task, subtask, or comment.
 - Multi-step writes (such as `tasks create` with My Tasks placement) validate
   every input before the first write, then report every completed and failed
   stage; a failure after the first write returns a partial result.
 - JSON data goes to stdout; diagnostics and errors go to stderr.
 - The application implements no telemetry or analytics.
-
-### Exit codes
-
-| Code | Meaning                                      |
-| ---- | -------------------------------------------- |
-| 0    | success                                      |
-| 1    | partial write or partial multi-stage failure |
-| 2    | invalid usage or configuration               |
-| 3    | authentication or authorization failure      |
-| 4    | Asana API, not-found, or network error       |
-| 5    | rate-limit, retry exhaustion, or scan limit  |
-| 6    | unexpected internal CLI error                |
 
 ## Contributing
 
@@ -318,21 +230,7 @@ Requires the pinned Bun version in `package.json`.
 
 ```sh
 bun install --frozen-lockfile
-bun run check   # format check, lint, typecheck, coverage, build, smoke test
+bun run check   # format, lint, typecheck, coverage, build, smoke test
 ```
 
-Individual checks are also available: `bun run format:check`, `bun run lint`,
-`bun run typecheck`, `bun run test:coverage`, `bun run build`.
-
-Releases are cut from tags and produce a **draft** GitHub release with built
-archives, checksums, and a generated Homebrew formula; a maintainer must
-manually review and publish the draft before it becomes public.
-
-## Implementation
-
-The stack is TypeScript and Bun. Bun compiles standalone executables for
-release, so users do not need Bun or Node.js installed. See
-[technology and release decisions](docs/tech-stack.md) for the architecture
-and release rationale.
-
-The project is licensed under the MIT License.
+The project is licensed under the [MIT License](LICENSE).
