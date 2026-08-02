@@ -63,12 +63,13 @@ export const generateHomebrewFormula = async (
     `https://github.com/${repository}/releases/download/v${version}`;
   const archiveUrl = (target: ReleaseTarget) =>
     `${baseUrl}/asana-cli-v${version}-${target}.tar.gz`;
+  const versionLine =
+    options.baseUrl === undefined ? "" : `  version "${version}"\n`;
 
   const formula = `class AsanaCli < Formula
   desc "Command-line interface for safe Asana task workflows"
   homepage "https://github.com/${repository}"
-  version "${version}"
-  license "MIT"
+${versionLine}  license "MIT"
 
   on_macos do
     on_arm do

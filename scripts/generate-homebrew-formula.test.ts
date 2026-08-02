@@ -43,6 +43,7 @@ describe("Homebrew formula generator", () => {
     });
     expect(formula).toContain("class AsanaCli < Formula");
     expect(formula).toContain('license "MIT"');
+    expect(formula).not.toContain('\n  version "');
     expect(formula).toContain(
       "https://github.com/owner/project/releases/download/v0.1.0/asana-cli-v0.1.0-darwin-arm64.tar.gz",
     );
@@ -101,6 +102,7 @@ describe("Homebrew formula generator", () => {
     expect(formula).toContain(
       "file:///tmp/current-run-assets/asana-cli-v0.1.0-darwin-arm64.tar.gz",
     );
+    expect(formula).toContain('\n  version "0.1.0"\n');
   });
 
   test("rejects a repository that is not owner/name", async () => {
