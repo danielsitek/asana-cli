@@ -344,6 +344,7 @@ describe("execute", () => {
     expect(helpBefore.stdout).toContain("Commands:");
     expect(helpBefore.stdout).toContain("select explicit Asana fields");
     expect(helpBefore.stdout).toContain("show the authenticated Asana user");
+    expect(helpBefore.stdout).toContain("generate shell completion script");
     expect(helpAfter.exitCode).toBe(0);
     expect(helpAfter.stderr).toBe("");
     expect(helpAfter.stdout).toContain("show the authenticated Asana user");
@@ -387,6 +388,54 @@ describe("execute", () => {
     expect(emptyInvocation.exitCode).toBe(0);
     expect(emptyInvocation.stderr).toBe("");
     expect(emptyInvocation.stdout).toContain("Usage: asana-cli");
+  });
+
+  test("generates completion scripts without authentication or configuration", async () => {
+    const dependencies: ExecuteDependencies = {
+      environment: new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("environment accessed");
+          },
+        },
+      ),
+      identity: {
+        getAuthenticatedUser: async () => {
+          throw new Error("identity called");
+        },
+      },
+      get configuration(): never {
+        throw new Error("configuration accessed");
+      },
+    };
+
+    const bash = await execute(["completion", "bash"], dependencies);
+    const zsh = await execute(["completion", "zsh"], dependencies);
+    const fish = await execute(["completion", "fish"], dependencies);
+
+    expect(bash).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(bash.stdout).toContain(
+      "'tasks') candidates='get update create comments comment list",
+    );
+    expect(zsh).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(zsh.stdout).toContain("#compdef asana-cli");
+    expect(fish).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(fish.stdout).toContain("function __asana_cli_context_is");
+  });
+
+  test("rejects an unsupported completion shell", async () => {
+    expect(
+      await execute(["completion", "powershell"], {
+        environment: {},
+        identity,
+      }),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"invalid_usage","message":"Unsupported shell: powershell; expected bash, zsh, fish"}}\n',
+      exitCode: 2,
+    });
   });
 
   test("normalizes unknown commands as JSON usage errors", async () => {

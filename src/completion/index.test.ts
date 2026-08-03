@@ -1,0 +1,75 @@
+import { describe, expect, test } from "bun:test";
+import { Command } from "commander";
+
+import { isCompletionShell, renderCompletion } from "./index.ts";
+
+const fixture = (): Command => {
+  const program = new Command()
+    .name("asana-cli")
+    .option("--json", "output JSON");
+  const tasks = program.command("tasks").description("manage tasks");
+  tasks
+    .command("get <id>")
+    .description("read a task's details")
+    .option("--file <path>", "read a file")
+    .option("--completed <boolean>", "completion state");
+  program
+    .command("completion <shell>")
+    .description("generate shell completion script");
+  return program;
+};
+
+describe("shell completion", () => {
+  test("recognizes supported shells", () => {
+    expect(isCompletionShell("bash")).toBe(true);
+    expect(isCompletionShell("zsh")).toBe(true);
+    expect(isCompletionShell("fish")).toBe(true);
+    expect(isCompletionShell("powershell")).toBe(false);
+  });
+
+  test("renders nested Bash command and option transitions", () => {
+    const output = renderCompletion(fixture(), "bash");
+    expect(output).toContain("complete -F _asana_cli_completion asana-cli");
+    expect(output).toContain("'root:tasks') context='tasks'");
+    expect(output).toContain("'tasks:get') context='tasks/get'");
+    expect(output).toContain("'tasks') candidates='get help -h --help'");
+    expect(output).toContain(
+      "'tasks/get') candidates='--file --completed -h --help'",
+    );
+    expect(output).toContain(
+      "'tasks/get:--completed') candidates='true false'",
+    );
+    expect(output).toContain(
+      "'completion') candidates='bash zsh fish -h --help'",
+    );
+  });
+
+  test("renders nested Zsh commands with descriptions", () => {
+    const output = renderCompletion(fixture(), "zsh");
+    expect(output).toStartWith("#compdef asana-cli\n");
+    expect(output).toContain("'get:read a task'\\''s details'");
+    expect(output).toContain(
+      "_describe -t commands 'commands' command_candidates",
+    );
+    expect(output).toContain("'bash:completion shell'");
+    expect(output).toContain(
+      "'tasks/get:--completed') value_candidates=('true:value' 'false:value')",
+    );
+    expect(output).toContain("--file|--notes-file");
+  });
+
+  test("renders Fish commands, options, and context function", () => {
+    const output = renderCompletion(fixture(), "fish");
+    expect(output).toContain("function __asana_cli_context_is");
+    expect(output).toContain(
+      "complete -c asana-cli -f -n '__asana_cli_context_is tasks' -a 'get'",
+    );
+    expect(output).toContain(
+      "complete -c asana-cli -n '__asana_cli_context_is tasks/get' -l 'file' -r -F",
+    );
+    expect(output).toContain("-l 'completed' -r -a 'true false'");
+    expect(output).toContain(
+      "complete -c asana-cli -f -n '__asana_cli_context_is completion' -a 'zsh'",
+    );
+  });
+});

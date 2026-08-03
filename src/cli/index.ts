@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 
 import { resolveToken } from "../auth/index.ts";
 import {
+  COMPLETION_SHELLS,
+  isCompletionShell,
+  renderCompletion,
+} from "../completion/index.ts";
+import {
   getConfigValue,
   initializeSharedConfig,
   initializeLocalConfig,
@@ -1323,6 +1328,26 @@ export const execute = async (
 
   workspacesList.exitOverride();
   workspacesList.configureOutput(captureOutput);
+
+  const completion = program
+    .command("completion <shell>")
+    .description("generate shell completion script")
+    .action((shell: string) => {
+      invoked = true;
+      if (!isCompletionShell(shell)) {
+        result = usageError(
+          `Unsupported shell: ${shell}; expected ${COMPLETION_SHELLS.join(", ")}`,
+        );
+        return;
+      }
+      result = {
+        stdout: renderCompletion(program, shell),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+  completion.exitOverride();
+  completion.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);

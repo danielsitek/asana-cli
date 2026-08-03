@@ -86,6 +86,11 @@ export const runExecutableSmoke = async (
     },
     "invalid usage",
   );
+  requireResult(
+    await runCommand(binary, ["completion", "zsh"]),
+    { exitCode: 0, stdoutIncludes: "#compdef asana-cli", stderr: "" },
+    "shell completion",
+  );
 
   const isolationDirectory = await mkdtemp(`${tmpdir()}/asana-cli-isolation-`);
   try {
