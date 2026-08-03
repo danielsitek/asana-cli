@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.2.0
+
+- Add generated command completion for Bash, Zsh, and Fish, including nested
+  commands, supported global options, enum values, and file paths.
+- Install shell completions automatically through the Homebrew formula and
+  document setup for direct archive installations.
+- Include an installable AI agent skill with a complete project initialization
+  workflow that configures the personal default assignee as `me`.
+
 ## 0.1.0
 
 Initial public release. Implements the My Tasks-first workflow:
