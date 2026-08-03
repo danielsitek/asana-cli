@@ -50,6 +50,15 @@ brew untap danielsitek/homebrew-tap              # optional tap cleanup
 sudo rm /usr/local/bin/asana-cli                 # direct archive install
 ```
 
+## AI agent skill
+
+This repository includes a ready-to-use skill that teaches AI agents how to
+configure and operate `asana-cli` safely. Install it with skills.sh:
+
+```sh
+npx skills@latest add danielsitek/asana-cli
+```
+
 ## Authentication
 
 Asana CLI reads the token only from `ASANA_CLI_TOKEN`. It never accepts a
