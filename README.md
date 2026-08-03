@@ -168,6 +168,49 @@ asana-cli tasks create \
   --project=1201947864389005
 ```
 
+## Shell completion
+
+Homebrew installs command completion for Bash, Zsh, and Fish automatically.
+Restart the shell after installing or upgrading `asana-cli`.
+
+For a direct archive installation, generate the completion script for the
+current shell. Zsh:
+
+```sh
+mkdir -p ~/.zfunc
+asana-cli completion zsh > ~/.zfunc/_asana-cli
+```
+
+Add the completion directory before `compinit` in `~/.zshrc`:
+
+```sh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Bash with `bash-completion` installed:
+
+```sh
+asana-cli completion bash > ~/.asana-cli-completion.bash
+```
+
+Source it from `~/.bashrc`:
+
+```sh
+source ~/.asana-cli-completion.bash
+```
+
+Fish:
+
+```sh
+mkdir -p ~/.config/fish/completions
+asana-cli completion fish > ~/.config/fish/completions/asana-cli.fish
+```
+
+Completion is generated locally and never reads configuration, authentication
+credentials, or the Asana API.
+
 Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
 
 `tasks create` requires `--name` and an explicit destination: `--parent` for a

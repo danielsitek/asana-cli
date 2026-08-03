@@ -84,6 +84,7 @@ ${versionLine}  license "MIT"
 
   def install
     bin.install "asana-cli"
+    generate_completions_from_executable bin/"asana-cli", "completion"
   end
 
   test do

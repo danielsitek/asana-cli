@@ -50,6 +50,9 @@ describe("Homebrew formula generator", () => {
     expect(formula).toContain(`sha256 "${"1".repeat(64)}"`);
     expect(formula).toContain(`sha256 "${"2".repeat(64)}"`);
     expect(formula).toContain("tasks get invalid 2>&1");
+    expect(formula).toContain(
+      'generate_completions_from_executable bin/"asana-cli", "completion"',
+    );
 
     const syntax = Bun.spawn(["ruby", "-c", setup.outputPath], {
       stdout: "pipe",

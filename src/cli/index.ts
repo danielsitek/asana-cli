@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 
 import { resolveToken } from "../auth/index.ts";
 import {
+  COMPLETION_SHELLS,
+  isCompletionShell,
+  renderCompletion,
+} from "../completion/index.ts";
+import {
   getConfigValue,
   initializeSharedConfig,
   initializeLocalConfig,
@@ -70,6 +75,7 @@ import {
   renderWorkspaceList,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
+import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import {
   executeWorkspacesList,
   type WorkspaceGateway,
@@ -313,18 +319,10 @@ export const execute = async (
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
-      const fieldsCommands = [
-        "get",
-        "comments",
-        "comment",
-        "update",
-        "create",
-        "list",
-      ];
-      const supportsFields =
-        actionCommand.parent?.name() === "tasks" &&
-        fieldsCommands.includes(actionCommand.name());
-      if (!supportsFields) {
+      const commandPath = [actionCommand.parent?.name(), actionCommand.name()]
+        .filter((part): part is string => part !== undefined)
+        .join("/");
+      if (!acceptsFieldsOptionAtPath(commandPath)) {
         throw new CommanderError(
           2,
           "commander.fieldsNotSupported",
@@ -1323,6 +1321,26 @@ export const execute = async (
 
   workspacesList.exitOverride();
   workspacesList.configureOutput(captureOutput);
+
+  const completion = program
+    .command("completion <shell>")
+    .description("generate shell completion script")
+    .action((shell: string) => {
+      invoked = true;
+      if (!isCompletionShell(shell)) {
+        result = usageError(
+          `Unsupported shell: ${shell}; expected ${COMPLETION_SHELLS.join(", ")}`,
+        );
+        return;
+      }
+      result = {
+        stdout: renderCompletion(program, shell),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+  completion.exitOverride();
+  completion.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);
