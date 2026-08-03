@@ -418,6 +418,12 @@ describe("execute", () => {
     expect(bash.stdout).toContain(
       "'tasks') candidates='get update create comments comment list",
     );
+    expect(bash.stdout).toContain(
+      "'tasks/get') candidates='-v --version --json --fields",
+    );
+    expect(bash.stdout).toContain(
+      "'whoami') candidates='-v --version --json -h --help'",
+    );
     expect(zsh).toMatchObject({ exitCode: 0, stderr: "" });
     expect(zsh.stdout).toContain("#compdef asana-cli");
     expect(fish).toMatchObject({ exitCode: 0, stderr: "" });

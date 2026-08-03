@@ -75,6 +75,7 @@ import {
   renderWorkspaceList,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
+import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import {
   executeWorkspacesList,
   type WorkspaceGateway,
@@ -318,18 +319,10 @@ export const execute = async (
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
-      const fieldsCommands = [
-        "get",
-        "comments",
-        "comment",
-        "update",
-        "create",
-        "list",
-      ];
-      const supportsFields =
-        actionCommand.parent?.name() === "tasks" &&
-        fieldsCommands.includes(actionCommand.name());
-      if (!supportsFields) {
+      const commandPath = [actionCommand.parent?.name(), actionCommand.name()]
+        .filter((part): part is string => part !== undefined)
+        .join("/");
+      if (!acceptsFieldsOptionAtPath(commandPath)) {
         throw new CommanderError(
           2,
           "commander.fieldsNotSupported",

@@ -1,5 +1,7 @@
 import type { Command, Option } from "commander";
 
+import { acceptsFieldsOptionAtPath } from "../cli/field-selection.ts";
+
 export const COMPLETION_SHELLS = ["bash", "zsh", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 
@@ -18,6 +20,17 @@ type CompletionNode = Readonly<{
   children: readonly CompletionNode[];
   options: readonly CompletionOption[];
   argumentChoices: readonly string[];
+}>;
+
+type CompletionTransition = Readonly<{
+  from: string;
+  word: string;
+  to: string;
+}>;
+
+type FileCompletion = Readonly<{
+  key: string;
+  flag: string;
 }>;
 
 const shellSingleQuote = (value: string): string =>
@@ -45,29 +58,63 @@ const optionValueChoices = (
   return [];
 };
 
+const toCompletionOption = (
+  nodeId: string,
+  option: Option,
+): CompletionOption => ({
+  flags: optionFlags(option),
+  description: option.description,
+  takesValue: option.required || option.optional,
+  completesFiles: option.long === "--file" || option.long === "--notes-file",
+  valueChoices: optionValueChoices(nodeId, option),
+});
+
+const optionAppliesAtPath = (
+  option: CompletionOption,
+  commandPath: string,
+): boolean =>
+  !option.flags.includes("--fields") || acceptsFieldsOptionAtPath(commandPath);
+
+const mergeOptions = (
+  inheritedOptions: readonly CompletionOption[],
+  ownOptions: readonly CompletionOption[],
+): readonly CompletionOption[] => [
+  ...inheritedOptions,
+  ...ownOptions.filter(
+    (ownOption) =>
+      !inheritedOptions.some((inheritedOption) =>
+        ownOption.flags.some((flag) => inheritedOption.flags.includes(flag)),
+      ),
+  ),
+];
+
 const toNode = (
   command: Command,
   path: readonly string[] = [],
+  inheritedOptions: readonly CompletionOption[] = [],
 ): CompletionNode => {
   const name = command.name();
   const id = path.length === 0 ? "root" : path.join("/");
+  const ownOptions = command.options
+    .filter((option) => !option.hidden)
+    .map((option) => toCompletionOption(id, option));
+  const applicableInheritedOptions = inheritedOptions.filter((option) =>
+    optionAppliesAtPath(option, id),
+  );
+  const options =
+    path.length === 0
+      ? ownOptions
+      : mergeOptions(applicableInheritedOptions, ownOptions);
+  const childInheritedOptions =
+    path.length === 0 ? ownOptions : inheritedOptions;
   return {
     id,
     name,
     description: command.description(),
     children: command.commands.map((child) =>
-      toNode(child, [...path, child.name()]),
+      toNode(child, [...path, child.name()], childInheritedOptions),
     ),
-    options: command.options
-      .filter((option) => !option.hidden)
-      .map((option) => ({
-        flags: optionFlags(option),
-        description: option.description,
-        takesValue: option.required || option.optional,
-        completesFiles:
-          option.long === "--file" || option.long === "--notes-file",
-        valueChoices: optionValueChoices(id, option),
-      })),
+    options,
     argumentChoices: command.name() === "completion" ? COMPLETION_SHELLS : [],
   };
 };
@@ -82,14 +129,31 @@ const flattenNodes = (root: CompletionNode): readonly CompletionNode[] => {
   return nodes;
 };
 
-const transitionLines = (nodes: readonly CompletionNode[]): readonly string[] =>
+const transitions = (
+  nodes: readonly CompletionNode[],
+): readonly CompletionTransition[] =>
   nodes.flatMap((node) =>
-    node.children.map((child) => `${node.id}:${child.name}:${child.id}`),
+    node.children.map((child) => ({
+      from: node.id,
+      word: child.name,
+      to: child.id,
+    })),
+  );
+
+const fileCompletionKeys = (
+  nodes: readonly CompletionNode[],
+): readonly FileCompletion[] =>
+  nodes.flatMap((node) =>
+    node.options.flatMap((option) =>
+      option.completesFiles
+        ? option.flags.map((flag) => ({ key: `${node.id}:${flag}`, flag }))
+        : [],
+    ),
   );
 
 const bashCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
-  const transitions = transitionLines(nodes);
+  const commandTransitions = transitions(nodes);
   const cases = nodes
     .map((node) => {
       const candidates = [
@@ -103,11 +167,11 @@ const bashCompletion = (root: CompletionNode): string => {
       return `    ${shellSingleQuote(node.id)}) candidates=${shellSingleQuote(candidates.join(" "))} ;;`;
     })
     .join("\n");
-  const transitionCases = transitions
-    .map((transition) => {
-      const [from, word, to] = transition.split(":");
-      return `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to ?? "root")} ;;`;
-    })
+  const transitionCases = commandTransitions
+    .map(
+      ({ from, word, to }) =>
+        `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to)} ;;`,
+    )
     .join("\n");
   const valueCases = nodes
     .flatMap((node) =>
@@ -121,10 +185,52 @@ const bashCompletion = (root: CompletionNode): string => {
       ),
     )
     .join("\n");
+  const equalsValueCases = nodes
+    .flatMap((node) =>
+      node.options.flatMap((option) =>
+        option.valueChoices.length === 0
+          ? []
+          : option.flags
+              .filter((flag) => flag.startsWith("--"))
+              .map(
+                (flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
+      local value="\${cur#*=}"
+      COMPREPLY=( $(compgen -W ${shellSingleQuote(option.valueChoices.join(" "))} -- "\${value}") )
+      COMPREPLY=( "\${COMPREPLY[@]/#/${flag}=}" )
+      return
+      ;;`,
+              ),
+      ),
+    )
+    .join("\n");
+  const fileCases = fileCompletionKeys(nodes)
+    .map(
+      ({ key }) => `    ${shellSingleQuote(key)})
+      COMPREPLY=()
+      while IFS= read -r candidate; do
+        COMPREPLY+=("\${candidate}")
+      done < <(compgen -f -- "\${cur}")
+      return
+      ;;`,
+    )
+    .join("\n");
+  const equalsFileCases = fileCompletionKeys(nodes)
+    .filter(({ flag }) => flag.startsWith("--"))
+    .map(
+      ({ key, flag }) => `    ${shellSingleQuote(`${key}=`)}*)
+      value="\${cur#*=}"
+      COMPREPLY=()
+      while IFS= read -r candidate; do
+        COMPREPLY+=("${flag}=\${candidate}")
+      done < <(compgen -f -- "\${value}")
+      return
+      ;;`,
+    )
+    .join("\n");
 
   return `# bash completion for asana-cli
 _asana_cli_completion() {
-  local cur context word candidates i
+  local cur context word candidates candidate value i
   cur="\${COMP_WORDS[COMP_CWORD]}"
   context=root
 
@@ -135,6 +241,11 @@ ${transitionCases}
     esac
   done
 
+  case "\${context}:\${cur}" in
+${equalsValueCases}
+${equalsFileCases}
+  esac
+
   case "\${context}:\${COMP_WORDS[COMP_CWORD-1]}" in
 ${valueCases}
   esac
@@ -143,11 +254,8 @@ ${valueCases}
     return
   fi
 
-  case "\${COMP_WORDS[COMP_CWORD-1]}" in
-    --file|--notes-file)
-      COMPREPLY=( $(compgen -f -- "\${cur}") )
-      return
-      ;;
+  case "\${context}:\${COMP_WORDS[COMP_CWORD-1]}" in
+${fileCases}
   esac
 
   case "\${context}" in
@@ -162,12 +270,12 @@ complete -F _asana_cli_completion asana-cli
 
 const zshCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
-  const transitions = transitionLines(nodes);
-  const transitionCases = transitions
-    .map((transition) => {
-      const [from, word, to] = transition.split(":");
-      return `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to ?? "root")} ;;`;
-    })
+  const commandTransitions = transitions(nodes);
+  const transitionCases = commandTransitions
+    .map(
+      ({ from, word, to }) =>
+        `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to)} ;;`,
+    )
     .join("\n");
   const valueCases = nodes
     .flatMap((node) =>
@@ -179,6 +287,42 @@ const zshCompletion = (root: CompletionNode): string => {
                 `    ${shellSingleQuote(`${node.id}:${flag}`)}) value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")}) ;;`,
             ),
       ),
+    )
+    .join("\n");
+  const equalsValueCases = nodes
+    .flatMap((node) =>
+      node.options.flatMap((option) =>
+        option.valueChoices.length === 0
+          ? []
+          : option.flags
+              .filter((flag) => flag.startsWith("--"))
+              .map(
+                (flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
+      compset -P '*='
+      value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")})
+      _describe -t values 'values' value_candidates
+      return
+      ;;`,
+              ),
+      ),
+    )
+    .join("\n");
+  const fileCases = fileCompletionKeys(nodes)
+    .map(
+      ({ key }) => `    ${shellSingleQuote(key)})
+      _files
+      return
+      ;;`,
+    )
+    .join("\n");
+  const equalsFileCases = fileCompletionKeys(nodes)
+    .filter(({ flag }) => flag.startsWith("--"))
+    .map(
+      ({ key }) => `    ${shellSingleQuote(`${key}=`)}*)
+      compset -P '*='
+      _files
+      return
+      ;;`,
     )
     .join("\n");
   const cases = nodes
@@ -225,6 +369,10 @@ ${transitionCases}
     esac
   done
 
+  case "\${context}:\${cur}" in
+${equalsValueCases}
+${equalsFileCases}
+  esac
 
   case "\${context}:\${words[CURRENT-1]}" in
 ${valueCases}
@@ -234,11 +382,8 @@ ${valueCases}
     return
   fi
 
-  case "\${words[CURRENT-1]}" in
-    --file|--notes-file)
-      _files
-      return
-      ;;
+  case "\${context}:\${words[CURRENT-1]}" in
+${fileCases}
   esac
 
   case "\${context}" in
@@ -263,12 +408,11 @@ const fishCondition = (node: CompletionNode): string =>
 
 const fishCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
-  const transitionCases = transitionLines(nodes)
-    .map((transition) => {
-      const [from, word, to] = transition.split(":");
-      return `      case ${fishSingleQuote(`${from}:${word}`)}
-        set context ${fishSingleQuote(to ?? "root")}`;
-    })
+  const transitionCases = transitions(nodes)
+    .map(
+      ({ from, word, to }) => `      case ${fishSingleQuote(`${from}:${word}`)}
+        set context ${fishSingleQuote(to)}`,
+    )
     .join("\n");
   const definitions = nodes.flatMap((node) => {
     const condition = fishSingleQuote(fishCondition(node));
