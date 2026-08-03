@@ -6,6 +6,18 @@ allowed-tools: Bash(asana-cli *) Bash(gh issue list *) Bash(gh issue create *)
 
 `asana-cli` is already installed; invoke it directly. Every Asana operation goes through it — never call the Asana REST API, an SDK, a MCP, or curl to route around a missing command; that risks handling `ASANA_CLI_TOKEN` outside its one sanctioned path (the CLI never accepts the token as an argument). If a workflow needs something the CLI doesn't expose, stop and use the closest supported primitive, or follow "Filing a CLI issue" below with the `enhancement` label instead of working around it.
 
+## Project initialization
+
+When asked to initialize `asana-cli` in a repository, complete the whole personal-ready setup unless the user explicitly requests a different default assignee or no default:
+
+1. Resolve the workspace GID from the location the user names, or use `asana-cli workspaces list --json` if none is provided.
+2. Run `asana-cli config init --shared --workspace=<gid>`.
+3. Run `asana-cli config init --local --write-gitignore`.
+4. Run `asana-cli config set defaultAssignee me` — `me` is preferred; no need to discover or store the user's numeric GID.
+5. Verify the result with `asana-cli config get workspace.gid --source` and `asana-cli config get defaultAssignee --source`; report both resolved values and sources.
+
+Treat initialization as incomplete if `defaultAssignee` was not set and verified.
+
 ## Read before write
 
 Before `tasks update` or `tasks comment`, read the target first with `asana-cli tasks get <id> --json`. Before creating a subtask, read its `--parent` the same way. Confirm the returned `gid`, `name`, and relevant field match what you intend. A standalone create has no task to pre-read; confirm its explicit `--my-section` or `--project` destination instead. Decide the exact fields before issuing one write — don't narrow the change mid-write.
