@@ -13,10 +13,10 @@ When asked to initialize `asana-cli` in a repository, complete the whole persona
 1. Resolve the workspace GID from the location the user names, or use `asana-cli workspaces list --json` if none is provided.
 2. Run `asana-cli config init --shared --workspace=<gid>`.
 3. Run `asana-cli config init --local --write-gitignore`.
-4. Run `asana-cli config set defaultAssignee me`.
+4. Run `asana-cli config set defaultAssignee me` — `me` is preferred; no need to discover or store the user's numeric GID.
 5. Verify the result with `asana-cli config get workspace.gid --source` and `asana-cli config get defaultAssignee --source`; report both resolved values and sources.
 
-`me` is the preferred personal default and does not require discovering or storing the user's numeric GID. Treat initialization as incomplete if `defaultAssignee` was not set and verified.
+Treat initialization as incomplete if `defaultAssignee` was not set and verified.
 
 ## Read before write
 
