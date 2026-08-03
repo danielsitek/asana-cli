@@ -7,11 +7,11 @@ import {
 
 describe("release tag validation", () => {
   test("accepts the exact stable package version", async () => {
-    await expect(verifyReleaseTag("v0.1.0")).resolves.toBe("0.1.0");
+    await expect(verifyReleaseTag("v0.2.0")).resolves.toBe("0.2.0");
   });
 
   test("rejects version mismatches and non-stable tags", async () => {
-    for (const tag of ["v0.2.0", "0.1.0", "v0.1.0-rc.1", "v01.1.0"]) {
+    for (const tag of ["v0.1.0", "0.2.0", "v0.2.0-rc.1", "v02.0.0"]) {
       await expect(verifyReleaseTag(tag)).rejects.toThrow();
     }
   });
@@ -21,7 +21,7 @@ describe("release tag validation", () => {
       await expect(runVerifyReleaseTagCli([])).rejects.toThrow(
         "Usage: verify-release-tag.ts --tag <tag>",
       );
-      await expect(runVerifyReleaseTagCli(["--tag", "v0.1.0"])).resolves.toBe(
+      await expect(runVerifyReleaseTagCli(["--tag", "v0.2.0"])).resolves.toBe(
         undefined,
       );
     });
@@ -39,7 +39,7 @@ describe("release tag validation", () => {
 
     test("succeeds when invoked with the matching stable tag", async () => {
       const proc = Bun.spawn(
-        ["bun", "run", "verify-release-tag.ts", "--tag", "v0.1.0"],
+        ["bun", "run", "verify-release-tag.ts", "--tag", "v0.2.0"],
         { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe" },
       );
       expect(await proc.exited).toBe(0);
