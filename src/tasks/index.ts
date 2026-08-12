@@ -328,11 +328,18 @@ export const prepareTaskParentUpdate = (
   if (!fields.ok) return fields;
   const selected = fields.value === undefined ? {} : { fields: fields.value };
 
-  const combined = Object.entries(options).some(
-    ([key, value]) =>
-      key !== "parent" &&
-      value !== undefined &&
-      (key !== "customFields" || value.length > 0),
+  // Object.entries() loses the per-property `| undefined` from optional
+  // fields, so it can't tell us a flag was actually left unset; index via
+  // the original keys instead to keep that information.
+  const combined = (Object.keys(options) as (keyof typeof options)[]).some(
+    (key) => {
+      const value = options[key];
+      return (
+        key !== "parent" &&
+        value !== undefined &&
+        (key !== "customFields" || value.length > 0)
+      );
+    },
   );
   if (combined) {
     return err({
@@ -384,9 +391,15 @@ const prepareTaskMutation = (
   PreparedTaskMutation,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
-  const supplied = Object.entries(options).some(
-    ([key, value]) =>
-      value !== undefined && (key !== "customFields" || value.length > 0),
+  // See prepareTaskParentUpdate: index via keys, not Object.entries(), to
+  // keep the `| undefined` that optional properties actually carry.
+  const supplied = (Object.keys(options) as (keyof typeof options)[]).some(
+    (key) => {
+      const value = options[key];
+      return (
+        value !== undefined && (key !== "customFields" || value.length > 0)
+      );
+    },
   );
   if (!supplied) {
     return err({
@@ -1283,8 +1296,7 @@ export const executeTaskListRead = async (
     }
     const tasksWithinBudget = pageTasks.slice(0, remaining);
     const pageExceedsBudget = pageTasks.length > tasksWithinBudget.length;
-    for (let index = 0; index < tasksWithinBudget.length; index += 1) {
-      const task = tasksWithinBudget[index]!;
+    for (const [index, task] of tasksWithinBudget.entries()) {
       scanned += 1;
       const matchesCompleted = task.completed === prepared.completed;
       const matchesAssignee =

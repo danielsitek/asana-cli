@@ -24,12 +24,16 @@ const parseChecksums = (
   for (const line of manifest.split("\n").filter((value) => value !== "")) {
     const match = /^([0-9a-f]+) {2}(\S+)$/.exec(line);
     if (match === null) throw new Error(`Malformed checksum line: ${line}`);
-    const checksum = sha256Schema.safeParse(match[1]);
+    const [, hash, filename] = match;
+    if (hash === undefined || filename === undefined) {
+      throw new Error(`Malformed checksum line: ${line}`);
+    }
+    const checksum = sha256Schema.safeParse(hash);
     if (!checksum.success)
-      throw new Error(`Malformed checksum for ${match[2]}`);
-    const target = expectedFiles.get(match[2]!);
+      throw new Error(`Malformed checksum for ${filename}`);
+    const target = expectedFiles.get(filename);
     if (target === undefined)
-      throw new Error(`Unexpected checksum target: ${match[2]}`);
+      throw new Error(`Unexpected checksum target: ${filename}`);
     if (checksums.has(target))
       throw new Error(`Duplicate checksum target: ${target}`);
     checksums.set(target, checksum.data);

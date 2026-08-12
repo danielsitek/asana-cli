@@ -290,8 +290,7 @@ export const executeTaskCommentsRead = async (
     const pageExceedsBudget = stories.length > storiesWithinBudget.length;
 
     if (latestCap === undefined) {
-      for (let index = 0; index < storiesWithinBudget.length; index += 1) {
-        const story = storiesWithinBudget[index]!;
+      for (const [index, story] of storiesWithinBudget.entries()) {
         scanned += 1;
         if (story.resource_subtype === "comment_added") {
           comments.push(projectCommentFields(story, prepared.outputFields));

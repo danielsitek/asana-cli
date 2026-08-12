@@ -264,12 +264,12 @@ export const execute = async (
     .version(dependencies.version ?? "0.2.0", "-v, --version");
   const version = dependencies.version ?? "0.2.0";
   let json = false;
-  let invoked = false;
+  const invokedState = { value: false };
   let result: Execution | undefined;
   let parserStdout = "";
 
   const beginConfigCommand = (): ConfigContext | undefined => {
-    invoked = true;
+    invokedState.value = true;
     json = program.opts<{ json?: boolean }>().json ?? false;
     const context = dependencies.configuration;
     if (!context) result = usageError("Configuration context is unavailable");
@@ -336,7 +336,7 @@ export const execute = async (
     .command("whoami")
     .description("show the authenticated Asana user")
     .action(async () => {
-      invoked = true;
+      invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
       const token = resolveToken(dependencies.environment);
       if (!token.ok) {
@@ -650,7 +650,7 @@ export const execute = async (
     .command("get <id>")
     .description("read a task's details")
     .action(async (idArg: string) => {
-      invoked = true;
+      invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
       const parsedId = parseTaskId(idArg);
@@ -732,7 +732,7 @@ export const execute = async (
         idArg: string,
         options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
       ) => {
-        invoked = true;
+        invokedState.value = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
         const fieldsInput = program.opts<{ fields?: string }>().fields;
@@ -878,7 +878,7 @@ export const execute = async (
       options: TaskMutationCliOptions &
         Readonly<{ parent?: string; project?: string }>,
     ) => {
-      invoked = true;
+      invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
       const prepared = await prepareTaskCreateWithConfig(
@@ -1001,7 +1001,7 @@ export const execute = async (
           latest?: string;
         }>,
       ) => {
-        invoked = true;
+        invokedState.value = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
         const prepared = prepareTaskCommentsRead(idArg, {
           ...(program.opts<{ fields?: string }>().fields === undefined
@@ -1088,7 +1088,7 @@ export const execute = async (
         textArg: string | undefined,
         options: Readonly<{ file?: string }>,
       ) => {
-        invoked = true;
+        invokedState.value = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
         const prepared = prepareTaskCommentCreate(idArg, {
           ...(program.opts<{ fields?: string }>().fields === undefined
@@ -1181,7 +1181,7 @@ export const execute = async (
           all?: boolean;
         }>,
       ) => {
-        invoked = true;
+        invokedState.value = true;
         json = program.opts<{ json?: boolean }>().json ?? false;
 
         const prepared = prepareTaskListRead(
@@ -1279,7 +1279,7 @@ export const execute = async (
     .command("list")
     .description("list workspaces visible to the authenticated user")
     .action(async () => {
-      invoked = true;
+      invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
       const tokenResult = resolveToken(dependencies.environment);
@@ -1331,7 +1331,7 @@ export const execute = async (
     .command("completion <shell>")
     .description("generate shell completion script")
     .action((shell: string) => {
-      invoked = true;
+      invokedState.value = true;
       if (!isCompletionShell(shell)) {
         result = usageError(
           `Unsupported shell: ${shell}; expected ${COMPLETION_SHELLS.join(", ")}`,
@@ -1380,7 +1380,7 @@ export const execute = async (
   }
   return (
     result ??
-    (invoked
+    (invokedState.value
       ? usageError("Command did not complete")
       : usageError("A command is required"))
   );
