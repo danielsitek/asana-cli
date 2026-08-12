@@ -107,6 +107,11 @@ asana-cli config init --shared --workspace=1201947864389005
 asana-cli config init --local --write-gitignore
 ```
 
+`config init --local` and `asana-cli config resolve my-tasks` both
+re-discover and overwrite the entire `myTasks` block in
+`.asana-cli.local.json`; neither is read-only. Rerun `config resolve
+my-tasks` after sections or custom fields change in Asana.
+
 Example `.asana-cli.local.json`:
 
 ```json
@@ -185,7 +190,8 @@ asana-cli tasks create \
 A task `<id>` (positional, and `--parent`) accepts a digit-only GID or a URL
 of the exact form `https://app.asana.com/0/<project>/<task>[/f]`; other URL
 shapes fail with exit 2. `--section` and `--project` accept only digit-only
-GIDs; `--my-section` accepts only `@<alias>`.
+GIDs. `--my-section` accepts a digit-only GID or `@<alias>` on `tasks create`
+and `tasks update`; on `tasks list` it accepts only `@<alias>`.
 
 See [Safety and mutation contract](#safety-and-mutation-contract) below for
 bounded-read caps, write-retry behavior, and partial-write reporting.
@@ -200,20 +206,24 @@ Both commands accept the same mutation flags:
 - `--assignee=me|<gid>|null`
 - `--due-on=<YYYY-MM-DD>|null`
 - `--completed=true|false`
-- `--my-section=@<alias>` — place or move within My Tasks
+- `--my-section=<gid>|@<alias>` — place or move within My Tasks
 - `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
   [Custom fields](#custom-fields---custom-field) below
+
+`--my-section` or `--custom-field` requires the final assignee to be the
+authenticated user, checked after all other flags are applied: on `tasks
+create` this is an explicit `--assignee=me|<gid>` or a configured
+`defaultAssignee` (see [Configuration](#configuration)); on `tasks update`
+without `--assignee`, it's the task's existing assignee. Otherwise the
+command fails with exit 2.
 
 ### `tasks create`
 
 - Requires `--name` and at least one destination:
-  - `--parent=<gid>` — subtask
-  - `--my-section=@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
+  - `--parent=<gid-or-url>` — subtask
+  - `--my-section=<gid>|@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
   - `--project=<gid>` — standalone project task
 - `--parent` and `--my-section` may be combined; `--project` cannot be combined with either.
-- `--my-section` or `--custom-field` requires an assignable user — explicit
-  `--assignee=me|<gid>` on the same call, or a configured `defaultAssignee`
-  (see [Configuration](#configuration)) — otherwise the command fails with exit 2.
 
 ### `tasks update`
 
@@ -239,7 +249,7 @@ Both commands accept the same mutation flags:
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
-- `tasks comments <id> --max=<n> [--all]` reads existing comments, bounded the same way as `tasks list`.
+- `tasks comments <id> [--max=<n>] [--all]` reads existing comments, bounded the same way as `tasks list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 
 ### Custom fields (`--custom-field`)
 
@@ -253,9 +263,10 @@ Both commands accept the same mutation flags:
 ### Output (`--json` / `--fields`)
 
 - `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`.
+- `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
-- Errors are always compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`.
+- Errors are compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
 
 ## Shell completion
 
@@ -315,8 +326,10 @@ credentials, or the Asana API.
   this avoids duplicating a task, subtask, or comment.
 - Multi-step writes (such as `tasks create` with My Tasks placement) validate
   every input before the first write, then report every completed and failed
-  stage; a failure after the first write returns a partial result.
-- JSON data goes to stdout; diagnostics and errors go to stderr.
+  stage; a failure after the first write returns a partial result (exit 1) on
+  stdout, not through the stderr error envelope.
+- JSON data goes to stdout; diagnostics and errors (other than the exit-1
+  partial result above) go to stderr.
 - The application implements no telemetry or analytics.
 
 ## Contributing
