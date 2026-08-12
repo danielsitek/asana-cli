@@ -1283,8 +1283,7 @@ export const executeTaskListRead = async (
     }
     const tasksWithinBudget = pageTasks.slice(0, remaining);
     const pageExceedsBudget = pageTasks.length > tasksWithinBudget.length;
-    for (let index = 0; index < tasksWithinBudget.length; index += 1) {
-      const task = tasksWithinBudget[index]!;
+    for (const [index, task] of tasksWithinBudget.entries()) {
       scanned += 1;
       const matchesCompleted = task.completed === prepared.completed;
       const matchesAssignee =

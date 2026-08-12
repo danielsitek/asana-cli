@@ -176,6 +176,17 @@ export const renderTaskCreation = (
   return `${lines.join("\n")}\n`;
 };
 
+// `array[index]` here always lands on an entry built pairwise from the
+// same source (e.g. widths derived from fields), so it's never undefined —
+// this throws instead of using a non-null assertion.
+const requireAt = <T>(array: readonly T[], index: number): T => {
+  const value = array[index];
+  if (value === undefined) {
+    throw new Error(`index ${index} out of bounds`);
+  }
+  return value;
+};
+
 const renderLeafValue = (value: unknown): string =>
   value === null || value === undefined
     ? "—"
@@ -197,12 +208,16 @@ const renderRecordTable = (
     Math.max(
       field.length,
       ...rows.map((row) =>
-        Math.max(...row[index]!.split("\n").map((line) => line.length)),
+        Math.max(
+          ...requireAt(row, index)
+            .split("\n")
+            .map((line) => line.length),
+        ),
       ),
     ),
   );
   const header = fields
-    .map((field, index) => field.padEnd(widths[index]!))
+    .map((field, index) => field.padEnd(requireAt(widths, index)))
     .join("  ");
   const body = rows.flatMap((row) => {
     const cellLines = row.map((cell) => cell.split("\n"));
@@ -210,7 +225,7 @@ const renderRecordTable = (
     return Array.from({ length: height }, (_, lineIndex) =>
       cellLines
         .map((lines, columnIndex) =>
-          (lines[lineIndex] ?? "").padEnd(widths[columnIndex]!),
+          (lines[lineIndex] ?? "").padEnd(requireAt(widths, columnIndex)),
         )
         .join("  ")
         .trimEnd(),
@@ -235,14 +250,14 @@ export const renderWorkspaceList = (
   const fields = ["gid", "name"] as const;
   const rows = workspaces.map((workspace) => [workspace.gid, workspace.name]);
   const widths = fields.map((field, index) =>
-    Math.max(field.length, ...rows.map((row) => row[index]!.length)),
+    Math.max(field.length, ...rows.map((row) => requireAt(row, index).length)),
   );
   const header = fields
-    .map((field, index) => field.padEnd(widths[index]!))
+    .map((field, index) => field.padEnd(requireAt(widths, index)))
     .join("  ");
   const body = rows.map((row) =>
     row
-      .map((cell, index) => cell.padEnd(widths[index]!))
+      .map((cell, index) => cell.padEnd(requireAt(widths, index)))
       .join("  ")
       .trimEnd(),
   );
