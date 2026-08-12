@@ -66,13 +66,17 @@ describe("Homebrew formula generator", () => {
       (target, index) =>
         `${String(index + 1).repeat(64)}  asana-cli-v0.1.0-${target}.tar.gz`,
     );
+    const [firstLine] = validLines;
+    if (firstLine === undefined) {
+      throw new Error("expected at least one release target");
+    }
     const cases = [
       {
         lines: validLines.slice(0, -1),
         message: "Missing checksum target: linux-arm64",
       },
       {
-        lines: [...validLines, validLines[0]!],
+        lines: [...validLines, firstLine],
         message: "Duplicate checksum target: darwin-arm64",
       },
       {
@@ -81,7 +85,7 @@ describe("Homebrew formula generator", () => {
       },
       {
         lines: [
-          `${"a".repeat(63)}  ${validLines[0]!.split("  ")[1]}`,
+          `${"a".repeat(63)}  ${firstLine.split("  ")[1]}`,
           ...validLines.slice(1),
         ],
         message: "Malformed checksum",

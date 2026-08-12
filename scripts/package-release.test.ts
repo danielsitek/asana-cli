@@ -49,11 +49,17 @@ describe("release packaging", () => {
     const run = async (command: readonly string[]) => {
       mutableCommands.push([...command]);
       if (command[0] === "tar") {
-        const tarPath = command[command.indexOf("-cf") + 1]!;
+        const tarPath = command[command.indexOf("-cf") + 1];
+        if (tarPath === undefined) {
+          throw new Error("expected tar output path after -cf");
+        }
         await writeFile(tarPath, "normalized tar fixture");
       }
       if (command[0] === "gzip") {
-        const tarPath = command.at(-1)!;
+        const tarPath = command.at(-1);
+        if (tarPath === undefined) {
+          throw new Error("expected tar path argument");
+        }
         await writeFile(`${tarPath}.gz`, await Bun.file(tarPath).bytes());
         await rm(tarPath);
       }
