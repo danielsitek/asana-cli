@@ -81,8 +81,30 @@ const sortedUniqueNames = (names: readonly string[]): readonly string[] =>
     left < right ? -1 : left > right ? 1 : 0,
   );
 
+const isDigits = (input: string, start: number, end: number): boolean => {
+  if (start >= end) return false;
+  for (let index = start; index < end; index += 1) {
+    const code = input.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
+};
+
+// Manual check instead of /^-?\d+(?:\.\d+)?$/: avoids a RegExp flagged by
+// Codacy's unsafe-regex scanner (Security DoS) — this walk is linear and
+// has no backtracking.
+const isNumberLiteral = (input: string): boolean => {
+  const start = input.startsWith("-") ? 1 : 0;
+  const dotIndex = input.indexOf(".");
+  if (dotIndex === -1) return isDigits(input, start, input.length);
+  return (
+    isDigits(input, start, dotIndex) &&
+    isDigits(input, dotIndex + 1, input.length)
+  );
+};
+
 const parseNumberValue = (input: string): Result<number, string> => {
-  if (!/^-?\d+(?:\.\d+)?$/.test(input)) {
+  if (!isNumberLiteral(input)) {
     return err("Custom field value must be an integer, dot-decimal, or null");
   }
   const value = Number(input);
