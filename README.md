@@ -223,44 +223,61 @@ asana-cli completion fish > ~/.config/fish/completions/asana-cli.fish
 Completion is generated locally and never reads configuration, authentication
 credentials, or the Asana API.
 
+## Command reference
+
 Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
 
-`tasks create` requires `--name` and an explicit destination: `--parent` for a
-subtask, `--my-section` for a standalone My Tasks task, or `--project` with a
-digit-only project GID. A standalone My Tasks task uses the configured
-`workspace.gid`. `--parent` may be combined with `--my-section`; `--project`
-cannot be combined with either destination flag.
+### `tasks create`
 
-`tasks update --parent=<gid>|null` reparents an existing task: a GID or task
-URL moves it under that parent, and literal `null` promotes it to a top-level
-task. It is a dedicated single-write operation and cannot be combined with any
-other `tasks update` flag; a task cannot be its own parent.
+- Requires `--name` and exactly one destination:
+  - `--parent=<gid>` — subtask
+  - `--my-section=@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
+  - `--project=<gid>` — standalone project task (digit-only GID)
+- `--parent` may be combined with `--my-section`.
+- `--project` cannot be combined with either destination flag.
 
-`tasks list` requires exactly one source: `--my-section=@<alias>` for a My
-Tasks section, `--section=<gid>` for any section, `--project=<gid>` for a
-project, or `--parent=<id>` for a task's direct subtasks. `--parent` accepts a
-task GID or URL. `--my-section` accepts only `@alias` and is resolved and
-validated against your live My Tasks the same way as
-`tasks update --my-section`.
-`--assignee=me|<gid>` and `--completed=true|false` (default `false`) filter
-client-side, so they work even when `--fields` omits `assignee` or
-`completed`. Reads are bounded the same way as `tasks comments`: a default
-scan cap of 100 and result cap of 20, `--max=<n>` to raise the scan cap, and
-`--all` (which requires `--max`) to remove the result cap. Default fields are
-`gid,name,completed,assignee.gid,assignee.name`.
+### `tasks update`
 
-`--notes` and `--notes-file` are mutually exclusive; notes are replaced
-explicitly, with no read-modify-write append. `--notes-file=-` and
-`tasks comment --file=-` read from stdin.
+- `--parent=<gid>|null` reparents an existing task:
+  - GID or task URL — moves it under that parent
+  - literal `null` — promotes it to a top-level task
+- Dedicated single-write operation; cannot be combined with any other `tasks update` flag.
+- A task cannot be its own parent.
 
-`--custom-field=(<field-gid>|@<alias>):<value>` is repeatable and writes number
-or enum custom fields. Number values use finite integer or dot-decimal syntax.
-Enum values resolve enabled options by GID first, then by case-sensitive exact
-name; invalid or ambiguous names list the valid options. `null` clears either
-type. Field definitions and options are live-validated before writing.
+### `tasks list`
 
-`--json` returns `{ "data": ..., "meta": ... }` as compact, single-line JSON;
-`--fields` selects explicit Asana fields.
+- Requires exactly one source:
+  - `--my-section=@<alias>` — a My Tasks section (`@alias` only, live-validated the same way as `tasks update --my-section`)
+  - `--section=<gid>` — any section
+  - `--project=<gid>` — a project
+  - `--parent=<gid>` — a task's direct subtasks (GID or URL)
+- Filters apply client-side, so they work even when `--fields` omits the field:
+  - `--assignee=me|<gid>`
+  - `--completed=true|false` (default `false`)
+- Reads are bounded the same way as `tasks comments`:
+  - default scan cap 100, result cap 20
+  - `--max=<n>` raises the scan cap
+  - `--all` removes the result cap (requires `--max`)
+- Default fields: `gid,name,completed,assignee.gid,assignee.name`.
+
+### Notes (`--notes` / `--notes-file`)
+
+- Mutually exclusive; notes are replaced explicitly, with no read-modify-write append.
+- `--notes-file=-` and `tasks comment --file=-` read from stdin.
+
+### Custom fields (`--custom-field`)
+
+- Syntax: `--custom-field=(<field-gid>|@<alias>):<value>`, repeatable.
+- Writes number or enum custom fields.
+- Number values use finite integer or dot-decimal syntax.
+- Enum values resolve by GID first, then by case-sensitive exact name; invalid or ambiguous names list the valid options.
+- `null` clears either type.
+- Field definitions and options are live-validated before writing.
+
+### Output (`--json` / `--fields`)
+
+- `--json` returns compact, single-line `{ "data": ..., "meta": ... }`.
+- `--fields` selects explicit Asana fields.
 
 ## Safety and mutation contract
 
