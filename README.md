@@ -1,5 +1,9 @@
 # Asana CLI
 
+[![CI](https://img.shields.io/github/actions/workflow/status/danielsitek/asana-cli/ci.yml?branch=main&label=CI)](https://github.com/danielsitek/asana-cli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/danielsitek/asana-cli)](https://github.com/danielsitek/asana-cli/releases)
+[![License: MIT](https://img.shields.io/github/license/danielsitek/asana-cli)](LICENSE)
+
 Fast, script-friendly CLI for working with Asana from a terminal or autonomous agent. It favors explicit fields, bounded reads, deterministic JSON, and honest reporting of partial writes.
 
 ## Install
