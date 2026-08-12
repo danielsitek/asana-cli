@@ -21,6 +21,7 @@ import type {
   WorkspaceListError,
 } from "../workspaces/index.ts";
 import {
+  DEFAULT_TASK_LIST_FIELDS,
   type Task,
   type TaskCreationGateway,
   type TaskCreationTarget,
@@ -3261,13 +3262,13 @@ describe("tasks comment command", () => {
 class InMemoryTaskListReader implements TaskListGateway {
   calls: Array<
     Readonly<{
-      kind: "section" | "project";
+      kind: "section" | "project" | "parent";
       gid: string;
       options: Readonly<{
         fields: readonly string[];
         limit: number;
         offset?: string;
-        completedSince: string;
+        completedSince?: string;
       }>;
     }>
   > = [];
@@ -3303,6 +3304,19 @@ class InMemoryTaskListReader implements TaskListGateway {
     }>,
   ) {
     this.calls.push({ kind: "project", gid: projectGid, options });
+    return this.response;
+  }
+
+  async getTaskSubtasks(
+    _token: string,
+    parentGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+    }>,
+  ) {
+    this.calls.push({ kind: "parent", gid: parentGid, options });
     return this.response;
   }
 }
@@ -3350,6 +3364,29 @@ describe("tasks list command", () => {
     expect(result.exitCode).toBe(0);
     expect(reader.calls[0]?.kind).toBe("project");
     expect(reader.calls[0]?.gid).toBe("600");
+  });
+
+  test.each([
+    ["700", "700"],
+    ["https://app.asana.com/0/123/700", "700"],
+  ])("lists direct subtasks from parent %s", async (parent, parentGid) => {
+    const reader = new InMemoryTaskListReader(ok({ tasks: [] }));
+    const result = await execute(["tasks", "list", "--parent", parent], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      taskListReader: reader,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(reader.calls).toEqual([
+      {
+        kind: "parent",
+        gid: parentGid,
+        options: {
+          fields: DEFAULT_TASK_LIST_FIELDS,
+          limit: 100,
+        },
+      },
+    ]);
   });
 
   test("outputs stable JSON data and scan metadata", async () => {
@@ -3476,6 +3513,17 @@ describe("tasks list command", () => {
     );
     expect(multipleSources.exitCode).toBe(2);
     expect(reader.calls).toHaveLength(0);
+
+    const parentAndProject = await execute(
+      ["tasks", "list", "--parent", "3", "--project", "2"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: reader,
+      },
+    );
+    expect(parentAndProject.exitCode).toBe(2);
+    expect(reader.calls).toHaveLength(0);
   });
 
   test("requires a task list reader dependency", async () => {
@@ -3496,6 +3544,12 @@ describe("tasks list command", () => {
           message: "Resource not found",
         }),
       getProjectTasks: async () =>
+        err<TaskReadError>({
+          kind: "not_found",
+          status: 404,
+          message: "Resource not found",
+        }),
+      getTaskSubtasks: async () =>
         err<TaskReadError>({
           kind: "not_found",
           status: 404,

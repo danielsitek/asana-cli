@@ -1258,13 +1258,13 @@ type TaskListPageOptions = Readonly<{
   fields: readonly string[];
   limit: number;
   offset?: string;
-  completedSince: string;
+  completedSince?: string;
 }>;
 
 class QueuedTaskListReader implements TaskListGateway {
   calls: Array<
     Readonly<{
-      kind: "section" | "project";
+      kind: "section" | "project" | "parent";
       gid: string;
       options: TaskListPageOptions;
     }>
@@ -1275,7 +1275,7 @@ class QueuedTaskListReader implements TaskListGateway {
   ) {}
 
   #respond(
-    kind: "section" | "project",
+    kind: "section" | "project" | "parent",
     gid: string,
     options: TaskListPageOptions,
   ): Result<TaskListPage, TaskReadError> {
@@ -1299,6 +1299,14 @@ class QueuedTaskListReader implements TaskListGateway {
     options: TaskListPageOptions,
   ) {
     return this.#respond("project", projectGid, options);
+  }
+
+  async getTaskSubtasks(
+    _token: string,
+    parentGid: string,
+    options: TaskListPageOptions,
+  ) {
+    return this.#respond("parent", parentGid, options);
   }
 }
 
@@ -1356,7 +1364,7 @@ describe("prepareTaskListRead", () => {
       error: {
         kind: "invalid_usage",
         message:
-          "Exactly one of --my-section, --section, or --project is required",
+          "Exactly one of --my-section, --section, --project, or --parent is required",
       },
     });
     expect(prepareTaskListRead({ section: "1", project: "2" })).toEqual({
@@ -1364,7 +1372,7 @@ describe("prepareTaskListRead", () => {
       error: {
         kind: "invalid_usage",
         message:
-          "Exactly one of --my-section, --section, or --project is required",
+          "Exactly one of --my-section, --section, --project, or --parent is required",
       },
     });
     expect(
@@ -1374,7 +1382,7 @@ describe("prepareTaskListRead", () => {
       error: {
         kind: "invalid_usage",
         message:
-          "Exactly one of --my-section, --section, or --project is required",
+          "Exactly one of --my-section, --section, --project, or --parent is required",
       },
     });
   });
@@ -1384,6 +1392,7 @@ describe("prepareTaskListRead", () => {
     ["empty My Tasks alias", { mySection: "@" }],
     ["non-digit section GID", { section: "abc" }],
     ["non-digit project GID", { project: "abc" }],
+    ["invalid parent task", { parent: "abc" }],
     ["invalid assignee", { section: "1", assignee: "ada@example.com" }],
     ["invalid completed", { section: "1", completed: "yes" }],
     ["--all without --max", { section: "1", all: true }],
@@ -1438,6 +1447,18 @@ describe("prepareTaskListRead", () => {
         scanCap: 100,
         resultCap: 20,
       },
+    });
+  });
+
+  test.each([
+    ["789", "789"],
+    ["https://app.asana.com/0/123/789", "789"],
+    ["https://app.asana.com/0/123/789/f", "789"],
+  ])("parses parent source %s", (input, parentGid) => {
+    const prepared = prepareTaskListRead({ parent: input });
+    expect(prepared.ok && prepared.value.source).toEqual({
+      kind: "parent",
+      parentGid,
     });
   });
 
@@ -1557,6 +1578,26 @@ describe("executeTaskListRead sources", () => {
     );
     expect(result.ok).toBe(true);
     expect(reader.calls[0]).toMatchObject({ kind: "project", gid: "600" });
+  });
+
+  test("reads subtasks directly from a parent without completed_since", async () => {
+    const reader = new QueuedTaskListReader([ok({ tasks: [] })]);
+    const result = await executeTaskListRead(
+      "secret",
+      preparedListFor({ parent: "700" }),
+      listDependenciesFor(reader),
+    );
+    expect(result.ok).toBe(true);
+    expect(reader.calls).toEqual([
+      {
+        kind: "parent",
+        gid: "700",
+        options: {
+          fields: DEFAULT_TASK_LIST_FIELDS,
+          limit: 100,
+        },
+      },
+    ]);
   });
 
   test("resolves a My Tasks alias section before reading", async () => {

@@ -1157,10 +1157,13 @@ export const execute = async (
 
   const tasksList = tasks
     .command("list")
-    .description("list tasks from a My Tasks section, section, or project")
+    .description(
+      "list tasks from a My Tasks section, section, project, or parent task",
+    )
     .option("--my-section <alias>", "list a My Tasks section by @alias")
     .option("--section <gid>", "list a section by GID")
     .option("--project <gid>", "list a project by GID")
+    .option("--parent <id>", "list a task's direct subtasks by GID or URL")
     .option("--assignee <value>", "filter by me or a user GID")
     .option("--completed <boolean>", "filter by completed true or false")
     .option("--max <n>", "cap tasks scanned")
@@ -1171,6 +1174,7 @@ export const execute = async (
           mySection?: string;
           section?: string;
           project?: string;
+          parent?: string;
           assignee?: string;
           completed?: string;
           max?: string;
@@ -1191,6 +1195,7 @@ export const execute = async (
             ...(options.project === undefined
               ? {}
               : { project: options.project }),
+            ...(options.parent === undefined ? {} : { parent: options.parent }),
             ...(options.assignee === undefined
               ? {}
               : { assignee: options.assignee }),

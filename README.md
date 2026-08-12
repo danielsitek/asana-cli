@@ -156,6 +156,9 @@ asana-cli tasks comments 1215978111726134 --max=200 --latest=3
 # List incomplete tasks in a My Tasks section assigned to you
 asana-cli tasks list --my-section=@in_progress --assignee=me
 
+# List the direct subtasks of a parent task
+asana-cli tasks list --parent=1215978111726134
+
 # Move the task in your personal My Tasks board and comment
 asana-cli tasks update 1215978111726134 --my-section=@in_review
 asana-cli tasks comment 1215978111726134 "Ready for review"
@@ -234,9 +237,11 @@ task. It is a dedicated single-write operation and cannot be combined with any
 other `tasks update` flag; a task cannot be its own parent.
 
 `tasks list` requires exactly one source: `--my-section=@<alias>` for a My
-Tasks section, `--section=<gid>` for any section, or `--project=<gid>` for a
-project. `--my-section` accepts only `@alias` and is resolved and validated
-against your live My Tasks the same way as `tasks update --my-section`.
+Tasks section, `--section=<gid>` for any section, `--project=<gid>` for a
+project, or `--parent=<id>` for a task's direct subtasks. `--parent` accepts a
+task GID or URL. `--my-section` accepts only `@alias` and is resolved and
+validated against your live My Tasks the same way as
+`tasks update --my-section`.
 `--assignee=me|<gid>` and `--completed=true|false` (default `false`) filter
 client-side, so they work even when `--fields` omits `assignee` or
 `completed`. Reads are bounded the same way as `tasks comments`: a default

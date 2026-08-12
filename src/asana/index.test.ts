@@ -2038,7 +2038,37 @@ describe("AsanaHttpClient task list", () => {
     expect(result).toEqual({ ok: true, value: { tasks: [] } });
   });
 
-  test("rejects a non digit-only section or project GID before requesting", async () => {
+  test("gets task subtasks without an unsupported completed_since query", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/tasks/700/subtasks");
+      expect(url.searchParams.get("limit")).toBe("25");
+      expect(url.searchParams.get("offset")).toBe("abc");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,name,completed");
+      expect(url.searchParams.has("completed_since")).toBe(false);
+      return Response.json({
+        data: [{ gid: "701", name: "Child", completed: false }],
+        next_page: null,
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskSubtasks(
+      "token",
+      "700",
+      {
+        fields: ["gid", "name", "completed"],
+        limit: 25,
+        offset: "abc",
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        tasks: [{ gid: "701", name: "Child", completed: false }],
+      },
+    });
+  });
+
+  test("rejects a non digit-only list source GID before requesting", async () => {
     let attempts = 0;
     const baseUrl = serverFor(() => {
       attempts += 1;
@@ -2055,6 +2085,14 @@ describe("AsanaHttpClient task list", () => {
     ).toBe(false);
     expect(
       (await client.getProjectTasks("token", "not-a-gid", options)).ok,
+    ).toBe(false);
+    expect(
+      (
+        await client.getTaskSubtasks("token", "not-a-gid", {
+          fields: ["gid"],
+          limit: 10,
+        })
+      ).ok,
     ).toBe(false);
     expect(attempts).toBe(0);
   });
@@ -2077,7 +2115,7 @@ describe("AsanaHttpClient task list", () => {
     expect(attempts).toBe(0);
   });
 
-  test("maps 404 to not_found for section and project task lists", async () => {
+  test("maps 404 to not_found for task lists", async () => {
     const baseUrl = serverFor(() => new Response(null, { status: 404 }));
     const client = new AsanaHttpClient({ baseUrl });
     const options = {
@@ -2090,6 +2128,15 @@ describe("AsanaHttpClient task list", () => {
       error: { kind: "not_found", status: 404, message: "Resource not found" },
     });
     expect(await client.getProjectTasks("token", "1", options)).toEqual({
+      ok: false,
+      error: { kind: "not_found", status: 404, message: "Resource not found" },
+    });
+    expect(
+      await client.getTaskSubtasks("token", "1", {
+        fields: ["gid"],
+        limit: 100,
+      }),
+    ).toEqual({
       ok: false,
       error: { kind: "not_found", status: 404, message: "Resource not found" },
     });
