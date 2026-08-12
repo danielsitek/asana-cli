@@ -182,45 +182,64 @@ asana-cli tasks create \
 
 ## Command reference
 
-Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
+A task `<id>` (positional, and `--parent`) accepts a digit-only GID or a URL
+of the exact form `https://app.asana.com/0/<project>/<task>[/f]`; other URL
+shapes fail with exit 2. `--section` and `--project` accept only digit-only
+GIDs; `--my-section` accepts only `@<alias>`.
+
+See [Safety and mutation contract](#safety-and-mutation-contract) below for
+bounded-read caps, write-retry behavior, and partial-write reporting.
+
+### Mutation options (`tasks create` / `tasks update`)
+
+Both commands accept the same mutation flags:
+
+- `--name=<text>`
+- `--notes=<text>` / `--notes-file=<path|->` — mutually exclusive; both
+  replace the entire description, never append. `-` reads from stdin.
+- `--assignee=me|<gid>|null`
+- `--due-on=<YYYY-MM-DD>|null`
+- `--completed=true|false`
+- `--my-section=@<alias>` — place or move within My Tasks
+- `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
+  [Custom fields](#custom-fields---custom-field) below
 
 ### `tasks create`
 
-- Requires `--name` and exactly one destination:
+- Requires `--name` and at least one destination:
   - `--parent=<gid>` — subtask
   - `--my-section=@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
-  - `--project=<gid>` — standalone project task (digit-only GID)
-- `--parent` may be combined with `--my-section`.
-- `--project` cannot be combined with either destination flag.
+  - `--project=<gid>` — standalone project task
+- `--parent` and `--my-section` may be combined; `--project` cannot be combined with either.
+- `--my-section` or `--custom-field` requires an assignable user — explicit
+  `--assignee=me|<gid>` on the same call, or a configured `defaultAssignee`
+  (see [Configuration](#configuration)) — otherwise the command fails with exit 2.
 
 ### `tasks update`
 
-- `--parent=<gid>|null` reparents an existing task:
+- Applies the mutation options above for a normal update.
+- `--parent=<gid>|null` reparents instead of updating:
   - GID or task URL — moves it under that parent
   - literal `null` — promotes it to a top-level task
-- Dedicated single-write operation; cannot be combined with any other `tasks update` flag.
-- A task cannot be its own parent.
+  - dedicated single-write operation, cannot be combined with any other `tasks update` flag; a task cannot be its own parent.
 
 ### `tasks list`
 
 - Requires exactly one source:
-  - `--my-section=@<alias>` — a My Tasks section (`@alias` only, live-validated the same way as `tasks update --my-section`)
+  - `--my-section=@<alias>` — a My Tasks section (live-validated the same way as `tasks update --my-section`)
   - `--section=<gid>` — any section
   - `--project=<gid>` — a project
-  - `--parent=<gid>` — a task's direct subtasks (GID or URL)
+  - `--parent=<gid-or-url>` — a task's direct subtasks
 - Filters apply client-side, so they work even when `--fields` omits the field:
   - `--assignee=me|<gid>`
   - `--completed=true|false` (default `false`)
-- Reads are bounded the same way as `tasks comments`:
-  - default scan cap 100, result cap 20
-  - `--max=<n>` raises the scan cap
-  - `--all` removes the result cap (requires `--max`)
+- Bounded like `tasks comments`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 - Default fields: `gid,name,completed,assignee.gid,assignee.name`.
 
-### Notes (`--notes` / `--notes-file`)
+### Comments (`tasks comment` / `tasks comments`)
 
-- Mutually exclusive; notes are replaced explicitly, with no read-modify-write append.
-- `--notes-file=-` and `tasks comment --file=-` read from stdin.
+- `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
+- `tasks comments <id> --max=<n> [--all]` reads existing comments, bounded the same way as `tasks list`.
 
 ### Custom fields (`--custom-field`)
 
@@ -233,8 +252,10 @@ Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
 
 ### Output (`--json` / `--fields`)
 
-- `--json` returns compact, single-line `{ "data": ..., "meta": ... }`.
-- `--fields` selects explicit Asana fields.
+- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`.
+- `--json` and `--fields` may appear before or after the subcommand.
+- On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
+- Errors are always compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`.
 
 ## Shell completion
 
