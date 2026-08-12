@@ -349,9 +349,7 @@ const localFileIsIgnored = async (gitRoot: string): Promise<boolean> => {
       if (!rule || rule.endsWith("/")) continue;
       if (rule.startsWith("/")) rule = rule.slice(1);
       const target = ".asana-cli.local.json";
-      const expression = globExpression(rule);
-      const matches = new RegExp(`^${expression}$`).test(target);
-      if (matches) ignored = !negated;
+      if (globMatches(rule, target)) ignored = !negated;
     }
     return ignored;
   } catch {
@@ -359,28 +357,86 @@ const localFileIsIgnored = async (gitRoot: string): Promise<boolean> => {
   }
 };
 
-const globExpression = (pattern: string): string => {
-  let expression = "";
+type GlobToken =
+  | Readonly<{ kind: "literal"; value: string }>
+  | Readonly<{ kind: "anyChar" }>
+  | Readonly<{ kind: "anySegmentChars" }>
+  | Readonly<{ kind: "anySegments" }>
+  | Readonly<{ kind: "anyChars" }>;
+
+const tokenizeGlob = (pattern: string): readonly GlobToken[] => {
+  const tokens: GlobToken[] = [];
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index];
     const next = pattern[index + 1];
     if (character === "*" && next === "*") {
       if (pattern[index + 2] === "/") {
-        expression += "(?:.*/)?";
+        tokens.push({ kind: "anySegments" });
         index += 2;
       } else {
-        expression += ".*";
+        tokens.push({ kind: "anyChars" });
         index += 1;
       }
     } else if (character === "*") {
-      expression += "[^/]*";
+      tokens.push({ kind: "anySegmentChars" });
     } else if (character === "?") {
-      expression += "[^/]";
+      tokens.push({ kind: "anyChar" });
     } else if (character) {
-      expression += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+      tokens.push({ kind: "literal", value: character });
     }
   }
-  return expression;
+  return tokens;
+};
+
+// Matches a .gitignore-style glob against `target` without building a RegExp
+// from untrusted pattern text — a memoized two-pointer walk (linear in
+// pattern/target length) instead of catastrophic-backtracking-prone regex.
+const globMatches = (pattern: string, target: string): boolean => {
+  const tokens = tokenizeGlob(pattern);
+  const memo = new Map<string, boolean>();
+
+  const match = (tokenIndex: number, targetIndex: number): boolean => {
+    const key = `${tokenIndex}:${targetIndex}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+
+    const token = tokens[tokenIndex];
+    let result: boolean;
+    if (!token) {
+      result = targetIndex === target.length;
+    } else if (token.kind === "literal") {
+      result =
+        target[targetIndex] === token.value &&
+        match(tokenIndex + 1, targetIndex + 1);
+    } else if (token.kind === "anyChar") {
+      const character = target[targetIndex];
+      result =
+        character !== undefined &&
+        character !== "/" &&
+        match(tokenIndex + 1, targetIndex + 1);
+    } else if (token.kind === "anySegmentChars") {
+      result =
+        match(tokenIndex + 1, targetIndex) ||
+        (targetIndex < target.length &&
+          target[targetIndex] !== "/" &&
+          match(tokenIndex, targetIndex + 1));
+    } else if (token.kind === "anySegments") {
+      result = match(tokenIndex + 1, targetIndex);
+      if (!result) {
+        const slashIndex = target.indexOf("/", targetIndex);
+        result = slashIndex !== -1 && match(tokenIndex, slashIndex + 1);
+      }
+    } else {
+      result =
+        match(tokenIndex + 1, targetIndex) ||
+        (targetIndex < target.length && match(tokenIndex, targetIndex + 1));
+    }
+
+    memo.set(key, result);
+    return result;
+  };
+
+  return match(0, 0);
 };
 
 const stageWrite = async (path: string, content: string): Promise<void> => {
