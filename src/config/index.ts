@@ -395,46 +395,65 @@ const globMatches = (pattern: string, target: string): boolean => {
   const tokens = tokenizeGlob(pattern);
   const memo = new Map<string, boolean>();
 
-  const match = (tokenIndex: number, targetIndex: number): boolean => {
+  const matchLiteral = (
+    value: string,
+    tokenIndex: number,
+    targetIndex: number,
+  ): boolean =>
+    target[targetIndex] === value && match(tokenIndex + 1, targetIndex + 1);
+
+  const matchAnyChar = (tokenIndex: number, targetIndex: number): boolean => {
+    const character = target[targetIndex];
+    return (
+      character !== undefined &&
+      character !== "/" &&
+      match(tokenIndex + 1, targetIndex + 1)
+    );
+  };
+
+  const matchAnySegmentChars = (
+    tokenIndex: number,
+    targetIndex: number,
+  ): boolean =>
+    match(tokenIndex + 1, targetIndex) ||
+    (targetIndex < target.length &&
+      target[targetIndex] !== "/" &&
+      match(tokenIndex, targetIndex + 1));
+
+  const matchAnySegments = (
+    tokenIndex: number,
+    targetIndex: number,
+  ): boolean => {
+    if (match(tokenIndex + 1, targetIndex)) return true;
+    const slashIndex = target.indexOf("/", targetIndex);
+    return slashIndex !== -1 && match(tokenIndex, slashIndex + 1);
+  };
+
+  const matchAnyChars = (tokenIndex: number, targetIndex: number): boolean =>
+    match(tokenIndex + 1, targetIndex) ||
+    (targetIndex < target.length && match(tokenIndex, targetIndex + 1));
+
+  function match(tokenIndex: number, targetIndex: number): boolean {
     const key = `${tokenIndex}:${targetIndex}`;
     const cached = memo.get(key);
     if (cached !== undefined) return cached;
 
     const token = tokens[tokenIndex];
-    let result: boolean;
-    if (!token) {
-      result = targetIndex === target.length;
-    } else if (token.kind === "literal") {
-      result =
-        target[targetIndex] === token.value &&
-        match(tokenIndex + 1, targetIndex + 1);
-    } else if (token.kind === "anyChar") {
-      const character = target[targetIndex];
-      result =
-        character !== undefined &&
-        character !== "/" &&
-        match(tokenIndex + 1, targetIndex + 1);
-    } else if (token.kind === "anySegmentChars") {
-      result =
-        match(tokenIndex + 1, targetIndex) ||
-        (targetIndex < target.length &&
-          target[targetIndex] !== "/" &&
-          match(tokenIndex, targetIndex + 1));
-    } else if (token.kind === "anySegments") {
-      result = match(tokenIndex + 1, targetIndex);
-      if (!result) {
-        const slashIndex = target.indexOf("/", targetIndex);
-        result = slashIndex !== -1 && match(tokenIndex, slashIndex + 1);
-      }
-    } else {
-      result =
-        match(tokenIndex + 1, targetIndex) ||
-        (targetIndex < target.length && match(tokenIndex, targetIndex + 1));
-    }
+    const result = !token
+      ? targetIndex === target.length
+      : token.kind === "literal"
+        ? matchLiteral(token.value, tokenIndex, targetIndex)
+        : token.kind === "anyChar"
+          ? matchAnyChar(tokenIndex, targetIndex)
+          : token.kind === "anySegmentChars"
+            ? matchAnySegmentChars(tokenIndex, targetIndex)
+            : token.kind === "anySegments"
+              ? matchAnySegments(tokenIndex, targetIndex)
+              : matchAnyChars(tokenIndex, targetIndex);
 
     memo.set(key, result);
     return result;
-  };
+  }
 
   return match(0, 0);
 };
