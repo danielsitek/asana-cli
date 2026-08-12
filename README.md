@@ -1,5 +1,9 @@
 # Asana CLI
 
+[![CI](https://img.shields.io/github/actions/workflow/status/danielsitek/asana-cli/ci.yml?branch=main&label=CI)](https://github.com/danielsitek/asana-cli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/danielsitek/asana-cli)](https://github.com/danielsitek/asana-cli/releases)
+[![License: MIT](https://img.shields.io/github/license/danielsitek/asana-cli)](LICENSE)
+
 Fast, script-friendly CLI for working with Asana from a terminal or autonomous agent. It favors explicit fields, bounded reads, deterministic JSON, and honest reporting of partial writes.
 
 ## Install
@@ -107,6 +111,11 @@ asana-cli config init --shared --workspace=1201947864389005
 asana-cli config init --local --write-gitignore
 ```
 
+`config init --local` and `asana-cli config resolve my-tasks` both
+re-discover and overwrite the entire `myTasks` block in
+`.asana-cli.local.json`; neither is read-only. Rerun `config resolve
+my-tasks` after sections or custom fields change in Asana.
+
 Example `.asana-cli.local.json`:
 
 ```json
@@ -180,6 +189,89 @@ asana-cli tasks create \
   --project=1201947864389005
 ```
 
+## Command reference
+
+A task `<id>` (positional, and `--parent`) accepts a digit-only GID or a URL
+of the exact form `https://app.asana.com/0/<project>/<task>[/f]`; other URL
+shapes fail with exit 2. `--section` and `--project` accept only digit-only
+GIDs. `--my-section` accepts a digit-only GID or `@<alias>` on `tasks create`
+and `tasks update`; on `tasks list` it accepts only `@<alias>`.
+
+See [Safety and mutation contract](#safety-and-mutation-contract) below for
+bounded-read caps, write-retry behavior, and partial-write reporting.
+
+### Mutation options (`tasks create` / `tasks update`)
+
+Both commands accept the same mutation flags:
+
+- `--name=<text>`
+- `--notes=<text>` / `--notes-file=<path|->` — mutually exclusive; both
+  replace the entire description, never append. `-` reads from stdin.
+- `--assignee=me|<gid>|null`
+- `--due-on=<YYYY-MM-DD>|null`
+- `--completed=true|false`
+- `--my-section=<gid>|@<alias>` — place or move within My Tasks
+- `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
+  [Custom fields](#custom-fields---custom-field) below
+
+`--my-section` or `--custom-field` requires the final assignee to be the
+authenticated user, checked after all other flags are applied: on `tasks
+create` this is an explicit `--assignee=me|<gid>` or a configured
+`defaultAssignee` (see [Configuration](#configuration)); on `tasks update`
+without `--assignee`, it's the task's existing assignee. Otherwise the
+command fails with exit 2.
+
+### `tasks create`
+
+- Requires `--name` and at least one destination:
+  - `--parent=<gid-or-url>` — subtask
+  - `--my-section=<gid>|@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
+  - `--project=<gid>` — standalone project task
+- `--parent` and `--my-section` may be combined; `--project` cannot be combined with either.
+
+### `tasks update`
+
+- Applies the mutation options above for a normal update.
+- `--parent=<gid>|null` reparents instead of updating:
+  - GID or task URL — moves it under that parent
+  - literal `null` — promotes it to a top-level task
+  - dedicated single-write operation, cannot be combined with any other `tasks update` flag; a task cannot be its own parent.
+
+### `tasks list`
+
+- Requires exactly one source:
+  - `--my-section=@<alias>` — a My Tasks section (live-validated the same way as `tasks update --my-section`)
+  - `--section=<gid>` — any section
+  - `--project=<gid>` — a project
+  - `--parent=<gid-or-url>` — a task's direct subtasks
+- Filters apply client-side, so they work even when `--fields` omits the field:
+  - `--assignee=me|<gid>`
+  - `--completed=true|false` (default `false`)
+- Bounded like `tasks comments`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
+- Default fields: `gid,name,completed,assignee.gid,assignee.name`.
+
+### Comments (`tasks comment` / `tasks comments`)
+
+- `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
+- `tasks comments <id> [--max=<n>] [--all]` reads existing comments, bounded the same way as `tasks list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
+
+### Custom fields (`--custom-field`)
+
+- Syntax: `--custom-field=(<field-gid>|@<alias>):<value>`, repeatable.
+- Writes number or enum custom fields.
+- Number values use finite integer or dot-decimal syntax.
+- Enum values resolve by GID first, then by case-sensitive exact name; invalid or ambiguous names list the valid options.
+- `null` clears either type.
+- Field definitions and options are live-validated before writing.
+
+### Output (`--json` / `--fields`)
+
+- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`.
+- `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
+- `--json` and `--fields` may appear before or after the subcommand.
+- On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
+- Errors are compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
+
 ## Shell completion
 
 Homebrew installs command completion for Bash, Zsh, and Fish automatically.
@@ -223,45 +315,6 @@ asana-cli completion fish > ~/.config/fish/completions/asana-cli.fish
 Completion is generated locally and never reads configuration, authentication
 credentials, or the Asana API.
 
-Task IDs accept raw digit-only GIDs and unambiguous Asana task URLs.
-
-`tasks create` requires `--name` and an explicit destination: `--parent` for a
-subtask, `--my-section` for a standalone My Tasks task, or `--project` with a
-digit-only project GID. A standalone My Tasks task uses the configured
-`workspace.gid`. `--parent` may be combined with `--my-section`; `--project`
-cannot be combined with either destination flag.
-
-`tasks update --parent=<gid>|null` reparents an existing task: a GID or task
-URL moves it under that parent, and literal `null` promotes it to a top-level
-task. It is a dedicated single-write operation and cannot be combined with any
-other `tasks update` flag; a task cannot be its own parent.
-
-`tasks list` requires exactly one source: `--my-section=@<alias>` for a My
-Tasks section, `--section=<gid>` for any section, `--project=<gid>` for a
-project, or `--parent=<id>` for a task's direct subtasks. `--parent` accepts a
-task GID or URL. `--my-section` accepts only `@alias` and is resolved and
-validated against your live My Tasks the same way as
-`tasks update --my-section`.
-`--assignee=me|<gid>` and `--completed=true|false` (default `false`) filter
-client-side, so they work even when `--fields` omits `assignee` or
-`completed`. Reads are bounded the same way as `tasks comments`: a default
-scan cap of 100 and result cap of 20, `--max=<n>` to raise the scan cap, and
-`--all` (which requires `--max`) to remove the result cap. Default fields are
-`gid,name,completed,assignee.gid,assignee.name`.
-
-`--notes` and `--notes-file` are mutually exclusive; notes are replaced
-explicitly, with no read-modify-write append. `--notes-file=-` and
-`tasks comment --file=-` read from stdin.
-
-`--custom-field=(<field-gid>|@<alias>):<value>` is repeatable and writes number
-or enum custom fields. Number values use finite integer or dot-decimal syntax.
-Enum values resolve enabled options by GID first, then by case-sensitive exact
-name; invalid or ambiguous names list the valid options. `null` clears either
-type. Field definitions and options are live-validated before writing.
-
-`--json` returns `{ "data": ..., "meta": ... }` as compact, single-line JSON;
-`--fields` selects explicit Asana fields.
-
 ## Safety and mutation contract
 
 - The CLI is non-interactive; missing required input fails immediately.
@@ -277,8 +330,10 @@ type. Field definitions and options are live-validated before writing.
   this avoids duplicating a task, subtask, or comment.
 - Multi-step writes (such as `tasks create` with My Tasks placement) validate
   every input before the first write, then report every completed and failed
-  stage; a failure after the first write returns a partial result.
-- JSON data goes to stdout; diagnostics and errors go to stderr.
+  stage; a failure after the first write returns a partial result (exit 1) on
+  stdout, not through the stderr error envelope.
+- JSON data goes to stdout; diagnostics and errors (other than the exit-1
+  partial result above) go to stderr.
 - The application implements no telemetry or analytics.
 
 ## Contributing
