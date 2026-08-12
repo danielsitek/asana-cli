@@ -331,16 +331,16 @@ export const prepareTaskParentUpdate = (
   // Object.entries() loses the per-property `| undefined` from optional
   // fields, so it can't tell us a flag was actually left unset; index via
   // the original keys instead to keep that information.
-  const combined = (
-    Object.keys(options) as (keyof typeof options)[]
-  ).some((key) => {
-    const value = options[key];
-    return (
-      key !== "parent" &&
-      value !== undefined &&
-      (key !== "customFields" || value.length > 0)
-    );
-  });
+  const combined = (Object.keys(options) as (keyof typeof options)[]).some(
+    (key) => {
+      const value = options[key];
+      return (
+        key !== "parent" &&
+        value !== undefined &&
+        (key !== "customFields" || value.length > 0)
+      );
+    },
+  );
   if (combined) {
     return err({
       kind: "invalid_usage",
@@ -396,7 +396,9 @@ const prepareTaskMutation = (
   const supplied = (Object.keys(options) as (keyof typeof options)[]).some(
     (key) => {
       const value = options[key];
-      return value !== undefined && (key !== "customFields" || value.length > 0);
+      return (
+        value !== undefined && (key !== "customFields" || value.length > 0)
+      );
     },
   );
   if (!supplied) {
