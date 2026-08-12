@@ -935,6 +935,7 @@ export const validateFieldList = (
 export type TaskListSource = Readonly<
   | { kind: "section"; sectionGid: string }
   | { kind: "project"; projectGid: string }
+  | { kind: "parent"; parentGid: string }
   | { kind: "my_section"; selector: ResourceSelector }
 >;
 
@@ -942,6 +943,7 @@ export type TaskListOptions = Readonly<{
   mySection?: string;
   section?: string;
   project?: string;
+  parent?: string;
   assignee?: string;
   completed?: string;
   max?: string;
@@ -995,6 +997,16 @@ export interface TaskListGateway {
       limit: number;
       offset?: string;
       completedSince: string;
+    }>,
+  ): Promise<Result<TaskListPage, TaskReadError>>;
+
+  getTaskSubtasks(
+    token: string,
+    parentGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
     }>,
   ): Promise<Result<TaskListPage, TaskReadError>>;
 }
@@ -1071,12 +1083,13 @@ export const prepareTaskListRead = (
     options.mySection,
     options.section,
     options.project,
+    options.parent,
   ].filter((value) => value !== undefined).length;
   if (sourcesSupplied !== 1) {
     return err({
       kind: "invalid_usage",
       message:
-        "Exactly one of --my-section, --section, or --project is required",
+        "Exactly one of --my-section, --section, --project, or --parent is required",
     });
   }
 
@@ -1100,8 +1113,8 @@ export const prepareTaskListRead = (
       });
     }
     source = { kind: "section", sectionGid: options.section };
-  } else {
-    const project = options.project as string;
+  } else if (options.project !== undefined) {
+    const project = options.project;
     if (!/^\d+$/.test(project)) {
       return err({
         kind: "invalid_usage",
@@ -1109,6 +1122,15 @@ export const prepareTaskListRead = (
       });
     }
     source = { kind: "project", projectGid: project };
+  } else {
+    const parent = parseTaskId(options.parent as string);
+    if (!parent.ok) {
+      return err({
+        kind: "invalid_usage",
+        message: "--parent must use a digit-only GID or Asana task URL",
+      });
+    }
+    source = { kind: "parent", parentGid: parent.value };
   }
 
   let assigneeFilter: TaskListAssigneeFilter | undefined;
@@ -1185,10 +1207,13 @@ export const executeTaskListRead = async (
 > => {
   let sectionGid: string | undefined;
   let projectGid: string | undefined;
+  let parentGid: string | undefined;
   if (prepared.source.kind === "section") {
     sectionGid = prepared.source.sectionGid;
   } else if (prepared.source.kind === "project") {
     projectGid = prepared.source.projectGid;
+  } else if (prepared.source.kind === "parent") {
+    parentGid = prepared.source.parentGid;
   } else {
     if (!dependencies.mySectionResolver) {
       return err({
@@ -1226,21 +1251,24 @@ export const executeTaskListRead = async (
     const pageOptions = {
       fields: prepared.requestFields,
       limit: Math.min(100, remaining),
-      completedSince,
       ...(offset === undefined ? {} : { offset }),
     };
     const page =
       sectionGid !== undefined
-        ? await dependencies.reader.getSectionTasks(
-            token,
-            sectionGid,
-            pageOptions,
-          )
-        : await dependencies.reader.getProjectTasks(
-            token,
-            projectGid as string,
-            pageOptions,
-          );
+        ? await dependencies.reader.getSectionTasks(token, sectionGid, {
+            ...pageOptions,
+            completedSince,
+          })
+        : projectGid !== undefined
+          ? await dependencies.reader.getProjectTasks(token, projectGid, {
+              ...pageOptions,
+              completedSince,
+            })
+          : await dependencies.reader.getTaskSubtasks(
+              token,
+              parentGid as string,
+              pageOptions,
+            );
     if (!page.ok) return page;
 
     const { tasks: pageTasks, nextOffset } = page.value;

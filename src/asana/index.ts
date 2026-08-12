@@ -869,7 +869,7 @@ export class AsanaHttpClient
       fields: readonly string[];
       limit: number;
       offset?: string;
-      completedSince: string;
+      completedSince?: string;
     }>,
   ): Promise<Result<TaskListPage, TaskReadError>> {
     if (
@@ -891,7 +891,9 @@ export class AsanaHttpClient
         searchParams: {
           limit: String(options.limit),
           opt_fields: options.fields.join(","),
-          completed_since: options.completedSince,
+          ...(options.completedSince === undefined
+            ? {}
+            : { completed_since: options.completedSince }),
           ...(options.offset === undefined ? {} : { offset: options.offset }),
         },
       },
@@ -957,6 +959,28 @@ export class AsanaHttpClient
     return this.#getTasksForResource(
       token,
       `projects/${projectGid}/tasks`,
+      options,
+    );
+  }
+
+  async getTaskSubtasks(
+    token: string,
+    parentGid: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+    }>,
+  ): Promise<Result<TaskListPage, TaskReadError>> {
+    if (!/^\d+$/.test(parentGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Parent task GID is not digit-only",
+      });
+    }
+    return this.#getTasksForResource(
+      token,
+      `tasks/${parentGid}/subtasks`,
       options,
     );
   }
