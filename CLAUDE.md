@@ -4,6 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > Read **`docs/learnings.md`** at the start of every task and apply every rule there.
 > Read **`.github/instructions/git.instructions.md`** for git guidelines and apply all rules here.
+> Read **`docs/release-process.md`** when cutting a release; follow it exactly, including the `homebrew-tap` step.
 
 ## Communication style
 
