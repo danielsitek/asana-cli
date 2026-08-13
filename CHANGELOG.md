@@ -3,6 +3,19 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.3.0
+
+- List a task's direct subtasks with `tasks list --parent=<gid-or-url>`,
+  combinable with `--my-section`.
+- Harden GitHub Actions workflow permissions.
+- Fix a ReDoS-prone dynamic regex in `.gitignore` matching by replacing it
+  with a safe glob matcher, and replace an unsafe-regex numeric check with a
+  manual digit walk.
+- Remove non-null assertions across output, tasks, comments, and Homebrew
+  formula scripts for stricter type safety.
+- Fix README and asana-cli skill documentation inconsistencies against actual
+  CLI behavior.
+
 ## 0.2.0
 
 - Add generated command completion for Bash, Zsh, and Fish, including nested
