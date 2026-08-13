@@ -21,22 +21,22 @@ checksum, then install the binary:
 
 | Platform              | Architecture   | Archive                                      |
 | --------------------- | -------------- | -------------------------------------------- |
-| macOS (Apple Silicon) | arm64          | `asana-cli-v0.3.0-darwin-arm64.tar.gz`       |
-| macOS (Intel)         | x64            | `asana-cli-v0.3.0-darwin-x64.tar.gz`         |
-| Linux / WSL2 (x86_64) | x64 (baseline) | `asana-cli-v0.3.0-linux-x64-baseline.tar.gz` |
-| Linux / WSL2 (arm64)  | arm64          | `asana-cli-v0.3.0-linux-arm64.tar.gz`        |
+| macOS (Apple Silicon) | arm64          | `asana-cli-v0.3.1-darwin-arm64.tar.gz`       |
+| macOS (Intel)         | x64            | `asana-cli-v0.3.1-darwin-x64.tar.gz`         |
+| Linux / WSL2 (x86_64) | x64 (baseline) | `asana-cli-v0.3.1-linux-x64-baseline.tar.gz` |
+| Linux / WSL2 (arm64)  | arm64          | `asana-cli-v0.3.1-linux-arm64.tar.gz`        |
 
 ```sh
-curl -LO https://github.com/danielsitek/asana-cli/releases/download/v0.3.0/asana-cli-v0.3.0-<target>.tar.gz
-curl -LO https://github.com/danielsitek/asana-cli/releases/download/v0.3.0/SHA256SUMS
+curl -LO https://github.com/danielsitek/asana-cli/releases/download/v0.3.1/asana-cli-v0.3.1-<target>.tar.gz
+curl -LO https://github.com/danielsitek/asana-cli/releases/download/v0.3.1/SHA256SUMS
 
 # Linux / WSL2: verify the checksum before installing
-grep " asana-cli-v0.3.0-<target>.tar.gz$" SHA256SUMS | sha256sum -c -
+grep " asana-cli-v0.3.1-<target>.tar.gz$" SHA256SUMS | sha256sum -c -
 
 # macOS: use the system-provided checksum utility instead
-grep " asana-cli-v0.3.0-<target>.tar.gz$" SHA256SUMS | shasum -a 256 -c -
+grep " asana-cli-v0.3.1-<target>.tar.gz$" SHA256SUMS | shasum -a 256 -c -
 
-tar -xzf asana-cli-v0.3.0-<target>.tar.gz
+tar -xzf asana-cli-v0.3.1-<target>.tar.gz
 sudo install -m 0755 asana-cli /usr/local/bin/asana-cli
 ```
 

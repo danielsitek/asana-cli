@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.3.1
+
+- Fix `tasks comments` returning an `invalid_response` error for tasks whose
+  activity history includes non-comment stories (e.g. Asana's system-generated
+  stories) that omit fields like `text`.
+- Document the release process across `asana-cli` and `homebrew-tap`.
+
 ## 0.3.0
 
 - List a task's direct subtasks with `tasks list --parent=<gid-or-url>`,
