@@ -48,6 +48,14 @@ Spans two repos: `asana-cli` (this repo) and `danielsitek/homebrew-tap`
     gh api repos/danielsitek/asana-cli/releases/<id> -X PATCH \
       -f body="<release notes>" -f draft=false -f make_latest=true
     ```
+    GitHub's API can silently skip the `latest` update when `draft:false` and
+    `make_latest:true` are set in the same call on a still-draft release, with
+    no error — verify it stuck:
+    ```sh
+    gh api repos/danielsitek/asana-cli/releases/latest --jq .tag_name
+    ```
+    If it doesn't match `vX.Y.Z`, retry with a second, separate PATCH
+    containing only `-f make_latest=true`.
 
 ## 2. homebrew-tap
 
