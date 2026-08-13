@@ -18,7 +18,7 @@ describe("release build interface", () => {
         autoloadDotenv: false,
         autoloadBunfig: false,
       },
-      define: { __APP_VERSION__: JSON.stringify("0.3.0") },
+      define: { __APP_VERSION__: JSON.stringify("0.3.1") },
     });
     expect(configs[0]).not.toHaveProperty("bytecode");
   });
