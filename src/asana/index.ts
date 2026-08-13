@@ -225,11 +225,16 @@ const buildCommentSchema = (fields: readonly string[]): z.ZodType<Comment> => {
       )
       .map((field) => field.slice("created_by.".length)),
   );
+  // The stories endpoint returns every story type, not just comments, and
+  // non-comment system stories (e.g. resource_subtype "unknown") routinely
+  // omit fields like "text" outright. Only comment_added stories are kept
+  // downstream, so only they must carry every requested field.
   return z.custom<Comment>(
     (value) =>
       isRecord(value) &&
-      fields.every((field) => requestedCommentFieldIsPresent(value, field)) &&
-      knownCommentFieldsAreValid(value, requestedCreatedByFields),
+      knownCommentFieldsAreValid(value, requestedCreatedByFields) &&
+      (value.resource_subtype !== "comment_added" ||
+        fields.every((field) => requestedCommentFieldIsPresent(value, field))),
   );
 };
 

@@ -1937,6 +1937,76 @@ describe("AsanaHttpClient comments", () => {
     ).toBe(true);
   });
 
+  test("tolerates non-comment stories missing requested fields", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [
+          {
+            gid: "1",
+            created_at: "2026-08-11T12:47:21.296Z",
+            created_by: { gid: "1001", name: "Ada" },
+            text: "a real comment",
+            resource_subtype: "comment_added",
+          },
+          {
+            gid: "2",
+            created_at: "2026-08-13T09:55:47.716Z",
+            created_by: null,
+            resource_subtype: "unknown",
+          },
+        ],
+      }),
+    );
+    const fields = [
+      "gid",
+      "created_at",
+      "text",
+      "created_by.gid",
+      "created_by.name",
+      "resource_subtype",
+    ];
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+      "token",
+      "123",
+      { fields, limit: 100 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.stories).toHaveLength(2);
+    expect(result.value.stories[1]).toEqual({
+      gid: "2",
+      created_at: "2026-08-13T09:55:47.716Z",
+      created_by: null,
+      resource_subtype: "unknown",
+    });
+  });
+
+  test("still rejects a comment_added story missing a requested field", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [
+          {
+            gid: "1",
+            created_by: { gid: "1001" },
+            resource_subtype: "comment_added",
+          },
+        ],
+      }),
+    );
+    const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
+      "token",
+      "123",
+      { fields: ["gid", "text", "resource_subtype"], limit: 1 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
   test("maps 404 to not_found for stories", async () => {
     const baseUrl = serverFor(() => new Response(null, { status: 404 }));
     const result = await new AsanaHttpClient({ baseUrl }).getTaskStories(
