@@ -17,6 +17,11 @@ import type {
   IdentityError,
   IdentityGateway,
 } from "../identity/index.ts";
+import type {
+  Project,
+  ProjectGateway,
+  ProjectListError,
+} from "../projects/index.ts";
 import {
   type Task,
   type TaskGateway,
@@ -276,6 +281,24 @@ const workspacesPageSchema = z.object({
     .optional(),
 });
 
+const projectSchema = z
+  .custom<Project>(
+    (value) =>
+      isRecord(value) &&
+      isDigitOnlyGid(value.gid) &&
+      typeof value.name === "string",
+  )
+  .transform((value): Project => ({ gid: value.gid, name: value.name }));
+
+const projectsPageSchema = z.object({
+  data: z.array(projectSchema),
+  next_page: z
+    .object({ offset: z.string().min(1) })
+    .passthrough()
+    .nullable()
+    .optional(),
+});
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
@@ -288,7 +311,8 @@ export class AsanaHttpClient
     TaskParentMutationGateway,
     TaskStoryGateway,
     TaskCommentCreationGateway,
-    WorkspaceGateway
+    WorkspaceGateway,
+    ProjectGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -435,6 +459,55 @@ export class AsanaHttpClient
     if (!result.ok) return result;
     return ok({
       workspaces: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async listProjects(
+    token: string,
+    workspaceGid: string,
+    options: Readonly<{ limit: number; offset?: string }>,
+  ): Promise<
+    Result<
+      Readonly<{ projects: readonly Project[]; nextOffset?: string }>,
+      ProjectListError
+    >
+  > {
+    if (!isDigitOnlyGid(workspaceGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Workspace GID must contain digits only",
+      });
+    }
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Project page limit must be between 1 and 100",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      `workspaces/${workspaceGid}/projects`,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(options.limit),
+          opt_fields: "gid,name",
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+        },
+      },
+      projectsPageSchema,
+    );
+    if (!result.ok) return result;
+    return ok({
+      projects: result.value.data,
       ...(result.value.next_page?.offset === undefined
         ? {}
         : { nextOffset: result.value.next_page.offset }),

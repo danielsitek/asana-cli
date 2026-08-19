@@ -2360,3 +2360,135 @@ describe("AsanaHttpClient workspaces", () => {
     expect(attempts).toBe(1);
   });
 });
+
+describe("AsanaHttpClient projects", () => {
+  test("lists workspace projects with exact pagination query and schema", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/workspaces/123/projects");
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,name");
+      expect(url.searchParams.get("offset")).toBe("abc");
+      return Response.json({
+        data: [{ gid: "1", name: "Launch" }],
+        next_page: { offset: "next-token" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listProjects(
+      "token",
+      "123",
+      { limit: 50, offset: "abc" },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        projects: [{ gid: "1", name: "Launch" }],
+        nextOffset: "next-token",
+      },
+    });
+  });
+
+  test("omits unrelated fields and nextOffset without a next page", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [{ gid: "1", name: "Launch", archived: false }],
+        next_page: null,
+      }),
+    );
+    const result = await new AsanaHttpClient({ baseUrl }).listProjects(
+      "token",
+      "123",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: { projects: [{ gid: "1", name: "Launch" }] },
+    });
+  });
+
+  test("rejects malformed projects and pagination offsets", async () => {
+    let response: unknown = { data: [{ gid: "invalid", name: "Launch" }] };
+    const baseUrl = serverFor(() => Response.json(response));
+    const client = new AsanaHttpClient({ baseUrl });
+
+    expect(await client.listProjects("token", "123", { limit: 100 })).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+
+    response = {
+      data: [{ gid: "1", name: "Launch" }],
+      next_page: { offset: "" },
+    };
+    expect(await client.listProjects("token", "123", { limit: 100 })).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+  });
+
+  test("validates page limits before making a request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    for (const limit of [0, 101, 1.5]) {
+      const result = await new AsanaHttpClient({ baseUrl }).listProjects(
+        "token",
+        "123",
+        { limit },
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(attempts).toBe(0);
+  });
+
+  test("rejects a non-digit workspace GID before making a request", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({ data: [] });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listProjects(
+      "token",
+      "invalid",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Workspace GID must contain digits only",
+      },
+    });
+    expect(attempts).toBe(0);
+  });
+
+  test("maps authentication failures without retrying", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 401 });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listProjects(
+      "token",
+      "123",
+      { limit: 100 },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "authentication",
+        status: 401,
+        message: "Asana authentication failed",
+      },
+    });
+    expect(attempts).toBe(1);
+  });
+});
