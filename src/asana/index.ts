@@ -201,6 +201,14 @@ const mutationFieldSelection = (
   };
 };
 
+const mapTaskReadError = (
+  error: IdentityError,
+  message: string,
+): TaskReadError =>
+  error.kind === "api" && error.status === 404
+    ? { kind: "not_found", status: 404, message }
+    : error;
+
 const knownCommentFieldsAreValid = (
   value: Record<string, unknown>,
   requestedCreatedByFields: ReadonlySet<string>,
@@ -723,14 +731,7 @@ export class AsanaHttpClient
       schema,
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
   }
@@ -763,14 +764,7 @@ export class AsanaHttpClient
       schema,
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
   }
@@ -809,14 +803,7 @@ export class AsanaHttpClient
       schema,
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
   }
@@ -863,14 +850,7 @@ export class AsanaHttpClient
       schema,
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
   }
@@ -923,14 +903,7 @@ export class AsanaHttpClient
       buildStoriesPageSchema(options.fields),
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok({
       stories: result.value.data,
@@ -978,14 +951,7 @@ export class AsanaHttpClient
       buildTaskListPageSchema(options.fields),
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Resource not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Resource not found"));
     }
     return ok({
       tasks: result.value.data,
@@ -1087,14 +1053,7 @@ export class AsanaHttpClient
       z.object({ data: buildCommentSchema(fields) }),
     );
     if (!result.ok) {
-      if (result.error.kind === "api" && result.error.status === 404) {
-        return err({
-          kind: "not_found",
-          status: 404,
-          message: "Task not found",
-        });
-      }
-      return result;
+      return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
   }
