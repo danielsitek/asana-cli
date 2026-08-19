@@ -264,6 +264,8 @@ export const renderWorkspaceList = (
   return [header, ...body].join("\n") + "\n";
 };
 
+export const renderProjectList = renderWorkspaceList;
+
 export const renderCommentScanWarning = (scanTruncated: boolean): string =>
   scanTruncated
     ? "Warning: story scan cap reached; more comments may exist.\n"
@@ -272,6 +274,11 @@ export const renderCommentScanWarning = (scanTruncated: boolean): string =>
 export const renderTaskListScanWarning = (scanTruncated: boolean): string =>
   scanTruncated
     ? "Warning: task scan cap reached; more tasks may exist.\n"
+    : "";
+
+export const renderProjectListScanWarning = (scanTruncated: boolean): string =>
+  scanTruncated
+    ? "Warning: project scan cap reached; more projects may exist.\n"
     : "";
 
 export const renderCommentDetail = (comment: Record<string, unknown>): string =>

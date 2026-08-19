@@ -20,6 +20,11 @@ import type {
   WorkspaceGateway,
   WorkspaceListError,
 } from "../workspaces/index.ts";
+import type {
+  Project,
+  ProjectGateway,
+  ProjectListError,
+} from "../projects/index.ts";
 import {
   DEFAULT_TASK_LIST_FIELDS,
   type Task,
@@ -228,6 +233,35 @@ class InMemoryWorkspaceReader implements WorkspaceGateway {
     options: Readonly<{ limit: number; offset?: string }>,
   ) {
     this.calls.push(options);
+    const page = this.pages[this.calls.length - 1];
+    if (!page) throw new Error("no more pages queued");
+    return page;
+  }
+}
+
+class InMemoryProjectReader implements ProjectGateway {
+  public calls: Array<
+    Readonly<{
+      token: string;
+      workspaceGid: string;
+      limit: number;
+      offset?: string;
+    }>
+  > = [];
+
+  constructor(
+    private readonly pages: readonly Result<
+      Readonly<{ projects: readonly Project[]; nextOffset?: string }>,
+      ProjectListError
+    >[],
+  ) {}
+
+  async listProjects(
+    token: string,
+    workspaceGid: string,
+    options: Readonly<{ limit: number; offset?: string }>,
+  ) {
+    this.calls.push({ token, workspaceGid, ...options });
     const page = this.pages[this.calls.length - 1];
     if (!page) throw new Error("no more pages queued");
     return page;
@@ -3647,6 +3681,260 @@ describe("tasks list command", () => {
     );
     expect(result.exitCode).toBe(2);
     expect(reader.calls).toHaveLength(0);
+  });
+});
+
+describe("projects list command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories.splice(0).map((path) =>
+        rm(path, {
+          recursive: true,
+          force: true,
+        }),
+      ),
+    );
+  });
+
+  const configured = async (workspaceGid?: string) => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-projects-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".asana-cli.json"),
+      JSON.stringify(
+        workspaceGid === undefined ? {} : { workspace: { gid: workspaceGid } },
+      ),
+    );
+    return { cwd: root, home: root, environment: {} };
+  };
+
+  test("lists projects and renders a human-readable table", async () => {
+    const reader = new InMemoryProjectReader([
+      ok({ projects: [{ gid: "1", name: "Launch" }] }),
+    ]);
+    const result = await execute(["projects", "list", "--workspace", "100"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectReader: reader,
+    });
+    expect(result).toEqual({
+      stdout: "gid  name  \n1    Launch\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(reader.calls).toEqual([
+      { token: "valid-token", workspaceGid: "100", limit: 100 },
+    ]);
+  });
+
+  test("uses configured workspace.gid when --workspace is omitted", async () => {
+    const reader = new InMemoryProjectReader([ok({ projects: [] })]);
+    const result = await execute(["projects", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectReader: reader,
+      configuration: await configured("200"),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(reader.calls[0]?.workspaceGid).toBe("200");
+  });
+
+  test("outputs compact JSON and follows pagination within --max", async () => {
+    const reader = new InMemoryProjectReader([
+      ok({
+        projects: [{ gid: "1", name: "Launch" }],
+        nextOffset: "page-2",
+      }),
+      ok({ projects: [{ gid: "2", name: "Operations" }] }),
+    ]);
+    const result = await execute(
+      [
+        "projects",
+        "list",
+        "--workspace",
+        "100",
+        "--max",
+        "2",
+        "--all",
+        "--json",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectReader: reader,
+      },
+    );
+    expect(result).toEqual({
+      stdout:
+        '{"data":[{"gid":"1","name":"Launch"},{"gid":"2","name":"Operations"}],"meta":{"scanned":2,"returned":2,"scan_truncated":false}}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(reader.calls).toEqual([
+      { token: "valid-token", workspaceGid: "100", limit: 2 },
+      {
+        token: "valid-token",
+        workspaceGid: "100",
+        limit: 1,
+        offset: "page-2",
+      },
+    ]);
+  });
+
+  test("warns when the explicit scan cap leaves another page", async () => {
+    const reader = new InMemoryProjectReader([
+      ok({
+        projects: [{ gid: "1", name: "Launch" }],
+        nextOffset: "page-2",
+      }),
+    ]);
+    const result = await execute(
+      ["projects", "list", "--workspace", "100", "--max", "1", "--all"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectReader: reader,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "Warning: project scan cap reached; more projects may exist.\n",
+    );
+  });
+
+  test("applies the default result cap", async () => {
+    const reader = new InMemoryProjectReader([
+      ok({
+        projects: Array.from({ length: 21 }, (_, index) => ({
+          gid: String(index + 1),
+          name: `Project ${index + 1}`,
+        })),
+      }),
+    ]);
+    const result = await execute(
+      ["projects", "list", "--workspace", "100", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectReader: reader,
+      },
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output.data).toHaveLength(20);
+    expect(output.meta).toEqual({
+      scanned: 20,
+      returned: 20,
+      scan_truncated: false,
+    });
+  });
+
+  test("rejects invalid workspace and bounded-read options before reading", async () => {
+    for (const argv of [
+      ["projects", "list", "--workspace", "abc"],
+      ["projects", "list", "--workspace", "100", "--max", "0"],
+      ["projects", "list", "--workspace", "100", "--all"],
+    ]) {
+      const reader = new InMemoryProjectReader([]);
+      const result = await execute(argv, {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectReader: reader,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr).error.code).toBe("invalid_usage");
+      expect(reader.calls).toHaveLength(0);
+    }
+  });
+
+  test("rejects missing workspace configuration", async () => {
+    const reader = new InMemoryProjectReader([]);
+    const result = await execute(["projects", "list"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectReader: reader,
+      configuration: await configured(undefined),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("workspace.gid");
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("rejects a missing token before reading", async () => {
+    const reader = new InMemoryProjectReader([]);
+    const result = await execute(["projects", "list", "--workspace", "100"], {
+      environment: {},
+      identity,
+      projectReader: reader,
+    });
+    expect(result).toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"authentication","message":"ASANA_CLI_TOKEN is required"}}\n',
+      exitCode: 3,
+    });
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("maps authentication and pagination failures safely", async () => {
+    const authentication = await execute(
+      ["projects", "list", "--workspace", "100"],
+      {
+        environment: { ASANA_CLI_TOKEN: "invalid-token" },
+        identity,
+        projectReader: new InMemoryProjectReader([
+          err({ kind: "authentication", message: "secret", status: 401 }),
+        ]),
+      },
+    );
+    expect(authentication).toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"authentication","message":"Asana authentication failed"}}\n',
+      exitCode: 3,
+    });
+
+    const reader = new InMemoryProjectReader([
+      ok({ projects: [{ gid: "1", name: "Launch" }], nextOffset: "same" }),
+      ok({
+        projects: [{ gid: "2", name: "Operations" }],
+        nextOffset: "same",
+      }),
+    ]);
+    const pagination = await execute(
+      ["projects", "list", "--workspace", "100", "--max", "3", "--all"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectReader: reader,
+      },
+    );
+    expect(pagination.exitCode).toBe(4);
+    expect(pagination.stderr).toContain('"code":"invalid_response"');
+  });
+
+  test("fails when dependencies are missing and exposes command help", async () => {
+    const missingReader = await execute(
+      ["projects", "list", "--workspace", "100"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+      },
+    );
+    expect(missingReader.exitCode).toBe(6);
+
+    const rootHelp = await execute(["--help"], { environment: {}, identity });
+    const listHelp = await execute(["projects", "list", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(rootHelp.stdout).toContain("projects");
+    expect(listHelp.stdout).toContain("--workspace");
+    expect(listHelp.stdout).toContain("--max");
+    expect(listHelp.stdout).toContain("--all");
   });
 });
 
