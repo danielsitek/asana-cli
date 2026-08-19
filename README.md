@@ -165,6 +165,9 @@ asana-cli tasks comments 1215978111726134 --max=200 --latest=3
 # List incomplete tasks in a My Tasks section assigned to you
 asana-cli tasks list --my-section=@in_progress --assignee=me
 
+# List projects in the configured workspace
+asana-cli projects list
+
 # List the direct subtasks of a parent task
 asana-cli tasks list --parent=1215978111726134
 
@@ -250,6 +253,11 @@ command fails with exit 2.
 - Bounded like `tasks comments`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 - Default fields: `gid,name,completed,assignee.gid,assignee.name`.
 
+### `projects list`
+
+- Lists projects in `--workspace=<gid>`, defaulting to configured `workspace.gid`.
+- Bounded like `tasks list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
+
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
@@ -318,9 +326,8 @@ credentials, or the Asana API.
 ## Safety and mutation contract
 
 - The CLI is non-interactive; missing required input fails immediately.
-- Reads are bounded; complete traversal always requires an explicit maximum
-  (`tasks comments --max=<n>` and `tasks list --max=<n>`, with `--all`
-  requiring `--max`).
+- Reads are bounded; complete traversal requires `--max=<n>` with `--all` for
+  `tasks comments`, `tasks list`, and `projects list`.
 - `tasks comments --latest=<n>` returns only the globally newest `n` comments,
   newest first, and requires an explicit `--max=<scan-cap>`; it is mutually
   exclusive with `--all` and `--offset`. If the cap is reached before the

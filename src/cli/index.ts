@@ -1,4 +1,4 @@
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { readFile } from "node:fs/promises";
 
 import { resolveToken } from "../auth/index.ts";
@@ -72,8 +72,15 @@ import {
   renderTaskCreation,
   renderTaskList,
   renderTaskListScanWarning,
+  renderProjectList,
+  renderProjectListScanWarning,
   renderWorkspaceList,
 } from "../output/index.ts";
+import {
+  executeProjectList,
+  prepareProjectList,
+  type ProjectGateway,
+} from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import {
@@ -98,6 +105,7 @@ export type ExecuteDependencies = Readonly<{
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
   workspaceReader?: WorkspaceGateway;
+  projectReader?: ProjectGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -1268,6 +1276,103 @@ export const execute = async (
 
   tasksList.exitOverride();
   tasksList.configureOutput(captureOutput);
+
+  const projects = program.command("projects").description("inspect projects");
+  projects.exitOverride();
+  projects.configureOutput(captureOutput);
+
+  const projectsList = projects.command("list");
+  projectsList.description("list projects visible in a workspace");
+  projectsList.addOption(new Option("--workspace <gid>", "workspace GID"));
+  projectsList.addOption(new Option("--max <n>", "cap projects scanned"));
+  projectsList.option("--all", "return all projects within the scan cap");
+  projectsList.action(
+    async (
+      options: Readonly<{
+        workspace?: string;
+        max?: string;
+        all?: boolean;
+      }>,
+    ) => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      let configuredWorkspaceGid: string | undefined;
+      if (options.workspace === undefined) {
+        if (!dependencies.configuration) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Configuration is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+        const resolved = await resolveConfig(dependencies.configuration);
+        if (!resolved.ok) {
+          result = renderConfigFailure(resolved.error);
+          return;
+        }
+        configuredWorkspaceGid = resolved.value.value.workspace?.gid;
+      }
+
+      const prepared = prepareProjectList(options, configuredWorkspaceGid);
+      if (!prepared.ok) {
+        result = usageError(prepared.error.message);
+        return;
+      }
+
+      const tokenResult = resolveToken(dependencies.environment);
+      if (!tokenResult.ok) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: tokenResult.error.message,
+          }),
+          exitCode: 3,
+        };
+        return;
+      }
+
+      if (!dependencies.projectReader) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Project reader is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const listed = await executeProjectList(
+        tokenResult.value,
+        prepared.value,
+        { reader: dependencies.projectReader },
+      );
+      if (!listed.ok) {
+        result = renderIdentityFailure(listed.error.kind);
+        return;
+      }
+
+      result = {
+        stdout: json
+          ? renderJson(listed.value.projects, listed.value.meta)
+          : renderProjectList(listed.value.projects),
+        stderr: json
+          ? ""
+          : renderProjectListScanWarning(listed.value.meta.scan_truncated),
+        exitCode: 0,
+      };
+    },
+  );
+
+  projectsList.exitOverride();
+  projectsList.configureOutput(captureOutput);
 
   const workspaces = program
     .command("workspaces")
