@@ -18,15 +18,20 @@ applyTo: "**/*"
 - Never commit directly to `main`; always use a feature branch.
 - Always merge with `--no-ff` to create an explicit merge commit.
 - Branch naming: `<branch-type>/<initials>-<short-description>`.
-- Resolve `<initials>` from the session context field `git_user_initials`:
-  - If `initials_source=explicit` — use the value directly, no further check needed.
-  - If `initials_source=generated` or the session context is unavailable — **stop
-    immediately**. Do not create the branch or commit. Instruct the user to set it first:
-    ```bash
-    git config --global user.initials <your-initials>
-    ```
+- Resolve `<initials>` in this order:
+  1. Use `git_user_initials` when its session source is `explicit`.
+  2. Otherwise, use `git config --global user.initials`.
+  3. If neither provides a non-empty value, stop before creating a branch or
+     commit and ask the user to run:
+     ```bash
+     git config --global user.initials <your-initials>
+     ```
 
-Branch types: `feature`, `hotfix`, `release`.
+Use branch types as follows:
+
+- `feature` for all regular work.
+- `hotfix` only for an explicitly requested emergency production fix.
+- `release` only when preparing a release.
 
 > **Note:** Branch types (`feature`, `hotfix`, `release`) are **not** the same as commit types (`feat`, `fix`, `chore`, …). Do not mix them up — a branch named `chore/…` or a commit `feature: …` is wrong.
 
