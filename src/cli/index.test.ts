@@ -256,7 +256,7 @@ class InMemoryProjectReader implements ProjectGateway {
     >[],
   ) {}
 
-  async listProjects(
+  listProjects(
     token: string,
     workspaceGid: string,
     options: Readonly<{ limit: number; offset?: string }>,
@@ -264,7 +264,7 @@ class InMemoryProjectReader implements ProjectGateway {
     this.calls.push({ token, workspaceGid, ...options });
     const page = this.pages[this.calls.length - 1];
     if (!page) throw new Error("no more pages queued");
-    return page;
+    return Promise.resolve(page);
   }
 }
 
