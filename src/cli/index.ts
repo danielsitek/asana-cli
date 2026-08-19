@@ -1,4 +1,4 @@
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { readFile } from "node:fs/promises";
 
 import { resolveToken } from "../auth/index.ts";
@@ -1283,8 +1283,8 @@ export const execute = async (
 
   const projectsList = projects.command("list");
   projectsList.description("list projects visible in a workspace");
-  projectsList.option("--workspace <gid>", "workspace GID");
-  projectsList.option("--max <n>", "cap projects scanned");
+  projectsList.addOption(new Option("--workspace <gid>", "workspace GID"));
+  projectsList.addOption(new Option("--max <n>", "cap projects scanned"));
   projectsList.option("--all", "return all projects within the scan cap");
   projectsList.action(
     async (

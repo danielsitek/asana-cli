@@ -12,9 +12,9 @@ export type ProjectListPage = Readonly<{
 
 export interface ProjectGateway {
   listProjects(
-    _token: string,
-    _workspaceGid: string,
-    _options: Readonly<{ limit: number; offset?: string }>,
+    token: string,
+    workspaceGid: string,
+    options: Readonly<{ limit: number; offset?: string }>,
   ): Promise<Result<ProjectListPage, ProjectListError>>;
 }
 
