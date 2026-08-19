@@ -16,6 +16,7 @@ import {
   type ConfigContext,
   type ConfigError,
   type ConfigLayer,
+  type LocalConfigInitResult,
   type MyTaskSectionsDiscoveryGateway,
   type MyTasksDiscoveryGateway,
   type StageFailureError,
@@ -149,6 +150,25 @@ const usageError = (message: string): Execution => ({
   exitCode: 2,
 });
 
+const requireToken = (
+  dependencies: Pick<ExecuteDependencies, "environment">,
+): Result<string, Execution> => {
+  const token = resolveToken(dependencies.environment);
+  return token.ok
+    ? token
+    : {
+        ok: false,
+        error: {
+          stdout: "",
+          stderr: renderError({
+            code: "authentication",
+            message: token.error.message,
+          }),
+          exitCode: 3,
+        },
+      };
+};
+
 const identityFailures: Readonly<
   Record<AsanaError["kind"], Readonly<{ exitCode: number; message: string }>>
 > = {
@@ -241,6 +261,46 @@ const renderStageFailure = (
   };
 };
 
+const requireConfig = async (
+  context: ConfigContext,
+  dependencies: Pick<ExecuteDependencies, "environment" | "discovery">,
+  options: Readonly<{ writeGitignore?: boolean }>,
+  json: boolean,
+): Promise<Result<LocalConfigInitResult, Execution>> => {
+  const token = requireToken(dependencies);
+  if (!token.ok) return token;
+
+  const discovery = dependencies.discovery;
+  if (!discovery) {
+    return {
+      ok: false,
+      error: {
+        stdout: "",
+        stderr: renderError({
+          code: "internal_error",
+          message: "Discovery gateway is required",
+        }),
+        exitCode: 6,
+      },
+    };
+  }
+
+  const initialized = await initializeLocalConfig(
+    context,
+    token.value,
+    discovery,
+    options,
+  );
+  if (initialized.ok) return initialized;
+  if (initialized.error.kind === "configuration") {
+    return { ok: false, error: renderConfigFailure(initialized.error) };
+  }
+  if (initialized.error.kind === "stage_failure") {
+    return { ok: false, error: renderStageFailure(initialized.error, json) };
+  }
+  return { ok: false, error: renderIdentityFailure(initialized.error.kind) };
+};
+
 const selectedLayer = (
   options: Readonly<{
     shared?: boolean;
@@ -275,6 +335,10 @@ export const execute = async (
   const invokedState = { value: false };
   let result: Execution | undefined;
   let parserStdout = "";
+
+  const stopWith = (execution: Execution): void => {
+    result = execution;
+  };
 
   const beginConfigCommand = (): ConfigContext | undefined => {
     invokedState.value = true;
@@ -346,18 +410,8 @@ export const execute = async (
     .action(async () => {
       invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
-      const token = resolveToken(dependencies.environment);
-      if (!token.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: token.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
+      const token = requireToken(dependencies);
+      if (!token.ok) return stopWith(token.error);
       const identity = await dependencies.identity.getAuthenticatedUser(
         token.value,
       );
@@ -439,48 +493,16 @@ export const execute = async (
           return;
         }
 
-        const tokenResult = resolveToken(dependencies.environment);
-        if (!tokenResult.ok) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "authentication",
-              message: tokenResult.error.message,
-            }),
-            exitCode: 3,
-          };
-          return;
-        }
-
-        if (!dependencies.discovery) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "internal_error",
-              message: "Discovery gateway is required",
-            }),
-            exitCode: 6,
-          };
-          return;
-        }
-
-        const initialized = await initializeLocalConfig(
+        const initialized = await requireConfig(
           context,
-          tokenResult.value,
-          dependencies.discovery,
+          dependencies,
           options.writeGitignore !== undefined
             ? { writeGitignore: options.writeGitignore }
             : {},
+          json,
         );
         if (!initialized.ok) {
-          if (initialized.error.kind === "configuration") {
-            result = renderConfigFailure(initialized.error);
-          } else if (initialized.error.kind === "stage_failure") {
-            result = renderStageFailure(initialized.error, json);
-          } else {
-            result = renderIdentityFailure(initialized.error.kind);
-          }
-          return;
+          return stopWith(initialized.error);
         }
 
         result = {
@@ -504,46 +526,9 @@ export const execute = async (
       const context = beginConfigCommand();
       if (!context) return;
 
-      const tokenResult = resolveToken(dependencies.environment);
-      if (!tokenResult.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: tokenResult.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
-
-      if (!dependencies.discovery) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "internal_error",
-            message: "Discovery gateway is required",
-          }),
-          exitCode: 6,
-        };
-        return;
-      }
-
-      const resolved = await initializeLocalConfig(
-        context,
-        tokenResult.value,
-        dependencies.discovery,
-        {},
-      );
+      const resolved = await requireConfig(context, dependencies, {}, json);
       if (!resolved.ok) {
-        if (resolved.error.kind === "configuration") {
-          result = renderConfigFailure(resolved.error);
-        } else if (resolved.error.kind === "stage_failure") {
-          result = renderStageFailure(resolved.error, json);
-        } else {
-          result = renderIdentityFailure(resolved.error.kind);
-        }
-        return;
+        return stopWith(resolved.error);
       }
 
       result = {
@@ -680,18 +665,8 @@ export const execute = async (
         fields = DEFAULT_FIELDS;
       }
 
-      const tokenResult = resolveToken(dependencies.environment);
-      if (!tokenResult.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: tokenResult.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
+      const tokenResult = requireToken(dependencies);
+      if (!tokenResult.ok) return stopWith(tokenResult.error);
 
       if (!dependencies.taskReader) {
         result = {
@@ -770,16 +745,9 @@ export const execute = async (
     const prepared = prepareTaskParentUpdate(idArg, options, fieldsInput);
     if (!prepared.ok) return usageError(prepared.error.message);
 
-    const tokenResult = resolveToken(dependencies.environment);
+    const tokenResult = requireToken(dependencies);
     if (!tokenResult.ok) {
-      return {
-        stdout: "",
-        stderr: renderError({
-          code: "authentication",
-          message: tokenResult.error.message,
-        }),
-        exitCode: 3,
-      };
+      return tokenResult.error;
     }
     if (!dependencies.taskParentWriter) {
       return {
@@ -823,16 +791,9 @@ export const execute = async (
     );
     if (!prepared.ok) return usageError(prepared.error.message);
 
-    const tokenResult = resolveToken(dependencies.environment);
+    const tokenResult = requireToken(dependencies);
     if (!tokenResult.ok) {
-      return {
-        stdout: "",
-        stderr: renderError({
-          code: "authentication",
-          message: tokenResult.error.message,
-        }),
-        exitCode: 3,
-      };
+      return tokenResult.error;
     }
     if (!dependencies.taskWriter) {
       return {
@@ -926,18 +887,8 @@ export const execute = async (
         return;
       }
 
-      const tokenResult = resolveToken(dependencies.environment);
-      if (!tokenResult.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: tokenResult.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
+      const tokenResult = requireToken(dependencies);
+      if (!tokenResult.ok) return stopWith(tokenResult.error);
       if (!dependencies.taskCreator) {
         result = {
           stdout: "",
@@ -1020,22 +971,9 @@ export const execute = async (
           ...(options.all === undefined ? {} : { all: options.all }),
           ...(options.latest === undefined ? {} : { latest: options.latest }),
         });
-        if (!prepared.ok) {
-          result = usageError(prepared.error.message);
-          return;
-        }
-        const tokenResult = resolveToken(dependencies.environment);
-        if (!tokenResult.ok) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "authentication",
-              message: tokenResult.error.message,
-            }),
-            exitCode: 3,
-          };
-          return;
-        }
+        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+        const tokenResult = requireToken(dependencies);
+        if (!tokenResult.ok) return stopWith(tokenResult.error);
         if (!dependencies.commentReader) {
           result = {
             stdout: "",
@@ -1105,22 +1043,9 @@ export const execute = async (
           ...(textArg === undefined ? {} : { text: textArg }),
           ...(options.file === undefined ? {} : { file: options.file }),
         });
-        if (!prepared.ok) {
-          result = usageError(prepared.error.message);
-          return;
-        }
-        const tokenResult = resolveToken(dependencies.environment);
-        if (!tokenResult.ok) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "authentication",
-              message: tokenResult.error.message,
-            }),
-            exitCode: 3,
-          };
-          return;
-        }
+        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+        const tokenResult = requireToken(dependencies);
+        if (!tokenResult.ok) return stopWith(tokenResult.error);
         if (!dependencies.commentWriter) {
           result = {
             stdout: "",
@@ -1215,23 +1140,10 @@ export const execute = async (
           },
           program.opts<{ fields?: string }>().fields,
         );
-        if (!prepared.ok) {
-          result = usageError(prepared.error.message);
-          return;
-        }
+        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
 
-        const tokenResult = resolveToken(dependencies.environment);
-        if (!tokenResult.ok) {
-          result = {
-            stdout: "",
-            stderr: renderError({
-              code: "authentication",
-              message: tokenResult.error.message,
-            }),
-            exitCode: 3,
-          };
-          return;
-        }
+        const tokenResult = requireToken(dependencies);
+        if (!tokenResult.ok) return stopWith(tokenResult.error);
 
         if (!dependencies.taskListReader) {
           result = {
@@ -1319,23 +1231,10 @@ export const execute = async (
       }
 
       const prepared = prepareProjectList(options, configuredWorkspaceGid);
-      if (!prepared.ok) {
-        result = usageError(prepared.error.message);
-        return;
-      }
+      if (!prepared.ok) return stopWith(usageError(prepared.error.message));
 
-      const tokenResult = resolveToken(dependencies.environment);
-      if (!tokenResult.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: tokenResult.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
+      const tokenResult = requireToken(dependencies);
+      if (!tokenResult.ok) return stopWith(tokenResult.error);
 
       if (!dependencies.projectReader) {
         result = {
@@ -1387,18 +1286,8 @@ export const execute = async (
       invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
 
-      const tokenResult = resolveToken(dependencies.environment);
-      if (!tokenResult.ok) {
-        result = {
-          stdout: "",
-          stderr: renderError({
-            code: "authentication",
-            message: tokenResult.error.message,
-          }),
-          exitCode: 3,
-        };
-        return;
-      }
+      const tokenResult = requireToken(dependencies);
+      if (!tokenResult.ok) return stopWith(tokenResult.error);
 
       if (!dependencies.workspaceReader) {
         result = {
