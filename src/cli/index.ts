@@ -411,7 +411,10 @@ export const execute = async (
       invokedState.value = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
       const token = requireToken(dependencies);
-      if (!token.ok) return stopWith(token.error);
+      if (!token.ok) {
+        stopWith(token.error);
+        return;
+      }
       const identity = await dependencies.identity.getAuthenticatedUser(
         token.value,
       );
@@ -502,7 +505,8 @@ export const execute = async (
           json,
         );
         if (!initialized.ok) {
-          return stopWith(initialized.error);
+          stopWith(initialized.error);
+          return;
         }
 
         result = {
@@ -528,7 +532,8 @@ export const execute = async (
 
       const resolved = await requireConfig(context, dependencies, {}, json);
       if (!resolved.ok) {
-        return stopWith(resolved.error);
+        stopWith(resolved.error);
+        return;
       }
 
       result = {
@@ -666,7 +671,10 @@ export const execute = async (
       }
 
       const tokenResult = requireToken(dependencies);
-      if (!tokenResult.ok) return stopWith(tokenResult.error);
+      if (!tokenResult.ok) {
+        stopWith(tokenResult.error);
+        return;
+      }
 
       if (!dependencies.taskReader) {
         result = {
@@ -888,7 +896,10 @@ export const execute = async (
       }
 
       const tokenResult = requireToken(dependencies);
-      if (!tokenResult.ok) return stopWith(tokenResult.error);
+      if (!tokenResult.ok) {
+        stopWith(tokenResult.error);
+        return;
+      }
       if (!dependencies.taskCreator) {
         result = {
           stdout: "",
@@ -971,9 +982,15 @@ export const execute = async (
           ...(options.all === undefined ? {} : { all: options.all }),
           ...(options.latest === undefined ? {} : { latest: options.latest }),
         });
-        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+        if (!prepared.ok) {
+          stopWith(usageError(prepared.error.message));
+          return;
+        }
         const tokenResult = requireToken(dependencies);
-        if (!tokenResult.ok) return stopWith(tokenResult.error);
+        if (!tokenResult.ok) {
+          stopWith(tokenResult.error);
+          return;
+        }
         if (!dependencies.commentReader) {
           result = {
             stdout: "",
@@ -1043,9 +1060,15 @@ export const execute = async (
           ...(textArg === undefined ? {} : { text: textArg }),
           ...(options.file === undefined ? {} : { file: options.file }),
         });
-        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+        if (!prepared.ok) {
+          stopWith(usageError(prepared.error.message));
+          return;
+        }
         const tokenResult = requireToken(dependencies);
-        if (!tokenResult.ok) return stopWith(tokenResult.error);
+        if (!tokenResult.ok) {
+          stopWith(tokenResult.error);
+          return;
+        }
         if (!dependencies.commentWriter) {
           result = {
             stdout: "",
@@ -1140,10 +1163,16 @@ export const execute = async (
           },
           program.opts<{ fields?: string }>().fields,
         );
-        if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+        if (!prepared.ok) {
+          stopWith(usageError(prepared.error.message));
+          return;
+        }
 
         const tokenResult = requireToken(dependencies);
-        if (!tokenResult.ok) return stopWith(tokenResult.error);
+        if (!tokenResult.ok) {
+          stopWith(tokenResult.error);
+          return;
+        }
 
         if (!dependencies.taskListReader) {
           result = {
@@ -1231,10 +1260,16 @@ export const execute = async (
       }
 
       const prepared = prepareProjectList(options, configuredWorkspaceGid);
-      if (!prepared.ok) return stopWith(usageError(prepared.error.message));
+      if (!prepared.ok) {
+        stopWith(usageError(prepared.error.message));
+        return;
+      }
 
       const tokenResult = requireToken(dependencies);
-      if (!tokenResult.ok) return stopWith(tokenResult.error);
+      if (!tokenResult.ok) {
+        stopWith(tokenResult.error);
+        return;
+      }
 
       if (!dependencies.projectReader) {
         result = {
@@ -1287,7 +1322,10 @@ export const execute = async (
       json = program.opts<{ json?: boolean }>().json ?? false;
 
       const tokenResult = requireToken(dependencies);
-      if (!tokenResult.ok) return stopWith(tokenResult.error);
+      if (!tokenResult.ok) {
+        stopWith(tokenResult.error);
+        return;
+      }
 
       if (!dependencies.workspaceReader) {
         result = {
