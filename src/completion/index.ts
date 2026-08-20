@@ -151,9 +151,47 @@ const fileCompletionKeys = (
     ),
   );
 
+const transitionCompletionCases = (nodes: readonly CompletionNode[]): string =>
+  transitions(nodes)
+    .map(
+      ({ from, word, to }) =>
+        `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to)} ;;`,
+    )
+    .join("\n");
+
+const optionValueCompletionCases = (
+  nodes: readonly CompletionNode[],
+  render: (
+    node: CompletionNode,
+    option: CompletionOption,
+    flag: string,
+  ) => string,
+  longFlagsOnly = false,
+): string =>
+  nodes
+    .flatMap((node) =>
+      node.options.flatMap((option) =>
+        option.valueChoices.length === 0
+          ? []
+          : option.flags
+              .filter((flag) => !longFlagsOnly || flag.startsWith("--"))
+              .map((flag) => render(node, option, flag)),
+      ),
+    )
+    .join("\n");
+
+const fileCompletionCases = (
+  nodes: readonly CompletionNode[],
+  render: (completion: FileCompletion) => string,
+  longFlagsOnly = false,
+): string =>
+  fileCompletionKeys(nodes)
+    .filter(({ flag }) => !longFlagsOnly || flag.startsWith("--"))
+    .map(render)
+    .join("\n");
+
 const bashCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
-  const commandTransitions = transitions(nodes);
   const cases = nodes
     .map((node) => {
       const candidates = [
@@ -167,57 +205,35 @@ const bashCompletion = (root: CompletionNode): string => {
       return `    ${shellSingleQuote(node.id)}) candidates=${shellSingleQuote(candidates.join(" "))} ;;`;
     })
     .join("\n");
-  const transitionCases = commandTransitions
-    .map(
-      ({ from, word, to }) =>
-        `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to)} ;;`,
-    )
-    .join("\n");
-  const valueCases = nodes
-    .flatMap((node) =>
-      node.options.flatMap((option) =>
-        option.valueChoices.length === 0
-          ? []
-          : option.flags.map(
-              (flag) =>
-                `    ${shellSingleQuote(`${node.id}:${flag}`)}) candidates=${shellSingleQuote(option.valueChoices.join(" "))} ;;`,
-            ),
-      ),
-    )
-    .join("\n");
-  const equalsValueCases = nodes
-    .flatMap((node) =>
-      node.options.flatMap((option) =>
-        option.valueChoices.length === 0
-          ? []
-          : option.flags
-              .filter((flag) => flag.startsWith("--"))
-              .map(
-                (flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
+  const transitionCases = transitionCompletionCases(nodes);
+  const valueCases = optionValueCompletionCases(
+    nodes,
+    (node, option, flag) =>
+      `    ${shellSingleQuote(`${node.id}:${flag}`)}) candidates=${shellSingleQuote(option.valueChoices.join(" "))} ;;`,
+  );
+  const equalsValueCases = optionValueCompletionCases(
+    nodes,
+    (node, option, flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
       local value="\${cur#*=}"
       COMPREPLY=( $(compgen -W ${shellSingleQuote(option.valueChoices.join(" "))} -- "\${value}") )
       COMPREPLY=( "\${COMPREPLY[@]/#/${flag}=}" )
       return
       ;;`,
-              ),
-      ),
-    )
-    .join("\n");
-  const fileCases = fileCompletionKeys(nodes)
-    .map(
-      ({ key }) => `    ${shellSingleQuote(key)})
+    true,
+  );
+  const fileCases = fileCompletionCases(
+    nodes,
+    ({ key }) => `    ${shellSingleQuote(key)})
       COMPREPLY=()
       while IFS= read -r candidate; do
         COMPREPLY+=("\${candidate}")
       done < <(compgen -f -- "\${cur}")
       return
       ;;`,
-    )
-    .join("\n");
-  const equalsFileCases = fileCompletionKeys(nodes)
-    .filter(({ flag }) => flag.startsWith("--"))
-    .map(
-      ({ key, flag }) => `    ${shellSingleQuote(`${key}=`)}*)
+  );
+  const equalsFileCases = fileCompletionCases(
+    nodes,
+    ({ key, flag }) => `    ${shellSingleQuote(`${key}=`)}*)
       value="\${cur#*=}"
       COMPREPLY=()
       while IFS= read -r candidate; do
@@ -225,8 +241,8 @@ const bashCompletion = (root: CompletionNode): string => {
       done < <(compgen -f -- "\${value}")
       return
       ;;`,
-    )
-    .join("\n");
+    true,
+  );
 
   return `# bash completion for asana-cli
 _asana_cli_completion() {
@@ -270,61 +286,38 @@ complete -F _asana_cli_completion asana-cli
 
 const zshCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
-  const commandTransitions = transitions(nodes);
-  const transitionCases = commandTransitions
-    .map(
-      ({ from, word, to }) =>
-        `      ${shellSingleQuote(`${from}:${word}`)}) context=${shellSingleQuote(to)} ;;`,
-    )
-    .join("\n");
-  const valueCases = nodes
-    .flatMap((node) =>
-      node.options.flatMap((option) =>
-        option.valueChoices.length === 0
-          ? []
-          : option.flags.map(
-              (flag) =>
-                `    ${shellSingleQuote(`${node.id}:${flag}`)}) value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")}) ;;`,
-            ),
-      ),
-    )
-    .join("\n");
-  const equalsValueCases = nodes
-    .flatMap((node) =>
-      node.options.flatMap((option) =>
-        option.valueChoices.length === 0
-          ? []
-          : option.flags
-              .filter((flag) => flag.startsWith("--"))
-              .map(
-                (flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
+  const transitionCases = transitionCompletionCases(nodes);
+  const valueCases = optionValueCompletionCases(
+    nodes,
+    (node, option, flag) =>
+      `    ${shellSingleQuote(`${node.id}:${flag}`)}) value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")}) ;;`,
+  );
+  const equalsValueCases = optionValueCompletionCases(
+    nodes,
+    (node, option, flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
       compset -P '*='
       value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")})
       _describe -t values 'values' value_candidates
       return
       ;;`,
-              ),
-      ),
-    )
-    .join("\n");
-  const fileCases = fileCompletionKeys(nodes)
-    .map(
-      ({ key }) => `    ${shellSingleQuote(key)})
+    true,
+  );
+  const fileCases = fileCompletionCases(
+    nodes,
+    ({ key }) => `    ${shellSingleQuote(key)})
       _files
       return
       ;;`,
-    )
-    .join("\n");
-  const equalsFileCases = fileCompletionKeys(nodes)
-    .filter(({ flag }) => flag.startsWith("--"))
-    .map(
-      ({ key }) => `    ${shellSingleQuote(`${key}=`)}*)
+  );
+  const equalsFileCases = fileCompletionCases(
+    nodes,
+    ({ key }) => `    ${shellSingleQuote(`${key}=`)}*)
       compset -P '*='
       _files
       return
       ;;`,
-    )
-    .join("\n");
+    true,
+  );
   const cases = nodes
     .map((node) => {
       const commands = [
