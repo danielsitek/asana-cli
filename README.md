@@ -169,6 +169,9 @@ asana-cli tasks list --my-section=@in_progress --assignee=me
 # List projects in the configured workspace
 asana-cli projects list
 
+# Read one project's metadata
+asana-cli projects get 1215978111726134
+
 # List the direct subtasks of a parent task
 asana-cli tasks list --parent=1215978111726134
 
@@ -259,6 +262,11 @@ command fails with exit 2.
 - Lists projects in `--workspace=<gid>`, defaulting to configured `workspace.gid`.
 - Bounded like `tasks list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 
+### `projects get`
+
+- Reads one project by digit-only GID.
+- Default fields: `gid,name,archived`; use `--fields=<comma-separated>` to select others.
+
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
@@ -275,7 +283,7 @@ command fails with exit 2.
 
 ### Output (`--json` / `--fields`)
 
-- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`.
+- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`, and `projects get`.
 - `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
