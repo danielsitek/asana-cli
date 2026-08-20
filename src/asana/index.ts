@@ -546,10 +546,13 @@ export class AsanaHttpClient
   }
 
   async getProject(
-    token: string,
-    projectGid: string,
-    fields: readonly string[],
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      fields: readonly string[];
+    }>,
   ): Promise<Result<Project, ProjectReadError>> {
+    const { token, projectGid, fields } = request;
     if (!isDigitOnlyGid(projectGid)) {
       return err({
         kind: "invalid_response",

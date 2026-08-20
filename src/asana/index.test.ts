@@ -2382,11 +2382,11 @@ describe("AsanaHttpClient projects", () => {
       });
     });
 
-    const result = await new AsanaHttpClient({ baseUrl }).getProject(
-      "secret-token",
-      "123",
-      ["gid", "name", "archived", "owner.name"],
-    );
+    const result = await new AsanaHttpClient({ baseUrl }).getProject({
+      token: "secret-token",
+      projectGid: "123",
+      fields: ["gid", "name", "archived", "owner.name"],
+    });
     expect(result).toEqual({
       ok: true,
       value: {
@@ -2408,7 +2408,11 @@ describe("AsanaHttpClient projects", () => {
     const client = new AsanaHttpClient({ baseUrl });
 
     expect(
-      await client.getProject("token", "123", ["gid", "archived"]),
+      await client.getProject({
+        token: "token",
+        projectGid: "123",
+        fields: ["gid", "archived"],
+      }),
     ).toEqual({
       ok: false,
       error: {
@@ -2418,7 +2422,13 @@ describe("AsanaHttpClient projects", () => {
     });
 
     response = { data: { gid: "123" } };
-    expect(await client.getProject("token", "123", ["gid", "name"])).toEqual({
+    expect(
+      await client.getProject({
+        token: "token",
+        projectGid: "123",
+        fields: ["gid", "name"],
+      }),
+    ).toEqual({
       ok: false,
       error: {
         kind: "invalid_response",
@@ -2426,7 +2436,13 @@ describe("AsanaHttpClient projects", () => {
       },
     });
 
-    expect(await client.getProject("token", "invalid", ["gid"])).toEqual({
+    expect(
+      await client.getProject({
+        token: "token",
+        projectGid: "invalid",
+        fields: ["gid"],
+      }),
+    ).toEqual({
       ok: false,
       error: {
         kind: "invalid_response",
@@ -2442,11 +2458,11 @@ describe("AsanaHttpClient projects", () => {
       attempts += 1;
       return new Response(null, { status: 404 });
     });
-    const result = await new AsanaHttpClient({ baseUrl }).getProject(
-      "token",
-      "123",
-      ["gid"],
-    );
+    const result = await new AsanaHttpClient({ baseUrl }).getProject({
+      token: "token",
+      projectGid: "123",
+      fields: ["gid"],
+    });
     expect(result).toEqual({
       ok: false,
       error: { kind: "not_found", message: "Project not found", status: 404 },

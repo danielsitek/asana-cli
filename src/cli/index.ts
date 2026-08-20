@@ -156,6 +156,8 @@ const usageError = (message: string): Execution => ({
   exitCode: 2,
 });
 
+const PROJECT_ID_ARGUMENT = "<id>";
+
 const requireToken = (
   dependencies: Pick<ExecuteDependencies, "environment">,
 ): Result<string, Execution> => {
@@ -1258,7 +1260,7 @@ export const execute = async (
 
   const projectsGet = projects
     .command("get")
-    .argument("<id>", "project GID")
+    .argument(PROJECT_ID_ARGUMENT, "project GID")
     .description("read a project's details")
     .action(async (idArg: string) => {
       invokedState.value = true;
@@ -1297,11 +1299,11 @@ export const execute = async (
         return;
       }
 
-      const project = await dependencies.projectDetailReader.getProject(
-        token.value,
-        parsedId.value,
-        validatedFields.value,
-      );
+      const project = await dependencies.projectDetailReader.getProject({
+        token: token.value,
+        projectGid: parsedId.value,
+        fields: validatedFields.value,
+      });
       if (!project.ok) {
         result = renderProjectReadFailure(project.error.kind);
         return;

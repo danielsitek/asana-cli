@@ -283,11 +283,13 @@ class InMemoryProjectDetailReader implements ProjectReadGateway {
   }
 
   getProject(
-    token: string,
-    projectGid: string,
-    fields: readonly string[],
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      fields: readonly string[];
+    }>,
   ): Promise<Result<Project, ProjectReadError>> {
-    this.calls.push({ token, projectGid, fields });
+    this.calls.push(request);
     return Promise.resolve(this.response);
   }
 }

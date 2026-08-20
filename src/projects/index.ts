@@ -38,9 +38,13 @@ export interface ProjectGateway {
 }
 
 export interface ProjectReadGateway {
-  getProject: (
-    ...args: readonly [string, string, readonly string[]]
-  ) => Promise<Result<Project, ProjectReadError>>;
+  getProject(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<Result<Project, ProjectReadError>>;
 }
 
 export const DEFAULT_PROJECT_FIELDS = ["gid", "name", "archived"] as const;
