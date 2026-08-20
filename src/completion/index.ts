@@ -190,6 +190,11 @@ const fileCompletionCases = (
     .map(render)
     .join("\n");
 
+const zshValueCandidates = (option: CompletionOption): string =>
+  option.valueChoices
+    .map((choice) => shellSingleQuote(`${choice}:value`))
+    .join(" ");
+
 const bashCompletion = (root: CompletionNode): string => {
   const nodes = flattenNodes(root);
   const cases = nodes
@@ -290,13 +295,13 @@ const zshCompletion = (root: CompletionNode): string => {
   const valueCases = optionValueCompletionCases(
     nodes,
     (node, option, flag) =>
-      `    ${shellSingleQuote(`${node.id}:${flag}`)}) value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")}) ;;`,
+      `    ${shellSingleQuote(`${node.id}:${flag}`)}) value_candidates=(${zshValueCandidates(option)}) ;;`,
   );
   const equalsValueCases = optionValueCompletionCases(
     nodes,
     (node, option, flag) => `    ${shellSingleQuote(`${node.id}:${flag}=`)}*)
       compset -P '*='
-      value_candidates=(${option.valueChoices.map((choice) => shellSingleQuote(`${choice}:value`)).join(" ")})
+      value_candidates=(${zshValueCandidates(option)})
       _describe -t values 'values' value_candidates
       return
       ;;`,
