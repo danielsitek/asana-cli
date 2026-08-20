@@ -2362,6 +2362,114 @@ describe("AsanaHttpClient workspaces", () => {
 });
 
 describe("AsanaHttpClient projects", () => {
+  test("gets one project with exact fields and projects the response", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("authorization")).toBe("Bearer secret-token");
+      expect(url.pathname).toBe("/api/1.0/projects/123");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,name,archived,owner.name",
+      );
+      return Response.json({
+        data: {
+          gid: "123",
+          name: "Launch",
+          archived: false,
+          owner: { gid: "900", name: "Ada" },
+          resource_type: "project",
+        },
+      });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).getProject({
+      token: "secret-token",
+      projectGid: "123",
+      fields: ["gid", "name", "archived", "owner.name"],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        gid: "123",
+        name: "Launch",
+        archived: false,
+        owner: { name: "Ada" },
+      },
+    });
+  });
+
+  test("rejects invalid project responses and GIDs", async () => {
+    let attempts = 0;
+    let response: unknown = { data: { gid: "123", archived: "false" } };
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json(response);
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+
+    expect(
+      await client.getProject({
+        token: "token",
+        projectGid: "123",
+        fields: ["gid", "archived"],
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+
+    response = { data: { gid: "123" } };
+    expect(
+      await client.getProject({
+        token: "token",
+        projectGid: "123",
+        fields: ["gid", "name"],
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+
+    expect(
+      await client.getProject({
+        token: "token",
+        projectGid: "invalid",
+        fields: ["gid"],
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      },
+    });
+    expect(attempts).toBe(2);
+  });
+
+  test("maps a missing project to not_found without retrying", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 404 });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).getProject({
+      token: "token",
+      projectGid: "123",
+      fields: ["gid"],
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "not_found", message: "Project not found", status: 404 },
+    });
+    expect(attempts).toBe(1);
+  });
+
   test("lists workspace projects with exact pagination query and schema", async () => {
     const baseUrl = serverFor((request) => {
       const url = new URL(request.url);

@@ -21,6 +21,9 @@ import type {
   Project,
   ProjectGateway,
   ProjectListError,
+  ProjectListItem,
+  ProjectReadGateway,
+  ProjectReadError,
 } from "../projects/index.ts";
 import {
   type Task,
@@ -130,6 +133,23 @@ const taskMatchesFields = (
 
 const buildTaskSchema = (fields: readonly string[]): z.ZodType<Task> =>
   z.custom<Task>((value) => taskMatchesFields(value, fields));
+
+const projectMatchesFields = (
+  value: unknown,
+  fields: readonly string[],
+): boolean => {
+  if (!isRecord(value)) return false;
+  const requested = projectFields(value, fields);
+  return (
+    requested.found &&
+    (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+    (!hasOwn(value, "name") || typeof value.name === "string") &&
+    (!hasOwn(value, "archived") || typeof value.archived === "boolean")
+  );
+};
+
+const buildProjectSchema = (fields: readonly string[]): z.ZodType<Project> =>
+  z.custom<Project>((value) => projectMatchesFields(value, fields));
 
 const projectTaskFields = (
   value: unknown,
@@ -290,13 +310,15 @@ const workspacesPageSchema = z.object({
 });
 
 const projectSchema = z
-  .custom<Project>(
+  .custom<ProjectListItem>(
     (value) =>
       isRecord(value) &&
       isDigitOnlyGid(value.gid) &&
       typeof value.name === "string",
   )
-  .transform((value): Project => ({ gid: value.gid, name: value.name }));
+  .transform(
+    (value): ProjectListItem => ({ gid: value.gid, name: value.name }),
+  );
 
 const projectsPageSchema = z.object({
   data: z.array(projectSchema),
@@ -320,7 +342,8 @@ export class AsanaHttpClient
     TaskStoryGateway,
     TaskCommentCreationGateway,
     WorkspaceGateway,
-    ProjectGateway
+    ProjectGateway,
+    ProjectReadGateway
 {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
@@ -479,7 +502,7 @@ export class AsanaHttpClient
     options: Readonly<{ limit: number; offset?: string }>,
   ): Promise<
     Result<
-      Readonly<{ projects: readonly Project[]; nextOffset?: string }>,
+      Readonly<{ projects: readonly ProjectListItem[]; nextOffset?: string }>,
       ProjectListError
     >
   > {
@@ -520,6 +543,39 @@ export class AsanaHttpClient
         ? {}
         : { nextOffset: result.value.next_page.offset }),
     });
+  }
+
+  async getProject(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<Result<Project, ProjectReadError>> {
+    const { token, projectGid, fields } = request;
+    if (!isDigitOnlyGid(projectGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      });
+    }
+
+    const result = await this.#request(
+      token,
+      `projects/${projectGid}`,
+      { method: "GET", searchParams: { opt_fields: fields.join(",") } },
+      z.object({ data: buildProjectSchema(fields) }),
+    );
+    if (!result.ok) {
+      return err(mapTaskReadError(result.error, "Project not found"));
+    }
+    const selected = projectFields(result.value.data, fields);
+    return selected.found
+      ? ok(selected.value)
+      : err({
+          kind: "invalid_response",
+          message: "Asana returned an invalid response",
+        });
   }
 
   async discoverMyTaskSections(

@@ -74,13 +74,18 @@ import {
   renderTaskList,
   renderTaskListScanWarning,
   renderProjectList,
+  renderProjectDetail,
   renderProjectListScanWarning,
   renderWorkspaceList,
 } from "../output/index.ts";
 import {
   executeProjectList,
+  DEFAULT_PROJECT_FIELDS,
+  parseProjectGid,
   prepareProjectList,
   type ProjectGateway,
+  type ProjectReadGateway,
+  type ProjectReadError,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
@@ -107,6 +112,7 @@ export type ExecuteDependencies = Readonly<{
   commentWriter?: TaskCommentCreationGateway;
   workspaceReader?: WorkspaceGateway;
   projectReader?: ProjectGateway;
+  projectDetailReader?: ProjectReadGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -149,6 +155,8 @@ const usageError = (message: string): Execution => ({
   stderr: renderError({ code: "invalid_usage", message }),
   exitCode: 2,
 });
+
+const PROJECT_ID_ARGUMENT = "<id>";
 
 const requireToken = (
   dependencies: Pick<ExecuteDependencies, "environment">,
@@ -207,6 +215,34 @@ const taskReadFailures: Readonly<
 
 const renderTaskReadFailure = (kind: TaskReadError["kind"]): Execution => {
   const mapped = taskReadFailures[kind];
+  return {
+    stdout: "",
+    stderr: renderError({ code: kind, message: mapped.message }),
+    exitCode: mapped.exitCode,
+  };
+};
+
+const projectReadFailures: Readonly<
+  Record<
+    ProjectReadError["kind"],
+    Readonly<{ exitCode: number; message: string }>
+  >
+> = {
+  authentication: { exitCode: 3, message: "Asana authentication failed" },
+  api: { exitCode: 4, message: "Asana API request failed" },
+  not_found: { exitCode: 4, message: "Project not found" },
+  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
+  network: { exitCode: 4, message: "Unable to reach Asana" },
+  invalid_response: {
+    exitCode: 4,
+    message: "Asana returned an invalid response",
+  },
+};
+
+const renderProjectReadFailure = (
+  kind: ProjectReadError["kind"],
+): Execution => {
+  const mapped = projectReadFailures[kind];
   return {
     stdout: "",
     stderr: renderError({ code: kind, message: mapped.message }),
@@ -1221,6 +1257,68 @@ export const execute = async (
   const projects = program.command("projects").description("inspect projects");
   projects.exitOverride();
   projects.configureOutput(captureOutput);
+
+  const projectsGet = projects
+    .command("get")
+    .argument(PROJECT_ID_ARGUMENT, "project GID")
+    .description("read a project's details")
+    .action(async (idArg: string) => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+
+      const parsedId = parseProjectGid(idArg);
+      if (!parsedId.ok) {
+        result = usageError(parsedId.error.message);
+        return;
+      }
+
+      const fieldsInput = program.opts<{ fields?: string }>().fields;
+      const validatedFields =
+        fieldsInput === undefined
+          ? { ok: true as const, value: DEFAULT_PROJECT_FIELDS }
+          : validateFieldList(fieldsInput);
+      if (!validatedFields.ok) {
+        result = usageError(validatedFields.error);
+        return;
+      }
+
+      const token = requireToken(dependencies);
+      if (!token.ok) {
+        stopWith(token.error);
+        return;
+      }
+      if (!dependencies.projectDetailReader) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Project reader is required",
+          }),
+          exitCode: 6,
+        };
+        return;
+      }
+
+      const project = await dependencies.projectDetailReader.getProject({
+        token: token.value,
+        projectGid: parsedId.value,
+        fields: validatedFields.value,
+      });
+      if (!project.ok) {
+        result = renderProjectReadFailure(project.error.kind);
+        return;
+      }
+      result = {
+        stdout: json
+          ? renderJson(project.value)
+          : renderProjectDetail(project.value),
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+
+  projectsGet.exitOverride();
+  projectsGet.configureOutput(captureOutput);
 
   const projectsList = projects.command("list");
   projectsList.description("list projects visible in a workspace");
