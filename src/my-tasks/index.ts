@@ -1,5 +1,6 @@
 import {
   resolveConfig,
+  type Config,
   type ConfigContext,
   type ConfigError,
   type DiscoveredCustomField,
@@ -195,26 +196,44 @@ const resolveCustomFieldValues = (
   return ok(resolved);
 };
 
-const resolveMutation = async (
-  request: MyTasksMutationRequest,
-  dependencies: MyTasksMutationDependencies,
-): Promise<Result<MyTasksMutationResult, MyTasksMutationError>> => {
-  const resolved = await resolveConfig(dependencies.configuration);
+type ConfiguredMyTasks = Readonly<{
+  workspaceGid: string;
+  myTasks: NonNullable<Config["myTasks"]> &
+    Readonly<{ userTaskListGid: string }>;
+}>;
+
+const resolveConfiguredMyTasks = async (
+  configuration: ConfigContext,
+): Promise<Result<ConfiguredMyTasks, ConfigError>> => {
+  const resolved = await resolveConfig(configuration);
   if (!resolved.ok) return resolved;
   const workspaceGid = resolved.value.value.workspace?.gid;
-  const configuredMyTasks = resolved.value.value.myTasks;
+  const myTasks = resolved.value.value.myTasks;
   if (!workspaceGid) {
     return err(
       configurationError("workspace.gid is required in configuration"),
     );
   }
-  if (!configuredMyTasks?.userTaskListGid) {
+  if (!myTasks?.userTaskListGid) {
     return err(
       configurationError(
         "myTasks.userTaskListGid is required in local configuration",
       ),
     );
   }
+  return ok({
+    workspaceGid,
+    myTasks: { ...myTasks, userTaskListGid: myTasks.userTaskListGid },
+  });
+};
+
+const resolveMutation = async (
+  request: MyTasksMutationRequest,
+  dependencies: MyTasksMutationDependencies,
+): Promise<Result<MyTasksMutationResult, MyTasksMutationError>> => {
+  const configured = await resolveConfiguredMyTasks(dependencies.configuration);
+  if (!configured.ok) return configured;
+  const { workspaceGid, myTasks: configuredMyTasks } = configured.value;
 
   const sectionGid = request.mySection
     ? resolveAlias(
@@ -323,22 +342,9 @@ const resolveMySection = async (
   selector: ResourceSelector,
   dependencies: MySectionResolverDependencies,
 ): Promise<Result<ResolvedMySection, TaskUpdateError>> => {
-  const resolved = await resolveConfig(dependencies.configuration);
-  if (!resolved.ok) return resolved;
-  const workspaceGid = resolved.value.value.workspace?.gid;
-  const configuredMyTasks = resolved.value.value.myTasks;
-  if (!workspaceGid) {
-    return err(
-      configurationError("workspace.gid is required in configuration"),
-    );
-  }
-  if (!configuredMyTasks?.userTaskListGid) {
-    return err(
-      configurationError(
-        "myTasks.userTaskListGid is required in local configuration",
-      ),
-    );
-  }
+  const configured = await resolveConfiguredMyTasks(dependencies.configuration);
+  if (!configured.ok) return configured;
+  const { workspaceGid, myTasks: configuredMyTasks } = configured.value;
 
   const sectionGid = resolveAlias(
     selector,

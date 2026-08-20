@@ -129,6 +129,27 @@ const resolvedCommentFields = (
     : err({ kind: "invalid_usage", message: validated.error });
 };
 
+type CommentPreparationError = Readonly<{
+  kind: "invalid_usage";
+  message: string;
+}>;
+
+const prepareCommentTarget = (
+  taskIdInput: string,
+  fields: string | undefined,
+): Result<
+  Readonly<{ taskId: string; outputFields: readonly string[] }>,
+  CommentPreparationError
+> => {
+  const taskId = parseTaskId(taskIdInput);
+  if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
+
+  const outputFields = resolvedCommentFields(fields);
+  if (!outputFields.ok) return outputFields;
+
+  return ok({ taskId: taskId.value, outputFields: outputFields.value });
+};
+
 const withInternalFields = (fields: readonly string[]): readonly string[] =>
   fields.includes(RESOURCE_SUBTYPE_FIELD)
     ? fields
@@ -154,15 +175,10 @@ export const prepareTaskCommentsRead = (
     all?: boolean;
     latest?: string;
   }>,
-): Result<
-  PreparedTaskCommentsRead,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  const taskId = parseTaskId(taskIdInput);
-  if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
-
-  const outputFields = resolvedCommentFields(options.fields);
-  if (!outputFields.ok) return outputFields;
+): Result<PreparedTaskCommentsRead, CommentPreparationError> => {
+  const target = prepareCommentTarget(taskIdInput, options.fields);
+  if (!target.ok) return target;
+  const { taskId, outputFields } = target.value;
 
   if (options.offset === "") {
     return err({ kind: "invalid_usage", message: "--offset cannot be empty" });
@@ -207,9 +223,9 @@ export const prepareTaskCommentsRead = (
   if (!scanCap.ok) return scanCap;
 
   return ok({
-    taskId: taskId.value,
-    outputFields: outputFields.value,
-    requestFields: withInternalFields(outputFields.value),
+    taskId,
+    outputFields,
+    requestFields: withInternalFields(outputFields),
     scanCap: scanCap.value,
     mode:
       latestValue !== undefined
@@ -381,15 +397,10 @@ export const prepareTaskCommentCreate = (
     text?: string;
     file?: string;
   }>,
-): Result<
-  PreparedTaskCommentCreate,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  const taskId = parseTaskId(taskIdInput);
-  if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
-
-  const outputFields = resolvedCommentFields(options.fields);
-  if (!outputFields.ok) return outputFields;
+): Result<PreparedTaskCommentCreate, CommentPreparationError> => {
+  const target = prepareCommentTarget(taskIdInput, options.fields);
+  if (!target.ok) return target;
+  const { taskId, outputFields } = target.value;
 
   const hasText = options.text !== undefined;
   const hasFile = options.file !== undefined;
@@ -419,8 +430,8 @@ export const prepareTaskCommentCreate = (
   }
 
   return ok({
-    taskId: taskId.value,
-    outputFields: outputFields.value,
+    taskId,
+    outputFields,
     ...(options.text === undefined ? {} : { text: options.text }),
     ...(options.file === undefined ? {} : { file: options.file }),
   });
