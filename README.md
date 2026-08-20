@@ -1,6 +1,7 @@
 # Asana CLI
 
 [![CI](https://img.shields.io/github/actions/workflow/status/danielsitek/asana-cli/ci.yml?branch=main&label=CI)](https://github.com/danielsitek/asana-cli/actions/workflows/ci.yml)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/e02d5c2275c145faad4146797c85b809)](https://app.codacy.com/gh/danielsitek/asana-cli/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 [![Release](https://img.shields.io/github/v/release/danielsitek/asana-cli)](https://github.com/danielsitek/asana-cli/releases)
 [![License: MIT](https://img.shields.io/github/license/danielsitek/asana-cli)](LICENSE)
 
