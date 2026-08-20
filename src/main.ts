@@ -19,6 +19,7 @@ const result = await execute(Bun.argv.slice(2), {
   commentWriter: client,
   workspaceReader: client,
   projectReader: client,
+  projectDetailReader: client,
   discovery: client,
   myTaskSectionsDiscovery: client,
   configuration: {

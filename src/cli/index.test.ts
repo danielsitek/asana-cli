@@ -23,7 +23,10 @@ import type {
 import type {
   Project,
   ProjectGateway,
+  ProjectListItem,
   ProjectListError,
+  ProjectReadError,
+  ProjectReadGateway,
 } from "../projects/index.ts";
 import {
   DEFAULT_TASK_LIST_FIELDS,
@@ -251,7 +254,7 @@ class InMemoryProjectReader implements ProjectGateway {
 
   constructor(
     private readonly pages: readonly Result<
-      Readonly<{ projects: readonly Project[]; nextOffset?: string }>,
+      Readonly<{ projects: readonly ProjectListItem[]; nextOffset?: string }>,
       ProjectListError
     >[],
   ) {}
@@ -265,6 +268,23 @@ class InMemoryProjectReader implements ProjectGateway {
     const page = this.pages[this.calls.length - 1];
     if (!page) throw new Error("no more pages queued");
     return Promise.resolve(page);
+  }
+}
+
+class InMemoryProjectDetailReader implements ProjectReadGateway {
+  public calls: Array<
+    Readonly<{ token: string; projectGid: string; fields: readonly string[] }>
+  > = [];
+
+  constructor(private readonly response: Result<Project, ProjectReadError>) {}
+
+  getProject(
+    token: string,
+    projectGid: string,
+    fields: readonly string[],
+  ): Promise<Result<Project, ProjectReadError>> {
+    this.calls.push({ token, projectGid, fields });
+    return Promise.resolve(this.response);
   }
 }
 
@@ -3681,6 +3701,93 @@ describe("tasks list command", () => {
     );
     expect(result.exitCode).toBe(2);
     expect(reader.calls).toHaveLength(0);
+  });
+});
+
+describe("projects get command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+
+  test("reads a project with sensible defaults and renders details", async () => {
+    const reader = new InMemoryProjectDetailReader(
+      ok({ gid: "100", name: "Launch", archived: false }),
+    );
+    const result = await execute(["projects", "get", "100"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectDetailReader: reader,
+    });
+
+    expect(result).toEqual({
+      stdout: "gid: 100\nname: Launch\narchived: false\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(reader.calls).toEqual([
+      {
+        token: "valid-token",
+        projectGid: "100",
+        fields: ["gid", "name", "archived"],
+      },
+    ]);
+  });
+
+  test("passes custom fields and renders JSON", async () => {
+    const reader = new InMemoryProjectDetailReader(
+      ok({ name: "Launch", owner: { name: "Ada" } }),
+    );
+    const result = await execute(
+      ["projects", "get", "100", "--fields", "name,owner.name", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        projectDetailReader: reader,
+      },
+    );
+
+    expect(result).toEqual({
+      stdout: '{"data":{"name":"Launch","owner":{"name":"Ada"}},"meta":{}}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(reader.calls[0]?.fields).toEqual(["name", "owner.name"]);
+  });
+
+  test("rejects invalid identifiers and field lists before dependencies", async () => {
+    const reader = new InMemoryProjectDetailReader(ok({ name: "unused" }));
+    for (const argv of [
+      ["projects", "get", "not-a-gid"],
+      ["projects", "get", "100", "--fields", "name,,archived"],
+    ]) {
+      const result = await execute(argv, {
+        environment: {},
+        identity,
+        projectDetailReader: reader,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr).error.code).toBe("invalid_usage");
+    }
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  test("maps not-found and missing-reader failures", async () => {
+    const notFound = await execute(["projects", "get", "100"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectDetailReader: new InMemoryProjectDetailReader(
+        err({ kind: "not_found", message: "secret", status: 404 }),
+      ),
+    });
+    expect(notFound).toEqual({
+      stdout: "",
+      stderr: '{"error":{"code":"not_found","message":"Project not found"}}\n',
+      exitCode: 4,
+    });
+
+    const missingReader = await execute(["projects", "get", "100"], {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+    });
+    expect(missingReader.exitCode).toBe(6);
   });
 });
 

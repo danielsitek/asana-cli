@@ -141,6 +141,8 @@ export const renderTaskDetail = (task: Record<string, unknown>): string => {
   return lines.join("\n") + "\n";
 };
 
+export const renderProjectDetail = renderTaskDetail;
+
 export const renderTaskUpdate = (
   task: Record<string, unknown>,
   applied: Record<string, unknown>,

@@ -1,12 +1,31 @@
 import type { IdentityError } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
-export type Project = Readonly<{ gid: string; name: string }>;
+export type Project = Readonly<{
+  gid?: string;
+  name?: string;
+  archived?: boolean;
+  [key: string]: unknown;
+}>;
+
+export type ProjectListItem = Project & Readonly<{ gid: string; name: string }>;
+
+export type ProjectReadError = Readonly<{
+  kind:
+    | "authentication"
+    | "api"
+    | "not_found"
+    | "rate_limit"
+    | "network"
+    | "invalid_response";
+  message: string;
+  status?: number;
+}>;
 
 export type ProjectListError = IdentityError;
 
 export type ProjectListPage = Readonly<{
-  projects: readonly Project[];
+  projects: readonly ProjectListItem[];
   nextOffset?: string;
 }>;
 
@@ -17,6 +36,26 @@ export interface ProjectGateway {
     options: Readonly<{ limit: number; offset?: string }>,
   ): Promise<Result<ProjectListPage, ProjectListError>>;
 }
+
+export interface ProjectReadGateway {
+  getProject(
+    token: string,
+    projectGid: string,
+    fields: readonly string[],
+  ): Promise<Result<Project, ProjectReadError>>;
+}
+
+export const DEFAULT_PROJECT_FIELDS = ["gid", "name", "archived"] as const;
+
+export const parseProjectGid = (
+  input: string,
+): Result<string, Readonly<{ kind: "invalid_usage"; message: string }>> =>
+  /^\d+$/.test(input)
+    ? ok(input)
+    : err({
+        kind: "invalid_usage",
+        message: "Invalid project identifier",
+      });
 
 export type ProjectListOptions = Readonly<{
   workspace?: string;
@@ -38,7 +77,7 @@ export type ProjectListMeta = Readonly<{
 }>;
 
 type ProjectListOutput = Readonly<{
-  projects: readonly Project[];
+  projects: readonly ProjectListItem[];
   meta: ProjectListMeta;
 }>;
 
@@ -105,7 +144,7 @@ export const prepareProjectList = (
 };
 
 const completeProjectList = (
-  projects: readonly Project[],
+  projects: readonly ProjectListItem[],
   scanned: number,
   scanTruncated: boolean,
   nextOffset?: string,
@@ -129,7 +168,7 @@ const paginationAdvanced = (
 
 const completeAtResultCap = (
   page: ProjectListPage,
-  projects: readonly Project[],
+  projects: readonly ProjectListItem[],
   scanned: number,
   index: number,
   scanCap: number,
@@ -151,7 +190,7 @@ const completeAtResultCap = (
 const processProjectPage = (
   page: ProjectListPage,
   prepared: PreparedProjectList,
-  projects: Project[],
+  projects: ProjectListItem[],
   previouslyScanned: number,
 ): ProjectPageProgress => {
   const remaining = prepared.scanCap - previouslyScanned;
@@ -201,11 +240,11 @@ export const executeProjectList = async (
   dependencies: Readonly<{ reader: ProjectGateway }>,
 ): Promise<
   Result<
-    Readonly<{ projects: readonly Project[]; meta: ProjectListMeta }>,
+    Readonly<{ projects: readonly ProjectListItem[]; meta: ProjectListMeta }>,
     ProjectListError
   >
 > => {
-  const projects: Project[] = [];
+  const projects: ProjectListItem[] = [];
   let scanned = 0;
   let offset: string | undefined;
   const requestedOffsets = new Set<string>();
