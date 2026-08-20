@@ -194,6 +194,31 @@ const renderLeafValue = (value: unknown): string =>
       ? value
       : JSON.stringify(value);
 
+const columnWidths = (
+  headers: readonly string[],
+  rows: readonly (readonly string[])[],
+): readonly number[] =>
+  headers.map((header, index) =>
+    Math.max(
+      header.length,
+      ...rows.map((row) =>
+        Math.max(
+          ...requireAt(row, index)
+            .split("\n")
+            .map((line) => line.length),
+        ),
+      ),
+    ),
+  );
+
+const renderTableHeader = (
+  headers: readonly string[],
+  widths: readonly number[],
+): string =>
+  headers
+    .map((header, index) => header.padEnd(requireAt(widths, index)))
+    .join("  ");
+
 const renderRecordTable = (
   records: readonly Record<string, unknown>[],
   fields: readonly string[],
@@ -204,21 +229,8 @@ const renderRecordTable = (
       return renderLeafValue(resolved.found ? resolved.value : undefined);
     }),
   );
-  const widths = fields.map((field, index) =>
-    Math.max(
-      field.length,
-      ...rows.map((row) =>
-        Math.max(
-          ...requireAt(row, index)
-            .split("\n")
-            .map((line) => line.length),
-        ),
-      ),
-    ),
-  );
-  const header = fields
-    .map((field, index) => field.padEnd(requireAt(widths, index)))
-    .join("  ");
+  const widths = columnWidths(fields, rows);
+  const header = renderTableHeader(fields, widths);
   const body = rows.flatMap((row) => {
     const cellLines = row.map((cell) => cell.split("\n"));
     const height = Math.max(...cellLines.map((lines) => lines.length));
@@ -249,12 +261,8 @@ export const renderWorkspaceList = (
 ): string => {
   const fields = ["gid", "name"] as const;
   const rows = workspaces.map((workspace) => [workspace.gid, workspace.name]);
-  const widths = fields.map((field, index) =>
-    Math.max(field.length, ...rows.map((row) => requireAt(row, index).length)),
-  );
-  const header = fields
-    .map((field, index) => field.padEnd(requireAt(widths, index)))
-    .join("  ");
+  const widths = columnWidths(fields, rows);
+  const header = renderTableHeader(fields, widths);
   const body = rows.map((row) =>
     row
       .map((cell, index) => cell.padEnd(requireAt(widths, index)))
