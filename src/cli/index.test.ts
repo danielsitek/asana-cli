@@ -276,7 +276,11 @@ class InMemoryProjectDetailReader implements ProjectReadGateway {
     Readonly<{ token: string; projectGid: string; fields: readonly string[] }>
   > = [];
 
-  constructor(private readonly response: Result<Project, ProjectReadError>) {}
+  private readonly response: Result<Project, ProjectReadError>;
+
+  constructor(response: Result<Project, ProjectReadError>) {
+    this.response = response;
+  }
 
   getProject(
     token: string,

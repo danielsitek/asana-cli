@@ -1257,7 +1257,8 @@ export const execute = async (
   projects.configureOutput(captureOutput);
 
   const projectsGet = projects
-    .command("get <id>")
+    .command("get")
+    .argument("<id>", "project GID")
     .description("read a project's details")
     .action(async (idArg: string) => {
       invokedState.value = true;
