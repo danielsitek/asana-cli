@@ -168,7 +168,7 @@ class InMemoryTaskSectionWriter implements TaskSectionMutationGateway {
 
   constructor(private readonly response: Result<Task, TaskReadError>) {}
 
-  async moveTaskToSection(
+  moveTaskToSection(
     token: string,
     taskId: string,
     sectionGid: string,
@@ -180,7 +180,7 @@ class InMemoryTaskSectionWriter implements TaskSectionMutationGateway {
       sectionGid,
       ...(fields === undefined ? {} : { fields }),
     });
-    return this.response;
+    return Promise.resolve(this.response);
   }
 }
 

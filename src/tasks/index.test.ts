@@ -109,7 +109,7 @@ class RecordingSectionWriter implements TaskSectionMutationGateway {
     }),
   ) {}
 
-  async moveTaskToSection(
+  moveTaskToSection(
     token: string,
     taskId: string,
     sectionGid: string,
@@ -121,7 +121,7 @@ class RecordingSectionWriter implements TaskSectionMutationGateway {
       sectionGid,
       ...(fields === undefined ? {} : { fields }),
     });
-    return this.response;
+    return Promise.resolve(this.response);
   }
 }
 
