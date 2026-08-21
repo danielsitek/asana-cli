@@ -1624,15 +1624,15 @@ describe("AsanaHttpClient", () => {
       calls += 1;
       const url = new URL(request.url);
       if (calls === 1) {
-        expect(request.method).toBe("POST");
-        expect(url.pathname).toBe("/api/1.0/sections/456/addTask");
-        expect(await request.json()).toEqual({ data: { task: "123" } });
-        return Response.json({ data: {} });
+        expect(request.method).toBe("GET");
+        expect(url.pathname).toBe("/api/1.0/tasks/123");
+        expect(url.searchParams.get("opt_fields")).toBe("gid,name");
+        return Response.json({ data: { gid: "123", name: "Moved" } });
       }
-      expect(request.method).toBe("GET");
-      expect(url.pathname).toBe("/api/1.0/tasks/123");
-      expect(url.searchParams.get("opt_fields")).toBe("gid,name");
-      return Response.json({ data: { gid: "123", name: "Moved" } });
+      expect(request.method).toBe("POST");
+      expect(url.pathname).toBe("/api/1.0/sections/456/addTask");
+      expect(await request.json()).toEqual({ data: { task: "123" } });
+      return Response.json({ data: {} });
     });
 
     const result = await new AsanaHttpClient({ baseUrl }).moveTaskToSection(

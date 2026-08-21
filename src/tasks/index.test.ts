@@ -354,24 +354,16 @@ describe("task update workflow", () => {
     ]);
   });
 
-  test("combines field updates with arbitrary section placement", async () => {
-    const writer = new RecordingWriter();
-    const sectionWriter = new RecordingSectionWriter();
-    const result = await executeTaskUpdate(
-      "secret",
-      preparedFor("123", { name: "Updated", section: "456" }),
-      dependenciesFor(writer, { sectionWriter }),
-    );
-
-    expect(result.ok).toBe(true);
-    expect(writer.calls[0]?.mutation).toEqual({ name: "Updated" });
-    expect(sectionWriter.calls).toHaveLength(1);
-    if (result.ok) {
-      expect(result.value.applied).toEqual({
-        name: "Updated",
-        section: "456",
-      });
-    }
+  test("keeps arbitrary section placement to one write", () => {
+    expect(
+      prepareTaskUpdate("123", { name: "Updated", section: "456" }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--section cannot be combined with other task update flags",
+      },
+    });
   });
 
   test("preserves colons inside a custom field value", () => {

@@ -877,16 +877,6 @@ export class AsanaHttpClient
       });
     }
 
-    const moved = await this.#request(
-      token,
-      `sections/${sectionGid}/addTask`,
-      { method: "POST", body: { data: { task: taskId } } },
-      z.object({ data: z.object({}).passthrough() }),
-    );
-    if (!moved.ok) {
-      return err(mapTaskReadError(moved.error, "Task or section not found"));
-    }
-
     const selection = mutationFieldSelection(fields);
     const read = await this.#request(
       token,
@@ -899,9 +889,19 @@ export class AsanaHttpClient
       },
       z.object({ data: buildMutatedTaskSchema(selection.fields) }),
     );
-    return read.ok
+    if (!read.ok) {
+      return err(mapTaskReadError(read.error, "Task not found"));
+    }
+
+    const moved = await this.#request(
+      token,
+      `sections/${sectionGid}/addTask`,
+      { method: "POST", body: { data: { task: taskId } } },
+      z.object({ data: z.object({}).passthrough() }),
+    );
+    return moved.ok
       ? ok(read.value.data)
-      : err(mapTaskReadError(read.error, "Task not found"));
+      : err(mapTaskReadError(moved.error, "Task or section not found"));
   }
 
   async createTask(

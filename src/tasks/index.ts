@@ -322,6 +322,25 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
+  if (options.section !== undefined) {
+    const combined = (Object.keys(options) as (keyof typeof options)[]).some(
+      (key) => {
+        const value = options[key];
+        return (
+          key !== "section" &&
+          value !== undefined &&
+          (key !== "customFields" || value.length > 0)
+        );
+      },
+    );
+    if (combined) {
+      return err({
+        kind: "invalid_usage",
+        message: "--section cannot be combined with other task update flags",
+      });
+    }
+  }
+
   const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
   return ok({
@@ -929,17 +948,6 @@ export const executeTaskUpdate = async (
   );
   if (!materialized.ok) return materialized;
   const applied = orderMutation(materialized.value);
-  let task: Task | undefined;
-  if (Object.keys(applied).length > 0) {
-    const updated = await dependencies.writer.updateTask(
-      token,
-      prepared.taskId,
-      applied,
-      prepared.fields,
-    );
-    if (!updated.ok) return updated;
-    task = updated.value;
-  }
   if (prepared.sectionGid !== undefined) {
     if (!sectionWriter) {
       return err({
@@ -953,24 +961,25 @@ export const executeTaskUpdate = async (
       prepared.sectionGid,
       prepared.fields,
     );
-    if (!moved.ok) return moved;
-    task = moved.value;
+    return moved.ok
+      ? ok({
+          task: moved.value,
+          applied: { section: prepared.sectionGid },
+        })
+      : moved;
   }
-  if (task === undefined) {
-    return err({
-      kind: "internal_error",
-      message: "Task update produced no result",
-    });
-  }
-  return ok({
-    task,
-    applied: {
-      ...applied,
-      ...(prepared.sectionGid === undefined
-        ? {}
-        : { section: prepared.sectionGid }),
-    },
-  });
+  const updated = await dependencies.writer.updateTask(
+    token,
+    prepared.taskId,
+    applied,
+    prepared.fields,
+  );
+  return updated.ok
+    ? ok({
+        task: updated.value,
+        applied,
+      })
+    : updated;
 };
 
 const orderMutation = (mutation: TaskMutation): TaskMutation => ({

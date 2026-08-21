@@ -1500,6 +1500,10 @@ describe("tasks update --parent", () => {
       ["tasks", "update", "222", "--parent", "456", "--my-section", "300"],
     ],
     [
+      "combined project section",
+      ["tasks", "update", "222", "--parent", "456", "--section", "300"],
+    ],
+    [
       "combined custom field",
       ["tasks", "update", "222", "--parent", "456", "--custom-field", "400:1"],
     ],
@@ -1688,6 +1692,7 @@ describe("tasks update command", () => {
       ["tasks", "update", "123", "--completed", "yes"],
       ["tasks", "update", "123", "--my-section", "section"],
       ["tasks", "update", "123", "--section", "section"],
+      ["tasks", "update", "123", "--section", "456", "--name", "Updated"],
       [
         "tasks",
         "update",
