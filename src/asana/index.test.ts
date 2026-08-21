@@ -1618,6 +1618,37 @@ describe("AsanaHttpClient", () => {
     });
   });
 
+  test("moves a task to a section and returns the refreshed task", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(async (request) => {
+      calls += 1;
+      const url = new URL(request.url);
+      if (calls === 1) {
+        expect(request.method).toBe("POST");
+        expect(url.pathname).toBe("/api/1.0/sections/456/addTask");
+        expect(await request.json()).toEqual({ data: { task: "123" } });
+        return Response.json({ data: {} });
+      }
+      expect(request.method).toBe("GET");
+      expect(url.pathname).toBe("/api/1.0/tasks/123");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,name");
+      return Response.json({ data: { gid: "123", name: "Moved" } });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).moveTaskToSection(
+      "secret-token",
+      "123",
+      "456",
+      ["name"],
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", name: "Moved" },
+    });
+    expect(calls).toBe(2);
+  });
+
   test("creates a subtask with the exact POST request", async () => {
     const baseUrl = serverFor(async (request) => {
       expect(request.method).toBe("POST");
@@ -1683,6 +1714,46 @@ describe("AsanaHttpClient", () => {
       expect(result.ok).toBe(true);
     },
   );
+
+  test("infers a section's project when creating a task", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(async (request) => {
+      calls += 1;
+      const url = new URL(request.url);
+      if (calls === 1) {
+        expect(request.method).toBe("GET");
+        expect(url.pathname).toBe("/api/1.0/sections/456");
+        expect(url.searchParams.get("opt_fields")).toBe("project.gid");
+        return Response.json({ data: { project: { gid: "800" } } });
+      }
+      expect(request.method).toBe("POST");
+      expect(url.pathname).toBe("/api/1.0/tasks");
+      expect(await request.json()).toEqual({
+        data: {
+          name: "Section task",
+          memberships: [{ project: "800", section: "456" }],
+        },
+      });
+      return Response.json(
+        { data: { gid: "789", name: "Section task" } },
+        {
+          status: 201,
+        },
+      );
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).createTask(
+      "token",
+      { kind: "section", sectionGid: "456" },
+      { name: "Section task" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "789", name: "Section task" },
+    });
+    expect(calls).toBe(2);
+  });
 
   test("retries only explicit POST rate limits and honors Retry-After", async () => {
     let attempts = 0;

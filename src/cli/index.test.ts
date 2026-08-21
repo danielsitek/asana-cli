@@ -40,6 +40,7 @@ import {
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
+  type TaskSectionMutationGateway,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
@@ -149,6 +150,34 @@ class InMemoryTaskParentWriter implements TaskParentMutationGateway {
       token,
       taskId,
       parentId,
+      ...(fields === undefined ? {} : { fields }),
+    });
+    return this.response;
+  }
+}
+
+class InMemoryTaskSectionWriter implements TaskSectionMutationGateway {
+  public calls: Array<
+    Readonly<{
+      token: string;
+      taskId: string;
+      sectionGid: string;
+      fields?: readonly string[];
+    }>
+  > = [];
+
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  async moveTaskToSection(
+    token: string,
+    taskId: string,
+    sectionGid: string,
+    fields?: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    this.calls.push({
+      token,
+      taskId,
+      sectionGid,
       ...(fields === undefined ? {} : { fields }),
     });
     return this.response;
@@ -1658,6 +1687,7 @@ describe("tasks update command", () => {
       ["tasks", "update", "123", "--due-on", "2026-02-29"],
       ["tasks", "update", "123", "--completed", "yes"],
       ["tasks", "update", "123", "--my-section", "section"],
+      ["tasks", "update", "123", "--section", "section"],
       [
         "tasks",
         "update",
@@ -1741,6 +1771,41 @@ describe("tasks update command", () => {
         },
       },
     ]);
+  });
+
+  test("moves a task into an arbitrary section without My Tasks dependencies", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const sectionWriter = new InMemoryTaskSectionWriter(
+      ok({ gid: "123", name: "Moved" }),
+    );
+    const result = await execute(
+      ["--json", "tasks", "update", "123", "--section", "456"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+        taskSectionWriter: sectionWriter,
+        get taskReader(): never {
+          throw new Error("task reader accessed");
+        },
+        get discovery(): never {
+          throw new Error("discovery accessed");
+        },
+        get configuration(): never {
+          throw new Error("configuration accessed");
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls).toHaveLength(0);
+    expect(sectionWriter.calls).toEqual([
+      { token: "secret", taskId: "123", sectionGid: "456" },
+    ]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: { gid: "123", name: "Moved" },
+      meta: { applied: { section: "456" } },
+    });
   });
 
   test("reads file and stdin notes unchanged through injected seams", async () => {
@@ -2473,6 +2538,7 @@ describe("tasks create command", () => {
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("--parent");
     expect(result.stderr).toContain("--my-section");
+    expect(result.stderr).toContain("--section");
     expect(result.stderr).toContain("--project");
   });
 
@@ -2506,6 +2572,17 @@ describe("tasks create command", () => {
     expect(projectSetup.creator.calls[0]?.target).toEqual({
       kind: "project",
       projectGid: "800",
+    });
+
+    const sectionSetup = await dependenciesFor();
+    const sectionResult = await execute(
+      ["tasks", "create", "--name", "Section task", "--section", "850"],
+      sectionSetup.dependencies,
+    );
+    expect(sectionResult.exitCode).toBe(0);
+    expect(sectionSetup.creator.calls[0]?.target).toEqual({
+      kind: "section",
+      sectionGid: "850",
     });
   });
 
