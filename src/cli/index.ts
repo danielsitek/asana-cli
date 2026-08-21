@@ -43,6 +43,7 @@ import {
   type TaskListGateway,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
+  type TaskProjectMutationGateway,
   type TaskSectionMutationGateway,
   type TaskReadError,
   type TaskUpdateError,
@@ -108,6 +109,7 @@ export type ExecuteDependencies = Readonly<{
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
   taskParentWriter?: TaskParentMutationGateway;
+  taskProjectWriter?: TaskProjectMutationGateway;
   taskSectionWriter?: TaskSectionMutationGateway;
   taskListReader?: TaskListGateway;
   commentReader?: TaskStoryGateway;
@@ -132,6 +134,7 @@ type TaskMutationCliOptions = Readonly<{
   completed?: string;
   mySection?: string;
   section?: string;
+  project?: string;
   customField?: readonly string[];
 }>;
 
@@ -755,6 +758,10 @@ export const execute = async (
     tasks.command("update <id>").description("update a task's fields"),
   )
     .option(
+      "--project <gid>",
+      "add to a project by GID; exclusive with other flags",
+    )
+    .option(
       "--parent <id>",
       "reparent to a task GID or URL, or null to promote; exclusive with other flags",
     )
@@ -864,6 +871,9 @@ export const execute = async (
       writer: dependencies.taskWriter,
       ...(dependencies.taskSectionWriter
         ? { sectionWriter: dependencies.taskSectionWriter }
+        : {}),
+      ...(dependencies.taskProjectWriter
+        ? { projectWriter: dependencies.taskProjectWriter }
         : {}),
       ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
       resolveAuthenticatedUserGid,

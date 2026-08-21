@@ -54,6 +54,7 @@ export type TaskUpdateOptions = Readonly<{
   completed?: string;
   mySection?: string;
   section?: string;
+  project?: string;
   customFields?: readonly string[];
 }>;
 
@@ -89,6 +90,15 @@ export interface TaskSectionMutationGateway {
     token: string,
     taskId: string,
     sectionGid: string,
+    fields?: readonly string[],
+  ): Promise<Result<Task, TaskReadError>>;
+}
+
+export interface TaskProjectMutationGateway {
+  addTaskToProject(
+    token: string,
+    taskId: string,
+    projectGid: string,
     fields?: readonly string[],
   ): Promise<Result<Task, TaskReadError>>;
 }
@@ -130,6 +140,7 @@ export type TaskUpdateDependencies = TaskMaterializationDependencies &
   Readonly<{
     writer: TaskMutationGateway;
     sectionWriter?: TaskSectionMutationGateway;
+    projectWriter?: TaskProjectMutationGateway;
   }>;
 
 export type TaskUpdateError =
@@ -142,7 +153,7 @@ export type MyTasksMutationError = TaskUpdateError;
 
 export type TaskUpdateResult = Readonly<{
   task: Task;
-  applied: TaskMutation & Readonly<{ section?: string }>;
+  applied: TaskMutation & Readonly<{ section?: string; project?: string }>;
 }>;
 
 export type PreparedTaskUpdate = Readonly<{
@@ -152,6 +163,7 @@ export type PreparedTaskUpdate = Readonly<{
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
   sectionGid?: string;
+  projectGid?: string;
   customFields: readonly PreparedCustomField[];
   fields?: readonly string[];
 }>;
@@ -322,12 +334,18 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
-  if (options.section !== undefined) {
+  const placementFlag =
+    options.section !== undefined
+      ? "--section"
+      : options.project !== undefined
+        ? "--project"
+        : undefined;
+  if (placementFlag !== undefined) {
     const combined = (Object.keys(options) as (keyof typeof options)[]).some(
       (key) => {
         const value = options[key];
         return (
-          key !== "section" &&
+          key !== placementFlag.slice(2) &&
           value !== undefined &&
           (key !== "customFields" || value.length > 0)
         );
@@ -336,7 +354,7 @@ export const prepareTaskUpdate = (
     if (combined) {
       return err({
         kind: "invalid_usage",
-        message: "--section cannot be combined with other task update flags",
+        message: `${placementFlag} cannot be combined with other task update flags`,
       });
     }
   }
@@ -472,6 +490,12 @@ const prepareTaskMutation = (
       message: "--section must be a digit-only section GID",
     });
   }
+  if (options.project !== undefined && !/^\d+$/.test(options.project)) {
+    return err({
+      kind: "invalid_usage",
+      message: "--project must be a digit-only project GID",
+    });
+  }
   if (options.section !== undefined && options.mySection !== undefined) {
     return err({
       kind: "invalid_usage",
@@ -546,6 +570,7 @@ const prepareTaskMutation = (
     resolveAssigneeMe: options.assignee === "me",
     ...(mySection?.ok ? { mySection: mySection.value } : {}),
     ...(options.section === undefined ? {} : { sectionGid: options.section }),
+    ...(options.project === undefined ? {} : { projectGid: options.project }),
     customFields,
   });
 };
@@ -935,10 +960,17 @@ export const executeTaskUpdate = async (
   dependencies: TaskUpdateDependencies,
 ): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
   const sectionWriter = dependencies.sectionWriter;
+  const projectWriter = dependencies.projectWriter;
   if (prepared.sectionGid !== undefined && !sectionWriter) {
     return err({
       kind: "internal_error",
       message: "Task section writer is required",
+    });
+  }
+  if (prepared.projectGid !== undefined && !projectWriter) {
+    return err({
+      kind: "internal_error",
+      message: "Task project writer is required",
     });
   }
   const materialized = await materializeTaskMutation(
@@ -967,6 +999,26 @@ export const executeTaskUpdate = async (
           applied: { section: prepared.sectionGid },
         })
       : moved;
+  }
+  if (prepared.projectGid !== undefined) {
+    if (!projectWriter) {
+      return err({
+        kind: "internal_error",
+        message: "Task project writer is required",
+      });
+    }
+    const added = await projectWriter.addTaskToProject(
+      token,
+      prepared.taskId,
+      prepared.projectGid,
+      prepared.fields,
+    );
+    return added.ok
+      ? ok({
+          task: added.value,
+          applied: { project: prepared.projectGid },
+        })
+      : added;
   }
   const updated = await dependencies.writer.updateTask(
     token,

@@ -14,6 +14,7 @@ const result = await execute(Bun.argv.slice(2), {
   taskCreator: client,
   taskWriter: client,
   taskParentWriter: client,
+  taskProjectWriter: client,
   taskSectionWriter: client,
   taskListReader: client,
   commentReader: client,

@@ -904,6 +904,46 @@ export class AsanaHttpClient
       : err(mapTaskReadError(moved.error, "Task or section not found"));
   }
 
+  async addTaskToProject(
+    token: string,
+    taskId: string,
+    projectGid: string,
+    fields?: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    if (!/^\d+$/.test(taskId) || !/^\d+$/.test(projectGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Task and project GIDs must be digit-only",
+      });
+    }
+
+    const selection = mutationFieldSelection(fields);
+    const read = await this.#request(
+      token,
+      `tasks/${taskId}`,
+      {
+        method: "GET",
+        ...(selection.searchParams === undefined
+          ? {}
+          : { searchParams: selection.searchParams }),
+      },
+      z.object({ data: buildMutatedTaskSchema(selection.fields) }),
+    );
+    if (!read.ok) {
+      return err(mapTaskReadError(read.error, "Task not found"));
+    }
+
+    const added = await this.#request(
+      token,
+      `tasks/${taskId}/addProject`,
+      { method: "POST", body: { data: { project: projectGid } } },
+      z.object({ data: z.object({}).passthrough() }),
+    );
+    return added.ok
+      ? ok(read.value.data)
+      : err(mapTaskReadError(added.error, "Task or project not found"));
+  }
+
   async createTask(
     token: string,
     target: TaskCreationTarget,
