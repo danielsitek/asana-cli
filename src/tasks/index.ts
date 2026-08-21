@@ -53,6 +53,7 @@ export type TaskUpdateOptions = Readonly<{
   dueOn?: string;
   completed?: string;
   mySection?: string;
+  section?: string;
   customFields?: readonly string[];
 }>;
 
@@ -83,6 +84,15 @@ export interface TaskParentMutationGateway {
   ): Promise<Result<Task, TaskReadError>>;
 }
 
+export interface TaskSectionMutationGateway {
+  moveTaskToSection(
+    token: string,
+    taskId: string,
+    sectionGid: string,
+    fields?: readonly string[],
+  ): Promise<Result<Task, TaskReadError>>;
+}
+
 export type TaskParentUpdateOptions = Readonly<{ parent: string }>;
 
 export type PreparedTaskParentUpdate = Readonly<{
@@ -104,6 +114,7 @@ export type TaskCreationTarget = Readonly<
   | { kind: "subtask"; parentId: string }
   | { kind: "workspace"; workspaceGid: string }
   | { kind: "project"; projectGid: string }
+  | { kind: "section"; sectionGid: string }
 >;
 
 type TaskMaterializationDependencies = Readonly<{
@@ -116,7 +127,10 @@ type TaskMaterializationDependencies = Readonly<{
 }>;
 
 export type TaskUpdateDependencies = TaskMaterializationDependencies &
-  Readonly<{ writer: TaskMutationGateway }>;
+  Readonly<{
+    writer: TaskMutationGateway;
+    sectionWriter?: TaskSectionMutationGateway;
+  }>;
 
 export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
@@ -128,7 +142,7 @@ export type MyTasksMutationError = TaskUpdateError;
 
 export type TaskUpdateResult = Readonly<{
   task: Task;
-  applied: TaskMutation;
+  applied: TaskMutation & Readonly<{ section?: string }>;
 }>;
 
 export type PreparedTaskUpdate = Readonly<{
@@ -137,6 +151,7 @@ export type PreparedTaskUpdate = Readonly<{
   notesFile?: string;
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
+  sectionGid?: string;
   customFields: readonly PreparedCustomField[];
   fields?: readonly string[];
 }>;
@@ -307,6 +322,25 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
+  if (options.section !== undefined) {
+    const combined = (Object.keys(options) as (keyof typeof options)[]).some(
+      (key) => {
+        const value = options[key];
+        return (
+          key !== "section" &&
+          value !== undefined &&
+          (key !== "customFields" || value.length > 0)
+        );
+      },
+    );
+    if (combined) {
+      return err({
+        kind: "invalid_usage",
+        message: "--section cannot be combined with other task update flags",
+      });
+    }
+  }
+
   const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
   return ok({
@@ -432,6 +466,18 @@ const prepareTaskMutation = (
   if (mySection && !mySection.ok) {
     return err({ kind: "invalid_usage", message: mySection.error });
   }
+  if (options.section !== undefined && !/^\d+$/.test(options.section)) {
+    return err({
+      kind: "invalid_usage",
+      message: "--section must be a digit-only section GID",
+    });
+  }
+  if (options.section !== undefined && options.mySection !== undefined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--section and --my-section are mutually exclusive",
+    });
+  }
 
   const customFields: PreparedCustomField[] = [];
   const seenSelectors = new Set<string>();
@@ -499,6 +545,7 @@ const prepareTaskMutation = (
       : { notesFile: options.notesFile }),
     resolveAssigneeMe: options.assignee === "me",
     ...(mySection?.ok ? { mySection: mySection.value } : {}),
+    ...(options.section === undefined ? {} : { sectionGid: options.section }),
     customFields,
   });
 };
@@ -528,13 +575,27 @@ const parseTaskCreateInput = (
     });
   }
   if (
-    options.parent === undefined &&
-    options.project === undefined &&
-    options.mySection === undefined
+    options.section !== undefined &&
+    (options.parent !== undefined ||
+      options.project !== undefined ||
+      options.mySection !== undefined)
   ) {
     return err({
       kind: "invalid_usage",
-      message: "One of --parent, --my-section, or --project is required",
+      message:
+        "--section cannot be combined with --parent, --project, or --my-section",
+    });
+  }
+  if (
+    options.parent === undefined &&
+    options.project === undefined &&
+    options.mySection === undefined &&
+    options.section === undefined
+  ) {
+    return err({
+      kind: "invalid_usage",
+      message:
+        "One of --parent, --my-section, --section, or --project is required",
     });
   }
 
@@ -556,6 +617,8 @@ const parseTaskCreateInput = (
       });
     }
     target = { kind: "project", projectGid: options.project };
+  } else if (options.section !== undefined) {
+    target = { kind: "section", sectionGid: options.section };
   }
 
   return ok({
@@ -871,6 +934,13 @@ export const executeTaskUpdate = async (
   prepared: PreparedTaskUpdate,
   dependencies: TaskUpdateDependencies,
 ): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
+  const sectionWriter = dependencies.sectionWriter;
+  if (prepared.sectionGid !== undefined && !sectionWriter) {
+    return err({
+      kind: "internal_error",
+      message: "Task section writer is required",
+    });
+  }
   const materialized = await materializeTaskMutation(
     token,
     { ...prepared, workflow: "update" },
@@ -878,13 +948,38 @@ export const executeTaskUpdate = async (
   );
   if (!materialized.ok) return materialized;
   const applied = orderMutation(materialized.value);
+  if (prepared.sectionGid !== undefined) {
+    if (!sectionWriter) {
+      return err({
+        kind: "internal_error",
+        message: "Task section writer is required",
+      });
+    }
+    const moved = await sectionWriter.moveTaskToSection(
+      token,
+      prepared.taskId,
+      prepared.sectionGid,
+      prepared.fields,
+    );
+    return moved.ok
+      ? ok({
+          task: moved.value,
+          applied: { section: prepared.sectionGid },
+        })
+      : moved;
+  }
   const updated = await dependencies.writer.updateTask(
     token,
     prepared.taskId,
     applied,
     prepared.fields,
   );
-  return updated.ok ? ok({ task: updated.value, applied }) : updated;
+  return updated.ok
+    ? ok({
+        task: updated.value,
+        applied,
+      })
+    : updated;
 };
 
 const orderMutation = (mutation: TaskMutation): TaskMutation => ({

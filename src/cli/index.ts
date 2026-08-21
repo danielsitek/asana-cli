@@ -43,6 +43,7 @@ import {
   type TaskListGateway,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
+  type TaskSectionMutationGateway,
   type TaskReadError,
   type TaskUpdateError,
   type TaskUpdateOptions,
@@ -107,6 +108,7 @@ export type ExecuteDependencies = Readonly<{
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
   taskParentWriter?: TaskParentMutationGateway;
+  taskSectionWriter?: TaskSectionMutationGateway;
   taskListReader?: TaskListGateway;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
@@ -129,6 +131,7 @@ type TaskMutationCliOptions = Readonly<{
   dueOn?: string;
   completed?: string;
   mySection?: string;
+  section?: string;
   customField?: readonly string[];
 }>;
 
@@ -141,6 +144,7 @@ const withTaskMutationOptions = (command: Command): Command =>
     .option("--due-on <date>", "set YYYY-MM-DD or null")
     .option("--completed <boolean>", "set true or false")
     .option("--my-section <section>", "move within My Tasks by GID or @alias")
+    .option("--section <gid>", "place or move in any project section")
     .option(
       "--custom-field <field:value>",
       "set a number or enum My Tasks custom field by GID or @alias; enum value is an option GID or exact name; repeatable",
@@ -858,6 +862,9 @@ export const execute = async (
 
     const updated = await executeTaskUpdate(tokenResult.value, prepared.value, {
       writer: dependencies.taskWriter,
+      ...(dependencies.taskSectionWriter
+        ? { sectionWriter: dependencies.taskSectionWriter }
+        : {}),
       ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
       resolveAuthenticatedUserGid,
       readFile:

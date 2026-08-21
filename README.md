@@ -179,6 +179,9 @@ asana-cli tasks list --parent=1215978111726134
 asana-cli tasks update 1215978111726134 --my-section=@in_review
 asana-cli tasks comment 1215978111726134 "Ready for review"
 
+# Move a task into any project section
+asana-cli tasks update 1215978111726134 --section=1201947864389010
+
 # Replace a description safely from a file
 asana-cli tasks update 1215978111726134 --notes-file=task-description.md
 
@@ -194,6 +197,11 @@ asana-cli tasks create \
 asana-cli tasks create \
   --name="Prepare the release" \
   --project=1201947864389005
+
+# Create a standalone task directly in a project section
+asana-cli tasks create \
+  --name="Review the release" \
+  --section=1201947864389010
 ```
 
 ## Command reference
@@ -218,6 +226,7 @@ Both commands accept the same mutation flags:
 - `--due-on=<YYYY-MM-DD>|null`
 - `--completed=true|false`
 - `--my-section=<gid>|@<alias>` — place or move within My Tasks
+- `--section=<gid>` — place or move in any project section
 - `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
   [Custom fields](#custom-fields---custom-field) below
 
@@ -233,12 +242,18 @@ command fails with exit 2.
 - Requires `--name` and at least one destination:
   - `--parent=<gid-or-url>` — subtask
   - `--my-section=<gid>|@<alias>` — standalone My Tasks task (uses configured `workspace.gid`)
+  - `--section=<gid>` — standalone task in the section's inferred project
   - `--project=<gid>` — standalone project task
-- `--parent` and `--my-section` may be combined; `--project` cannot be combined with either.
+- `--parent` and `--my-section` may be combined. `--section` is exclusive with
+  every other destination; `--project` cannot be combined with `--parent` or
+  `--my-section`.
 
 ### `tasks update`
 
 - Applies the mutation options above for a normal update.
+- `--section=<gid>` is a dedicated single-write placement operation and cannot
+  be combined with any other update flag. It does not use My Tasks
+  configuration or impose an assignee requirement.
 - `--parent=<gid>|null` reparents instead of updating:
   - GID or task URL — moves it under that parent
   - literal `null` — promotes it to a top-level task

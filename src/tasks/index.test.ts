@@ -31,6 +31,7 @@ import {
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
+  type TaskSectionMutationGateway,
   type TaskUpdateDependencies,
   type TaskUpdateError,
   type TaskUpdateOptions,
@@ -88,6 +89,39 @@ class RecordingParentWriter implements TaskParentMutationGateway {
   async setTaskParent(token: string, taskId: string, parentId: string | null) {
     this.calls.push({ token, taskId, parentId });
     return this.response;
+  }
+}
+
+class RecordingSectionWriter implements TaskSectionMutationGateway {
+  calls: Array<
+    Readonly<{
+      token: string;
+      taskId: string;
+      sectionGid: string;
+      fields?: readonly string[];
+    }>
+  > = [];
+
+  constructor(
+    private readonly response: Result<Task, TaskReadError> = ok({
+      gid: "123",
+      name: "Moved",
+    }),
+  ) {}
+
+  moveTaskToSection(
+    token: string,
+    taskId: string,
+    sectionGid: string,
+    fields?: readonly string[],
+  ) {
+    this.calls.push({
+      token,
+      taskId,
+      sectionGid,
+      ...(fields === undefined ? {} : { fields }),
+    });
+    return Promise.resolve(this.response);
   }
 }
 
@@ -243,6 +277,7 @@ describe("task update workflow", () => {
     ["invalid completed", "123", { completed: "yes" }],
     ["invalid My Tasks section", "123", { mySection: "section" }],
     ["empty My Tasks alias", "123", { mySection: "@" }],
+    ["invalid project section", "123", { section: "section" }],
     ["missing custom field delimiter", "123", { customFields: ["123"] }],
     ["empty custom field value", "123", { customFields: ["123:"] }],
     ["empty field selector", "123", { customFields: [":1"] }],
@@ -280,6 +315,53 @@ describe("task update workflow", () => {
           },
           { field: { kind: "gid", value: "789" }, value: "0" },
         ],
+      },
+    });
+  });
+
+  test("prepares an arbitrary project section without My Tasks resolution", () => {
+    expect(prepareTaskUpdate("123", { section: "456" })).toEqual({
+      ok: true,
+      value: {
+        taskId: "123",
+        mutation: {},
+        resolveAssigneeMe: false,
+        sectionGid: "456",
+        customFields: [],
+      },
+    });
+  });
+
+  test("moves a task into an arbitrary section", async () => {
+    const writer = new RecordingWriter();
+    const sectionWriter = new RecordingSectionWriter();
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { section: "456" }),
+      dependenciesFor(writer, { sectionWriter }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "123", name: "Moved" },
+        applied: { section: "456" },
+      },
+    });
+    expect(writer.calls).toHaveLength(0);
+    expect(sectionWriter.calls).toEqual([
+      { token: "secret", taskId: "123", sectionGid: "456" },
+    ]);
+  });
+
+  test("keeps arbitrary section placement to one write", () => {
+    expect(
+      prepareTaskUpdate("123", { name: "Updated", section: "456" }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--section cannot be combined with other task update flags",
       },
     });
   });
@@ -630,7 +712,8 @@ describe("task creation preparation", () => {
       ok: false,
       error: {
         kind: "invalid_usage",
-        message: "One of --parent, --my-section, or --project is required",
+        message:
+          "One of --parent, --my-section, --section, or --project is required",
       },
     });
     expect(prepareTaskCreate({ parent: "123" })).toEqual({
@@ -688,6 +771,18 @@ describe("task creation preparation", () => {
       ok: true,
       value: {
         target: { kind: "project", projectGid: "456" },
+        mutation: { name: "Top level" },
+        resolveAssigneeMe: false,
+        customFields: [],
+      },
+    });
+  });
+
+  test("prepares a standalone task in an arbitrary section", () => {
+    expect(prepareTaskCreate({ section: "456", name: "Top level" })).toEqual({
+      ok: true,
+      value: {
+        target: { kind: "section", sectionGid: "456" },
         mutation: { name: "Top level" },
         resolveAssigneeMe: false,
         customFields: [],
