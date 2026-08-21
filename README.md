@@ -251,6 +251,9 @@ command fails with exit 2.
 ### `tasks update`
 
 - Applies the mutation options above for a normal update.
+- `--project=<gid>` adds the task to a project without changing its parent.
+  It is a dedicated single-write operation and cannot be combined with any
+  other update flag.
 - `--section=<gid>` is a dedicated single-write placement operation and cannot
   be combined with any other update flag. It does not use My Tasks
   configuration or impose an assignee requirement.

@@ -39,6 +39,7 @@ import {
   type TaskMutation,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
+  type TaskProjectMutationGateway,
   type TaskReadError,
   type TaskSectionMutationGateway,
 } from "../tasks/index.ts";
@@ -178,6 +179,34 @@ class InMemoryTaskSectionWriter implements TaskSectionMutationGateway {
       token,
       taskId,
       sectionGid,
+      ...(fields === undefined ? {} : { fields }),
+    });
+    return Promise.resolve(this.response);
+  }
+}
+
+class InMemoryTaskProjectWriter implements TaskProjectMutationGateway {
+  public calls: Array<
+    Readonly<{
+      token: string;
+      taskId: string;
+      projectGid: string;
+      fields?: readonly string[];
+    }>
+  > = [];
+
+  constructor(private readonly response: Result<Task, TaskReadError>) {}
+
+  addTaskToProject(
+    token: string,
+    taskId: string,
+    projectGid: string,
+    fields?: readonly string[],
+  ): Promise<Result<Task, TaskReadError>> {
+    this.calls.push({
+      token,
+      taskId,
+      projectGid,
       ...(fields === undefined ? {} : { fields }),
     });
     return Promise.resolve(this.response);
@@ -1504,6 +1533,10 @@ describe("tasks update --parent", () => {
       ["tasks", "update", "222", "--parent", "456", "--section", "300"],
     ],
     [
+      "combined project",
+      ["tasks", "update", "222", "--parent", "456", "--project", "300"],
+    ],
+    [
       "combined custom field",
       ["tasks", "update", "222", "--parent", "456", "--custom-field", "400:1"],
     ],
@@ -1693,6 +1726,8 @@ describe("tasks update command", () => {
       ["tasks", "update", "123", "--my-section", "section"],
       ["tasks", "update", "123", "--section", "section"],
       ["tasks", "update", "123", "--section", "456", "--name", "Updated"],
+      ["tasks", "update", "123", "--project", "project"],
+      ["tasks", "update", "123", "--project", "456", "--name", "Updated"],
       [
         "tasks",
         "update",
@@ -1810,6 +1845,41 @@ describe("tasks update command", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       data: { gid: "123", name: "Moved" },
       meta: { applied: { section: "456" } },
+    });
+  });
+
+  test("adds a task to a project without changing its parent", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const projectWriter = new InMemoryTaskProjectWriter(
+      ok({ gid: "123", name: "Added" }),
+    );
+    const result = await execute(
+      ["--json", "tasks", "update", "123", "--project", "456"],
+      {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskWriter: writer,
+        taskProjectWriter: projectWriter,
+        get taskReader(): never {
+          throw new Error("task reader accessed");
+        },
+        get discovery(): never {
+          throw new Error("discovery accessed");
+        },
+        get configuration(): never {
+          throw new Error("configuration accessed");
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writer.calls).toHaveLength(0);
+    expect(projectWriter.calls).toEqual([
+      { token: "secret", taskId: "123", projectGid: "456" },
+    ]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: { gid: "123", name: "Added" },
+      meta: { applied: { project: "456" } },
     });
   });
 

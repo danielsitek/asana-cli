@@ -30,6 +30,7 @@ import {
   type TaskMutation,
   type TaskMutationGateway,
   type TaskParentMutationGateway,
+  type TaskProjectMutationGateway,
   type TaskReadError,
   type TaskSectionMutationGateway,
   type TaskUpdateDependencies,
@@ -119,6 +120,39 @@ class RecordingSectionWriter implements TaskSectionMutationGateway {
       token,
       taskId,
       sectionGid,
+      ...(fields === undefined ? {} : { fields }),
+    });
+    return Promise.resolve(this.response);
+  }
+}
+
+class RecordingProjectWriter implements TaskProjectMutationGateway {
+  calls: Array<
+    Readonly<{
+      token: string;
+      taskId: string;
+      projectGid: string;
+      fields?: readonly string[];
+    }>
+  > = [];
+
+  constructor(
+    private readonly response: Result<Task, TaskReadError> = ok({
+      gid: "123",
+      name: "Added",
+    }),
+  ) {}
+
+  addTaskToProject(
+    token: string,
+    taskId: string,
+    projectGid: string,
+    fields?: readonly string[],
+  ) {
+    this.calls.push({
+      token,
+      taskId,
+      projectGid,
       ...(fields === undefined ? {} : { fields }),
     });
     return Promise.resolve(this.response);
@@ -278,6 +312,7 @@ describe("task update workflow", () => {
     ["invalid My Tasks section", "123", { mySection: "section" }],
     ["empty My Tasks alias", "123", { mySection: "@" }],
     ["invalid project section", "123", { section: "section" }],
+    ["invalid project", "123", { project: "project" }],
     ["missing custom field delimiter", "123", { customFields: ["123"] }],
     ["empty custom field value", "123", { customFields: ["123:"] }],
     ["empty field selector", "123", { customFields: [":1"] }],
@@ -332,6 +367,19 @@ describe("task update workflow", () => {
     });
   });
 
+  test("prepares project membership without changing parent state", () => {
+    expect(prepareTaskUpdate("123", { project: "456" })).toEqual({
+      ok: true,
+      value: {
+        taskId: "123",
+        mutation: {},
+        resolveAssigneeMe: false,
+        projectGid: "456",
+        customFields: [],
+      },
+    });
+  });
+
   test("moves a task into an arbitrary section", async () => {
     const writer = new RecordingWriter();
     const sectionWriter = new RecordingSectionWriter();
@@ -362,6 +410,40 @@ describe("task update workflow", () => {
       error: {
         kind: "invalid_usage",
         message: "--section cannot be combined with other task update flags",
+      },
+    });
+  });
+
+  test("adds a task to a project through a dedicated write", async () => {
+    const writer = new RecordingWriter();
+    const projectWriter = new RecordingProjectWriter();
+    const result = await executeTaskUpdate(
+      "secret",
+      preparedFor("123", { project: "456" }),
+      dependenciesFor(writer, { projectWriter }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        task: { gid: "123", name: "Added" },
+        applied: { project: "456" },
+      },
+    });
+    expect(writer.calls).toHaveLength(0);
+    expect(projectWriter.calls).toEqual([
+      { token: "secret", taskId: "123", projectGid: "456" },
+    ]);
+  });
+
+  test("keeps project membership to one update operation", () => {
+    expect(
+      prepareTaskUpdate("123", { project: "456", name: "Updated" }),
+    ).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_usage",
+        message: "--project cannot be combined with other task update flags",
       },
     });
   });
@@ -611,6 +693,8 @@ describe("task parent update workflow", () => {
     ["combined due date", "123", { parent: "456", dueOn: "2028-02-29" }],
     ["combined completed", "123", { parent: "456", completed: "true" }],
     ["combined My Tasks section", "123", { parent: "456", mySection: "300" }],
+    ["combined project section", "123", { parent: "456", section: "300" }],
+    ["combined project", "123", { parent: "456", project: "300" }],
     [
       "combined custom field",
       "123",
