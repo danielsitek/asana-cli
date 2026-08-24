@@ -3,6 +3,16 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.4.0
+
+- Add `projects list` and `projects get` commands for workspace project
+  discovery and detailed project reads.
+- Extend `tasks update` with project membership updates and moves to arbitrary
+  project sections, while keeping multi-step section moves atomic.
+- Upload test coverage to Codacy and add the Codacy badge to the README.
+- Consolidate shared CLI guards, error mapping, completion rendering, table
+  sizing, comment preparation, and My Tasks configuration and mutation logic.
+
 ## 0.3.1
 
 - Fix `tasks comments` returning an `invalid_response` error for tasks whose
