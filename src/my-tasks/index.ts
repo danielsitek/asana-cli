@@ -227,6 +227,104 @@ const resolveConfiguredMyTasks = async (
   });
 };
 
+const resolveSectionGid = (
+  request: MyTasksMutationRequest,
+  configuredMyTasks: ConfiguredMyTasks["myTasks"],
+): Result<string | undefined, ConfigError> =>
+  request.mySection
+    ? resolveAlias(
+        request.mySection,
+        configuredMyTasks.sections,
+        "My Tasks section",
+      )
+    : ok(undefined);
+
+const resolveRawCustomFields = (
+  request: MyTasksMutationRequest,
+  configuredMyTasks: ConfiguredMyTasks["myTasks"],
+): Result<Record<string, string | null>, MyTasksMutationError> => {
+  const resolved: Record<string, string | null> = {};
+  for (const customField of request.customFields) {
+    const gid = resolveAlias(
+      customField.field,
+      configuredMyTasks.customFields,
+      "Custom field",
+    );
+    if (!gid.ok) return gid;
+    if (Object.hasOwn(resolved, gid.value)) {
+      return err({
+        kind: "invalid_usage",
+        message: "--custom-field cannot update the same field more than once",
+      });
+    }
+    resolved[gid.value] = customField.value;
+  }
+  return ok(resolved);
+};
+
+const resolveFinalAssignee = async (
+  request: MyTasksMutationRequest,
+  dependencies: MyTasksMutationDependencies,
+): Promise<Result<string | null | undefined, MyTasksMutationError>> => {
+  if (request.finalAssignee !== undefined) return ok(request.finalAssignee);
+  if (request.taskId === undefined) {
+    return err({
+      kind: "invalid_usage",
+      message:
+        "My Tasks mutations require an explicitly resolvable final assignee",
+    });
+  }
+  if (dependencies.reader === undefined) {
+    return err({
+      kind: "internal_error",
+      message: "Task reader is required to resolve the final assignee",
+    });
+  }
+  const current = await dependencies.reader.getTask(
+    request.token,
+    request.taskId,
+    ["assignee.gid"],
+  );
+  return current.ok ? ok(current.value.assignee?.gid) : current;
+};
+
+const validateFinalAssignee = async (
+  request: MyTasksMutationRequest,
+  dependencies: MyTasksMutationDependencies,
+): Promise<Result<void, MyTasksMutationError>> => {
+  const identity = request.authenticatedUserGid
+    ? ok(request.authenticatedUserGid)
+    : await dependencies.resolveAuthenticatedUserGid(request.token);
+  if (!identity.ok) return identity;
+  const finalAssignee = await resolveFinalAssignee(request, dependencies);
+  if (!finalAssignee.ok) return finalAssignee;
+  if (finalAssignee.value !== identity.value) {
+    return err({
+      kind: "invalid_usage",
+      message:
+        "My Tasks mutations require the final assignee to be the authenticated user",
+    });
+  }
+  return ok(undefined);
+};
+
+const createMutationResult = (
+  sectionGid: string | undefined,
+  customFields: Readonly<Record<string, number | string | null>>,
+): MyTasksMutationResult => {
+  const sortedCustomFields = Object.fromEntries(
+    Object.entries(customFields).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    ),
+  );
+  return {
+    ...(sectionGid === undefined ? {} : { assignee_section: sectionGid }),
+    ...(Object.keys(sortedCustomFields).length === 0
+      ? {}
+      : { custom_fields: sortedCustomFields }),
+  };
+};
+
 const resolveMutation = async (
   request: MyTasksMutationRequest,
   dependencies: MyTasksMutationDependencies,
@@ -235,31 +333,11 @@ const resolveMutation = async (
   if (!configured.ok) return configured;
   const { workspaceGid, myTasks: configuredMyTasks } = configured.value;
 
-  const sectionGid = request.mySection
-    ? resolveAlias(
-        request.mySection,
-        configuredMyTasks.sections,
-        "My Tasks section",
-      )
-    : ok(undefined);
+  const sectionGid = resolveSectionGid(request, configuredMyTasks);
   if (!sectionGid.ok) return sectionGid;
 
-  const rawCustomFields: Record<string, string | null> = {};
-  for (const customField of request.customFields) {
-    const gid = resolveAlias(
-      customField.field,
-      configuredMyTasks.customFields,
-      "Custom field",
-    );
-    if (!gid.ok) return gid;
-    if (Object.hasOwn(rawCustomFields, gid.value)) {
-      return err({
-        kind: "invalid_usage",
-        message: "--custom-field cannot update the same field more than once",
-      });
-    }
-    rawCustomFields[gid.value] = customField.value;
-  }
+  const rawCustomFields = resolveRawCustomFields(request, configuredMyTasks);
+  if (!rawCustomFields.ok) return rawCustomFields;
 
   const discovered = await dependencies.discovery.discoverMyTasks(
     request.token,
@@ -275,55 +353,14 @@ const resolveMutation = async (
 
   const resolvedCustomFields = resolveCustomFieldValues(
     discovered.value.customFields,
-    rawCustomFields,
+    rawCustomFields.value,
   );
   if (!resolvedCustomFields.ok) return resolvedCustomFields;
-  const customFields = resolvedCustomFields.value;
 
-  const identity = request.authenticatedUserGid
-    ? ok(request.authenticatedUserGid)
-    : await dependencies.resolveAuthenticatedUserGid(request.token);
-  if (!identity.ok) return identity;
-  let finalAssignee = request.finalAssignee;
-  if (finalAssignee === undefined) {
-    if (request.taskId === undefined || dependencies.reader === undefined) {
-      return err({
-        kind: request.taskId === undefined ? "invalid_usage" : "internal_error",
-        message:
-          request.taskId === undefined
-            ? "My Tasks mutations require an explicitly resolvable final assignee"
-            : "Task reader is required to resolve the final assignee",
-      });
-    }
-    const current = await dependencies.reader.getTask(
-      request.token,
-      request.taskId,
-      ["assignee.gid"],
-    );
-    if (!current.ok) return current;
-    finalAssignee = current.value.assignee?.gid;
-  }
-  if (finalAssignee !== identity.value) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "My Tasks mutations require the final assignee to be the authenticated user",
-    });
-  }
+  const assignee = await validateFinalAssignee(request, dependencies);
+  if (!assignee.ok) return assignee;
 
-  const sortedCustomFields = Object.fromEntries(
-    Object.entries(customFields).sort(([left], [right]) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    ),
-  );
-  return ok({
-    ...(sectionGid.value === undefined
-      ? {}
-      : { assignee_section: sectionGid.value }),
-    ...(Object.keys(sortedCustomFields).length === 0
-      ? {}
-      : { custom_fields: sortedCustomFields }),
-  });
+  return ok(createMutationResult(sectionGid.value, resolvedCustomFields.value));
 };
 
 export const createMyTasksMutationResolver = (
