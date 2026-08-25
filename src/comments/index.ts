@@ -84,6 +84,21 @@ export type TaskCommentsReadError =
   | TaskReadError
   | Readonly<{ kind: "scan_limit"; message: string }>;
 
+type TaskCommentsReadValue = Readonly<{
+  comments: readonly Comment[];
+  meta: TaskCommentListMeta;
+}>;
+
+type TaskCommentsReadResult = Result<
+  TaskCommentsReadValue,
+  TaskCommentsReadError
+>;
+
+type CommentScanState = {
+  comments: Comment[];
+  scanned: number;
+};
+
 export const DEFAULT_COMMENT_FIELDS = [
   "gid",
   "created_at",
@@ -247,40 +262,183 @@ export const prepareTaskCommentsRead = (
   });
 };
 
+const completedCommentsRead = (
+  state: CommentScanState,
+  scanTruncated: boolean,
+  nextOffset?: string,
+): TaskCommentsReadValue => ({
+  comments: state.comments,
+  meta: {
+    scanned: state.scanned,
+    returned: state.comments.length,
+    scan_truncated: scanTruncated,
+    ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
+  },
+});
+
+const completedLatestCommentsRead = (
+  state: CommentScanState,
+): TaskCommentsReadValue => ({
+  comments: [...state.comments].reverse(),
+  meta: {
+    scanned: state.scanned,
+    returned: state.comments.length,
+    scan_truncated: false,
+  },
+});
+
+const initialCommentsOffset = (
+  mode: TaskCommentsReadMode,
+): string | undefined => (mode.kind === "latest" ? undefined : mode.offset);
+
+const completedSourceRead = (
+  prepared: PreparedTaskCommentsRead,
+  state: CommentScanState,
+): TaskCommentsReadResult =>
+  ok(
+    prepared.mode.kind === "latest"
+      ? completedLatestCommentsRead(state)
+      : completedCommentsRead(state, false),
+  );
+
+const paginationError = (
+  stories: readonly Comment[],
+  nextOffset: string | undefined,
+  requestedOffsets: ReadonlySet<string>,
+): TaskCommentsReadResult | undefined => {
+  if (
+    nextOffset === undefined ||
+    (stories.length > 0 && !requestedOffsets.has(nextOffset))
+  ) {
+    return undefined;
+  }
+  return err({
+    kind: "invalid_response",
+    message: "Story pagination did not advance",
+  });
+};
+
+const collectLatestComments = (
+  stories: readonly Comment[],
+  outputFields: readonly string[],
+  latestCap: number,
+  state: CommentScanState,
+): void => {
+  for (const story of stories) {
+    state.scanned += 1;
+    if (story.resource_subtype !== "comment_added") continue;
+
+    state.comments.push(projectCommentFields(story, outputFields));
+    if (state.comments.length > latestCap) state.comments.shift();
+  }
+};
+
+const collectStandardComments = (
+  stories: readonly Comment[],
+  pageStoryCount: number,
+  nextOffset: string | undefined,
+  prepared: PreparedTaskCommentsRead,
+  state: CommentScanState,
+): TaskCommentsReadResult | undefined => {
+  const resultCap =
+    prepared.mode.kind === "capped" ? prepared.mode.resultCap : undefined;
+
+  for (const [index, story] of stories.entries()) {
+    state.scanned += 1;
+    if (story.resource_subtype !== "comment_added") continue;
+
+    state.comments.push(projectCommentFields(story, prepared.outputFields));
+    if (resultCap === undefined || state.comments.length < resultCap) continue;
+
+    const stoppedMidPage = index < pageStoryCount - 1;
+    const scanTruncated =
+      state.scanned >= prepared.scanCap &&
+      (stoppedMidPage || nextOffset !== undefined);
+    return ok(
+      completedCommentsRead(
+        state,
+        scanTruncated,
+        stoppedMidPage ? undefined : nextOffset,
+      ),
+    );
+  }
+  return undefined;
+};
+
+const collectPageComments = (
+  stories: readonly Comment[],
+  pageStoryCount: number,
+  nextOffset: string | undefined,
+  prepared: PreparedTaskCommentsRead,
+  state: CommentScanState,
+): TaskCommentsReadResult | undefined => {
+  if (prepared.mode.kind !== "latest") {
+    return collectStandardComments(
+      stories,
+      pageStoryCount,
+      nextOffset,
+      prepared,
+      state,
+    );
+  }
+  collectLatestComments(
+    stories,
+    prepared.outputFields,
+    prepared.mode.count,
+    state,
+  );
+  return undefined;
+};
+
+const finishAtScanCap = (
+  prepared: PreparedTaskCommentsRead,
+  state: CommentScanState,
+  pageExceedsBudget: boolean,
+  nextOffset: string | undefined,
+): TaskCommentsReadResult => {
+  const truncated = pageExceedsBudget || nextOffset !== undefined;
+  if (prepared.mode.kind !== "latest") {
+    return ok(
+      completedCommentsRead(
+        state,
+        truncated,
+        pageExceedsBudget ? undefined : nextOffset,
+      ),
+    );
+  }
+  if (!truncated) return ok(completedLatestCommentsRead(state));
+
+  return err({
+    kind: "scan_limit",
+    message: `Reached --max=${prepared.scanCap} before confirming the newest ${prepared.mode.count} comment(s); rerun with a higher --max`,
+  });
+};
+
+const finishAfterPage = (
+  prepared: PreparedTaskCommentsRead,
+  state: CommentScanState,
+  pageExceedsBudget: boolean,
+  nextOffset: string | undefined,
+): TaskCommentsReadResult | undefined => {
+  if (state.scanned >= prepared.scanCap) {
+    return finishAtScanCap(prepared, state, pageExceedsBudget, nextOffset);
+  }
+  if (nextOffset !== undefined) return undefined;
+  return completedSourceRead(prepared, state);
+};
+
 export const executeTaskCommentsRead = async (
   token: string,
   prepared: PreparedTaskCommentsRead,
   dependencies: Readonly<{ reader: TaskStoryGateway }>,
-): Promise<
-  Result<
-    Readonly<{
-      comments: readonly Comment[];
-      meta: TaskCommentListMeta;
-    }>,
-    TaskCommentsReadError
-  >
-> => {
-  const latestCap =
-    prepared.mode.kind === "latest" ? prepared.mode.count : undefined;
-  const resultCap =
-    prepared.mode.kind === "capped" ? prepared.mode.resultCap : undefined;
-  const comments: Comment[] = [];
-  let scanned = 0;
-  let offset =
-    prepared.mode.kind === "latest" ? undefined : prepared.mode.offset;
+): Promise<TaskCommentsReadResult> => {
+  const state: CommentScanState = { comments: [], scanned: 0 };
+  let offset = initialCommentsOffset(prepared.mode);
   const requestedOffsets = new Set<string>();
-  const completedLatestRead = () => ({
-    comments: [...comments].reverse(),
-    meta: {
-      scanned,
-      returned: comments.length,
-      scan_truncated: false as const,
-    },
-  });
 
-  while (scanned < prepared.scanCap) {
+  while (state.scanned < prepared.scanCap) {
     if (offset !== undefined) requestedOffsets.add(offset);
-    const remaining = prepared.scanCap - scanned;
+    const remaining = prepared.scanCap - state.scanned;
     const page = await dependencies.reader.getTaskStories(
       token,
       prepared.taskId,
@@ -293,101 +451,37 @@ export const executeTaskCommentsRead = async (
     if (!page.ok) return page;
 
     const { stories, nextOffset } = page.value;
-    if (
-      nextOffset !== undefined &&
-      (stories.length === 0 || requestedOffsets.has(nextOffset))
-    ) {
-      return err({
-        kind: "invalid_response",
-        message: "Story pagination did not advance",
-      });
-    }
+    const invalidPagination = paginationError(
+      stories,
+      nextOffset,
+      requestedOffsets,
+    );
+    if (invalidPagination !== undefined) return invalidPagination;
+
     const storiesWithinBudget = stories.slice(0, remaining);
     const pageExceedsBudget = stories.length > storiesWithinBudget.length;
 
-    if (latestCap === undefined) {
-      for (const [index, story] of storiesWithinBudget.entries()) {
-        scanned += 1;
-        if (story.resource_subtype === "comment_added") {
-          comments.push(projectCommentFields(story, prepared.outputFields));
-          if (resultCap !== undefined && comments.length >= resultCap) {
-            const stoppedMidPage = index < stories.length - 1;
-            const scanCapReached = scanned >= prepared.scanCap;
-            const scanTruncated =
-              scanCapReached && (stoppedMidPage || nextOffset !== undefined);
-            return ok({
-              comments,
-              meta: {
-                scanned,
-                returned: comments.length,
-                scan_truncated: scanTruncated,
-                ...(!stoppedMidPage && nextOffset !== undefined
-                  ? { next_offset: nextOffset }
-                  : {}),
-              },
-            });
-          }
-        }
-      }
-    } else {
-      for (const story of storiesWithinBudget) {
-        scanned += 1;
-        if (story.resource_subtype === "comment_added") {
-          comments.push(projectCommentFields(story, prepared.outputFields));
-          if (comments.length > latestCap) comments.shift();
-        }
-      }
-    }
+    const cappedResult = collectPageComments(
+      storiesWithinBudget,
+      stories.length,
+      nextOffset,
+      prepared,
+      state,
+    );
+    if (cappedResult !== undefined) return cappedResult;
 
-    if (scanned >= prepared.scanCap) {
-      const truncated = pageExceedsBudget || nextOffset !== undefined;
-      if (latestCap !== undefined) {
-        if (truncated) {
-          return err({
-            kind: "scan_limit",
-            message: `Reached --max=${prepared.scanCap} before confirming the newest ${latestCap} comment(s); rerun with a higher --max`,
-          });
-        }
-        return ok(completedLatestRead());
-      }
-      return ok({
-        comments,
-        meta: {
-          scanned,
-          returned: comments.length,
-          scan_truncated: truncated,
-          ...(pageExceedsBudget || nextOffset === undefined
-            ? {}
-            : { next_offset: nextOffset }),
-        },
-      });
-    }
+    const completedResult = finishAfterPage(
+      prepared,
+      state,
+      pageExceedsBudget,
+      nextOffset,
+    );
+    if (completedResult !== undefined) return completedResult;
 
-    if (nextOffset === undefined) {
-      return latestCap === undefined
-        ? ok({
-            comments,
-            meta: {
-              scanned,
-              returned: comments.length,
-              scan_truncated: false,
-            },
-          })
-        : ok(completedLatestRead());
-    }
     offset = nextOffset;
   }
 
-  return latestCap === undefined
-    ? ok({
-        comments,
-        meta: {
-          scanned,
-          returned: comments.length,
-          scan_truncated: false,
-        },
-      })
-    : ok(completedLatestRead());
+  return completedSourceRead(prepared, state);
 };
 
 export const prepareTaskCommentCreate = (
