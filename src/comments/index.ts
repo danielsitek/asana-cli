@@ -94,10 +94,10 @@ type TaskCommentsReadResult = Result<
   TaskCommentsReadError
 >;
 
-type CommentScanState = {
+interface CommentScanState {
   comments: Comment[];
   scanned: number;
-};
+}
 
 export const DEFAULT_COMMENT_FIELDS = [
   "gid",
