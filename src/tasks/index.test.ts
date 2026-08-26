@@ -329,6 +329,82 @@ describe("task update workflow", () => {
     expect(result.ok).toBe(false);
   });
 
+  test.each([
+    [
+      "conflicting note sources",
+      { notes: "inline", notesFile: "notes.md" },
+      "--notes and --notes-file are mutually exclusive",
+    ],
+    [
+      "an invalid assignee",
+      { assignee: "ada@example.com" },
+      "--assignee must be me, null, or a digit-only user GID",
+    ],
+    [
+      "an invalid My Tasks selector",
+      { mySection: "triage" },
+      "--my-section must use a digit-only GID or @alias",
+    ],
+    [
+      "an invalid section",
+      { section: "triage" },
+      "--section must be a digit-only section GID",
+    ],
+    [
+      "an invalid project",
+      { project: "roadmap" },
+      "--project must be a digit-only project GID",
+    ],
+    [
+      "a duplicate custom field",
+      { customFields: ["456:1", "456:2"] },
+      "--custom-field cannot update the same field more than once",
+    ],
+    [
+      "an invalid due date",
+      { dueOn: "2026-02-29" },
+      "--due-on must be a real YYYY-MM-DD date or null",
+    ],
+    [
+      "an invalid completion value",
+      { completed: "yes" },
+      "--completed must be true or false",
+    ],
+  ] as const)(
+    "reports the field-specific error for %s",
+    (_, options, message) => {
+      expect(prepareTaskUpdate("123", options)).toEqual({
+        ok: false,
+        error: { kind: "invalid_usage", message },
+      });
+    },
+  );
+
+  test.each([
+    ["name", { name: "Renamed" }, { name: "Renamed" }, false],
+    ["notes", { notes: "Replacement" }, { notes: "Replacement" }, false],
+    ["assignee GID", { assignee: "9001" }, { assignee: "9001" }, false],
+    ["assignee me", { assignee: "me" }, {}, true],
+    ["cleared assignee", { assignee: "null" }, { assignee: null }, false],
+    ["due date", { dueOn: "2028-02-29" }, { due_on: "2028-02-29" }, false],
+    ["cleared due date", { dueOn: "null" }, { due_on: null }, false],
+    ["completed", { completed: "true" }, { completed: true }, false],
+    ["incomplete", { completed: "false" }, { completed: false }, false],
+  ] as const)(
+    "prepares the %s mutation branch",
+    (_, options, mutation, resolveAssigneeMe) => {
+      expect(prepareTaskUpdate("123", options)).toEqual({
+        ok: true,
+        value: {
+          taskId: "123",
+          mutation,
+          resolveAssigneeMe,
+          customFields: [],
+        },
+      });
+    },
+  );
+
   test("prepares raw and aliased My Tasks mutations", () => {
     expect(
       prepareTaskUpdate("123", {

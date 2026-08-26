@@ -437,53 +437,70 @@ export const executeTaskParentUpdate = async (
 
 type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;
 
-const prepareTaskMutation = (
-  options: TaskUpdateOptions,
-): Result<
-  PreparedTaskMutation,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  // See prepareTaskParentUpdate: index via keys, not Object.entries(), to
-  // keep the `| undefined` that optional properties actually carry.
-  const supplied = (Object.keys(options) as (keyof typeof options)[]).some(
-    (key) => {
-      const value = options[key];
-      return (
-        value !== undefined && (key !== "customFields" || value.length > 0)
-      );
-    },
-  );
-  if (!supplied) {
-    return err({
-      kind: "invalid_usage",
-      message: "At least one task mutation is required",
-    });
-  }
-  if (options.notes !== undefined && options.notesFile !== undefined) {
-    return err({
-      kind: "invalid_usage",
-      message: "--notes and --notes-file are mutually exclusive",
-    });
-  }
-  if (
-    options.assignee !== undefined &&
-    options.assignee !== "me" &&
-    options.assignee !== "null" &&
-    !/^\d+$/.test(options.assignee)
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message: "--assignee must be me, null, or a digit-only user GID",
-    });
-  }
+type TaskMutationPreparationError = Readonly<{
+  kind: "invalid_usage";
+  message: string;
+}>;
 
-  const mySection =
-    options.mySection === undefined
-      ? undefined
-      : parseResourceSelector(options.mySection, "--my-section");
-  if (mySection && !mySection.ok) {
-    return err({ kind: "invalid_usage", message: mySection.error });
+const hasTaskMutation = (options: TaskUpdateOptions): boolean =>
+  (Object.keys(options) as (keyof typeof options)[]).some((key) => {
+    const value = options[key];
+    return value !== undefined && (key !== "customFields" || value.length > 0);
+  });
+
+const validateNotesOptions = (
+  options: TaskUpdateOptions,
+): Result<void, TaskMutationPreparationError> =>
+  options.notes !== undefined && options.notesFile !== undefined
+    ? err({
+        kind: "invalid_usage",
+        message: "--notes and --notes-file are mutually exclusive",
+      })
+    : ok(undefined);
+
+type PreparedAssignee = Readonly<{
+  mutation: Pick<TaskMutation, "assignee">;
+  resolveAssigneeMe: boolean;
+}>;
+
+const prepareAssignee = (
+  assignee: string | undefined,
+): Result<PreparedAssignee, TaskMutationPreparationError> => {
+  if (assignee === undefined) {
+    return ok({ mutation: {}, resolveAssigneeMe: false });
   }
+  if (assignee === "me") {
+    return ok({ mutation: {}, resolveAssigneeMe: true });
+  }
+  if (assignee === "null") {
+    return ok({ mutation: { assignee: null }, resolveAssigneeMe: false });
+  }
+  return /^\d+$/.test(assignee)
+    ? ok({ mutation: { assignee }, resolveAssigneeMe: false })
+    : err({
+        kind: "invalid_usage",
+        message: "--assignee must be me, null, or a digit-only user GID",
+      });
+};
+
+const prepareMySection = (
+  input: string | undefined,
+): Result<ResourceSelector | undefined, TaskMutationPreparationError> => {
+  if (input === undefined) return ok(undefined);
+  const parsed = parseResourceSelector(input, "--my-section");
+  return parsed.ok
+    ? parsed
+    : err({ kind: "invalid_usage", message: parsed.error });
+};
+
+type PreparedPlacement = Readonly<{
+  sectionGid?: string;
+  projectGid?: string;
+}>;
+
+const preparePlacement = (
+  options: Pick<TaskUpdateOptions, "section" | "project" | "mySection">,
+): Result<PreparedPlacement, TaskMutationPreparationError> => {
   if (options.section !== undefined && !/^\d+$/.test(options.section)) {
     return err({
       kind: "invalid_usage",
@@ -502,10 +519,18 @@ const prepareTaskMutation = (
       message: "--section and --my-section are mutually exclusive",
     });
   }
+  return ok({
+    ...(options.section === undefined ? {} : { sectionGid: options.section }),
+    ...(options.project === undefined ? {} : { projectGid: options.project }),
+  });
+};
 
+const prepareCustomFields = (
+  inputs: readonly string[] | undefined,
+): Result<readonly PreparedCustomField[], TaskMutationPreparationError> => {
   const customFields: PreparedCustomField[] = [];
   const seenSelectors = new Set<string>();
-  for (const input of options.customFields ?? []) {
+  for (const input of inputs ?? []) {
     const parsed = parseCustomField(input);
     if (!parsed.ok) {
       return err({ kind: "invalid_usage", message: parsed.error });
@@ -520,59 +545,98 @@ const prepareTaskMutation = (
     seenSelectors.add(selectorKey);
     customFields.push(parsed.value);
   }
-  if (
-    options.dueOn !== undefined &&
-    options.dueOn !== "null" &&
-    !realDate(options.dueOn)
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message: "--due-on must be a real YYYY-MM-DD date or null",
-    });
-  }
-  if (
-    options.completed !== undefined &&
-    options.completed !== "true" &&
-    options.completed !== "false"
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message: "--completed must be true or false",
-    });
-  }
+  return ok(customFields);
+};
 
-  const mutation: {
-    name?: string;
-    notes?: string;
-    assignee?: string | null;
-    due_on?: string | null;
-    completed?: boolean;
-  } = {};
-  if (options.name !== undefined) mutation.name = options.name;
-  if (options.notes !== undefined) mutation.notes = options.notes;
-  if (options.assignee === "null") {
-    mutation.assignee = null;
-  } else if (options.assignee !== undefined && options.assignee !== "me") {
-    mutation.assignee = options.assignee;
-  }
-  if (options.dueOn !== undefined) {
-    mutation.due_on = options.dueOn === "null" ? null : options.dueOn;
-  }
-  if (options.completed !== undefined) {
-    mutation.completed = options.completed === "true";
-  }
+const prepareDueDate = (
+  dueOn: string | undefined,
+): Result<Pick<TaskMutation, "due_on">, TaskMutationPreparationError> => {
+  if (dueOn === undefined) return ok({});
+  if (dueOn === "null") return ok({ due_on: null });
+  return realDate(dueOn)
+    ? ok({ due_on: dueOn })
+    : err({
+        kind: "invalid_usage",
+        message: "--due-on must be a real YYYY-MM-DD date or null",
+      });
+};
 
-  return ok({
-    mutation,
-    ...(options.notesFile === undefined
-      ? {}
-      : { notesFile: options.notesFile }),
-    resolveAssigneeMe: options.assignee === "me",
-    ...(mySection?.ok ? { mySection: mySection.value } : {}),
-    ...(options.section === undefined ? {} : { sectionGid: options.section }),
-    ...(options.project === undefined ? {} : { projectGid: options.project }),
-    customFields,
+const prepareCompletion = (
+  completed: string | undefined,
+): Result<Pick<TaskMutation, "completed">, TaskMutationPreparationError> => {
+  if (completed === undefined) return ok({});
+  if (completed === "true") return ok({ completed: true });
+  if (completed === "false") return ok({ completed: false });
+  return err({
+    kind: "invalid_usage",
+    message: "--completed must be true or false",
   });
+};
+
+type PreparedTaskMutationParts = Readonly<{
+  assignee: PreparedAssignee;
+  mySection: ResourceSelector | undefined;
+  placement: PreparedPlacement;
+  customFields: readonly PreparedCustomField[];
+  dueDate: Pick<TaskMutation, "due_on">;
+  completion: Pick<TaskMutation, "completed">;
+}>;
+
+const assembleTaskMutation = (
+  options: TaskUpdateOptions,
+  parts: PreparedTaskMutationParts,
+): PreparedTaskMutation => ({
+  mutation: {
+    ...(options.name === undefined ? {} : { name: options.name }),
+    ...(options.notes === undefined ? {} : { notes: options.notes }),
+    ...parts.assignee.mutation,
+    ...parts.dueDate,
+    ...parts.completion,
+  },
+  ...(options.notesFile === undefined ? {} : { notesFile: options.notesFile }),
+  resolveAssigneeMe: parts.assignee.resolveAssigneeMe,
+  ...(parts.mySection === undefined ? {} : { mySection: parts.mySection }),
+  ...parts.placement,
+  customFields: parts.customFields,
+});
+
+const prepareTaskMutation = (
+  options: TaskUpdateOptions,
+): Result<PreparedTaskMutation, TaskMutationPreparationError> => {
+  // See prepareTaskParentUpdate: index via keys, not Object.entries(), to
+  // keep the `| undefined` that optional properties actually carry.
+  if (!hasTaskMutation(options)) {
+    return err({
+      kind: "invalid_usage",
+      message: "At least one task mutation is required",
+    });
+  }
+
+  const notes = validateNotesOptions(options);
+  if (!notes.ok) return notes;
+  const assignee = prepareAssignee(options.assignee);
+  if (!assignee.ok) return assignee;
+  const mySection = prepareMySection(options.mySection);
+  if (!mySection.ok) return mySection;
+  const placement = preparePlacement(options);
+  if (!placement.ok) return placement;
+  const customFields = prepareCustomFields(options.customFields);
+  if (!customFields.ok) return customFields;
+  const dueDate = prepareDueDate(options.dueOn);
+  if (!dueDate.ok) return dueDate;
+  const completion = prepareCompletion(options.completed);
+  if (!completion.ok) return completion;
+
+  return ok(
+    assembleTaskMutation(options, {
+      assignee: assignee.value,
+      mySection: mySection.value,
+      placement: placement.value,
+      customFields: customFields.value,
+      dueDate: dueDate.value,
+      completion: completion.value,
+    }),
+  );
 };
 
 const parseTaskCreateInput = (
