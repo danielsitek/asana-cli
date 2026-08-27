@@ -738,9 +738,11 @@ export type StageFailureError = Readonly<{
 
 type LocalConfigInitError = ConfigError | DiscoveryError | StageFailureError;
 
+type ConfigFileOperations = NonNullable<ConfigContext["fileOperations"]>;
+
 type LocalConfigFileOperations = Readonly<{
-  renameFile: (oldPath: string, newPath: string) => Promise<void>;
-  stageFile: (path: string, content: string) => Promise<void>;
+  renameFile: NonNullable<ConfigFileOperations["rename"]>;
+  stageFile: NonNullable<ConfigFileOperations["stageWrite"]>;
 }>;
 
 type LocalConfigEnvironment = Readonly<{
@@ -816,7 +818,7 @@ const buildAliasMap = (
         message: `Generated alias is empty for ${resourceLabel} "${resource.name}"`,
       });
     }
-    if (aliases[alias] !== undefined) {
+    if (Object.hasOwn(aliases, alias)) {
       return err({
         kind: "configuration",
         message: `Colliding alias "${alias}" generated for ${resourceLabel} "${resource.name}"`,
