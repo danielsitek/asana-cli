@@ -736,19 +736,34 @@ export type StageFailureError = Readonly<{
   failed: readonly string[];
 }>;
 
-export const initializeLocalConfig = async (
+type LocalConfigInitError = ConfigError | DiscoveryError | StageFailureError;
+
+type ConfigFileOperations = NonNullable<ConfigContext["fileOperations"]>;
+
+type LocalConfigFileOperations = Readonly<{
+  renameFile: NonNullable<ConfigFileOperations["rename"]>;
+  stageFile: NonNullable<ConfigFileOperations["stageWrite"]>;
+}>;
+
+type LocalConfigEnvironment = Readonly<{
+  resolvedConfig: ResolvedConfig;
+  gitRoot: string;
+  workspaceGid: string;
+  shouldWriteGitignore: boolean;
+  fileOperations: LocalConfigFileOperations;
+}>;
+
+const resolveLocalConfigFileOperations = (
   context: ConfigContext,
-  token: string,
-  discovery: MyTasksDiscoveryGateway,
-  options: { writeGitignore?: boolean },
-): Promise<
-  Result<
-    LocalConfigInitResult,
-    ConfigError | DiscoveryError | StageFailureError
-  >
-> => {
-  const renameFn = context.fileOperations?.rename ?? rename;
-  const stageWriteFn = context.fileOperations?.stageWrite ?? stageWrite;
+): LocalConfigFileOperations => ({
+  renameFile: context.fileOperations?.rename ?? rename,
+  stageFile: context.fileOperations?.stageWrite ?? stageWrite,
+});
+
+const prepareLocalConfigEnvironment = async (
+  context: ConfigContext,
+  writeGitignore: boolean,
+): Promise<Result<LocalConfigEnvironment, ConfigError>> => {
   const resolvedConfigResult = await resolveConfig(context);
   if (!resolvedConfigResult.ok) return resolvedConfigResult;
   const resolvedConfig = resolvedConfigResult.value;
@@ -762,7 +777,7 @@ export const initializeLocalConfig = async (
   }
 
   const isIgnored = await localFileIsIgnored(gitRoot);
-  if (!isIgnored && !options.writeGitignore) {
+  if (!isIgnored && !writeGitignore) {
     return err({
       kind: "configuration",
       message:
@@ -779,176 +794,286 @@ export const initializeLocalConfig = async (
     });
   }
 
-  const discoveryResult = await discovery.discoverMyTasks(token, workspaceGid);
-  if (!discoveryResult.ok) return discoveryResult;
+  return ok({
+    resolvedConfig,
+    gitRoot,
+    workspaceGid,
+    shouldWriteGitignore: !isIgnored,
+    fileOperations: resolveLocalConfigFileOperations(context),
+  });
+};
 
-  const discovered = discoveryResult.value;
+type AliasResource = Readonly<{ gid: string; name: string }>;
 
-  const sectionsMap: Record<string, string> = {};
-  for (const section of discovered.sections) {
-    const alias = generateAlias(section.name);
+const buildAliasMap = (
+  resources: readonly AliasResource[],
+  resourceLabel: "section" | "custom field",
+): Result<Record<string, string>, ConfigError> => {
+  const aliases: Record<string, string> = {};
+  for (const resource of resources) {
+    const alias = generateAlias(resource.name);
     if (!alias) {
       return err({
         kind: "configuration",
-        message: `Generated alias is empty for section "${section.name}"`,
+        message: `Generated alias is empty for ${resourceLabel} "${resource.name}"`,
       });
     }
-    if (sectionsMap[alias] !== undefined) {
+    if (Object.hasOwn(aliases, alias)) {
       return err({
         kind: "configuration",
-        message: `Colliding alias "${alias}" generated for section "${section.name}"`,
+        message: `Colliding alias "${alias}" generated for ${resourceLabel} "${resource.name}"`,
       });
     }
-    sectionsMap[alias] = section.gid;
+    aliases[alias] = resource.gid;
   }
+  return ok(aliases);
+};
 
-  const customFieldsMap: Record<string, string> = {};
+const sortAliasMap = (
+  aliases: Readonly<Record<string, string>>,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(aliases).sort(([a], [b]) => codeUnitCompare(a, b)),
+  );
+
+const prepareDiscoveredMyTasks = (
+  discovered: DiscoveredMyTasks,
+): Result<LocalConfigInitResult["myTasks"], ConfigError> => {
+  const sections = buildAliasMap(discovered.sections, "section");
+  if (!sections.ok) return sections;
+
   const writableFields = discovered.customFields.filter(
-    (cf) =>
-      (cf.resourceSubtype === "number" || cf.resourceSubtype === "enum") &&
-      !cf.isReadOnly,
+    (field) =>
+      (field.resourceSubtype === "number" ||
+        field.resourceSubtype === "enum") &&
+      !field.isReadOnly,
   );
-  for (const field of writableFields) {
-    const alias = generateAlias(field.name);
-    if (!alias) {
-      return err({
-        kind: "configuration",
-        message: `Generated alias is empty for custom field "${field.name}"`,
-      });
-    }
-    if (customFieldsMap[alias] !== undefined) {
-      return err({
-        kind: "configuration",
-        message: `Colliding alias "${alias}" generated for custom field "${field.name}"`,
-      });
-    }
-    customFieldsMap[alias] = field.gid;
-  }
+  const customFields = buildAliasMap(writableFields, "custom field");
+  if (!customFields.ok) return customFields;
 
-  const sortedSections = Object.fromEntries(
-    Object.entries(sectionsMap).sort(([a], [b]) => codeUnitCompare(a, b)),
-  );
-  const sortedCustomFields = Object.fromEntries(
-    Object.entries(customFieldsMap).sort(([a], [b]) => codeUnitCompare(a, b)),
-  );
+  return ok({
+    userTaskListGid: discovered.userTaskListGid,
+    sections: sortAliasMap(sections.value),
+    customFields: sortAliasMap(customFields.value),
+  });
+};
 
+type PreparedLocalConfig = Readonly<{
+  path: string;
+  value: JsonObject;
+  myTasks: LocalConfigInitResult["myTasks"];
+}>;
+
+const prepareLocalConfigValue = async (
+  resolvedConfig: ResolvedConfig,
+  myTasks: LocalConfigInitResult["myTasks"],
+): Promise<Result<PreparedLocalConfig, ConfigError>> => {
   const pathResult = targetPath(resolvedConfig, "local");
   if (!pathResult.ok) return pathResult;
   const existingLocal = await readLayer(pathResult.value, localConfigSchema);
   if (!existingLocal.ok) return existingLocal;
 
-  const updatedLocal = {
-    ...existingLocal.value,
-    myTasks: {
-      userTaskListGid: discovered.userTaskListGid,
-      sections: sortedSections,
-      customFields: sortedCustomFields,
-    },
-  };
-
   const validated = validationMessage(
     pathResult.value,
-    updatedLocal,
+    { ...existingLocal.value, myTasks },
     localConfigSchema,
   );
   if (!validated.ok) return validated;
+  return ok({ path: pathResult.value, value: validated.value, myTasks });
+};
 
-  const tempFilesToCleanup: string[] = [];
-  const shouldWriteGitignore = !isIgnored && options.writeGitignore;
-  const gitignorePath = join(gitRoot, ".gitignore");
-  let tempGitignorePath: string | undefined;
+const isUnexpectedGitignoreReadError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code !== "ENOENT";
 
-  if (shouldWriteGitignore) {
-    let currentContent = "";
-    try {
-      currentContent = await readFile(gitignorePath, "utf8");
-    } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code !== "ENOENT"
-      ) {
-        return err({
+const readGitignoreContent = async (
+  gitignorePath: string,
+): Promise<Result<string, ConfigError>> => {
+  try {
+    return ok(await readFile(gitignorePath, "utf8"));
+  } catch (error) {
+    return isUnexpectedGitignoreReadError(error)
+      ? err({
           kind: "configuration",
           message: `${gitignorePath}: could not be read`,
-        });
-      }
-    }
-
-    let newContent = currentContent;
-    if (newContent.length > 0 && !newContent.endsWith("\n")) {
-      newContent += "\n";
-    }
-    newContent += "/.asana-cli.local.json\n";
-
-    tempGitignorePath = join(gitRoot, `.gitignore.${randomUUID()}.tmp`);
-    try {
-      await stageWriteFn(tempGitignorePath, newContent);
-      tempFilesToCleanup.push(tempGitignorePath);
-    } catch {
-      await cleanupTempFiles([...tempFilesToCleanup, tempGitignorePath]);
-      return err({
-        kind: "configuration",
-        message: `${gitignorePath}: could not be written`,
-      });
-    }
+        })
+      : ok("");
   }
+};
 
-  const localConfigPath = pathResult.value;
-  const tempLocalConfigPath = join(
-    dirname(localConfigPath),
+const appendLocalConfigIgnoreRule = (currentContent: string): string => {
+  const separator =
+    currentContent.length > 0 && !currentContent.endsWith("\n") ? "\n" : "";
+  return `${currentContent}${separator}/.asana-cli.local.json\n`;
+};
+
+type StagedGitignore = Readonly<{
+  path: string;
+  temporaryPath: string;
+}>;
+
+const stageGitignore = async (
+  gitRoot: string,
+  stageFile: LocalConfigFileOperations["stageFile"],
+): Promise<Result<StagedGitignore, ConfigError>> => {
+  const path = join(gitRoot, ".gitignore");
+  const content = await readGitignoreContent(path);
+  if (!content.ok) return content;
+
+  const temporaryPath = join(gitRoot, `.gitignore.${randomUUID()}.tmp`);
+  try {
+    await stageFile(temporaryPath, appendLocalConfigIgnoreRule(content.value));
+    return ok({ path, temporaryPath });
+  } catch {
+    await cleanupTempFiles([temporaryPath]);
+    return err({
+      kind: "configuration",
+      message: `${path}: could not be written`,
+    });
+  }
+};
+
+const stageLocalConfig = async (
+  localConfig: PreparedLocalConfig,
+  stageFile: LocalConfigFileOperations["stageFile"],
+  priorTemporaryPaths: readonly string[],
+): Promise<Result<string, ConfigError>> => {
+  const temporaryPath = join(
+    dirname(localConfig.path),
     `.asana-cli.local.json.${randomUUID()}.tmp`,
   );
   try {
-    const contentString = JSON.stringify(validated.value, null, 2) + "\n";
-    await stageWriteFn(tempLocalConfigPath, contentString);
-    tempFilesToCleanup.push(tempLocalConfigPath);
+    await stageFile(
+      temporaryPath,
+      `${JSON.stringify(localConfig.value, null, 2)}\n`,
+    );
+    return ok(temporaryPath);
   } catch {
-    await cleanupTempFiles([...tempFilesToCleanup, tempLocalConfigPath]);
+    await cleanupTempFiles([...priorTemporaryPaths, temporaryPath]);
     return err({
       kind: "configuration",
-      message: `${localConfigPath}: could not be written`,
+      message: `${localConfig.path}: could not be written`,
     });
   }
+};
 
-  if (shouldWriteGitignore && tempGitignorePath) {
+const untrackTemporaryPath = (paths: string[], path: string): void => {
+  const index = paths.indexOf(path);
+  if (index !== -1) paths.splice(index, 1);
+};
+
+const commitLocalConfigFiles = async (
+  localConfigPath: string,
+  temporaryLocalConfigPath: string,
+  stagedGitignore: StagedGitignore | undefined,
+  renameFile: LocalConfigFileOperations["renameFile"],
+): Promise<Result<void, ConfigError | StageFailureError>> => {
+  const temporaryPaths = [
+    ...(stagedGitignore ? [stagedGitignore.temporaryPath] : []),
+    temporaryLocalConfigPath,
+  ];
+
+  if (stagedGitignore) {
     try {
-      await renameFn(tempGitignorePath, gitignorePath);
-      const idx = tempFilesToCleanup.indexOf(tempGitignorePath);
-      if (idx !== -1) tempFilesToCleanup.splice(idx, 1);
+      await renameFile(stagedGitignore.temporaryPath, stagedGitignore.path);
+      untrackTemporaryPath(temporaryPaths, stagedGitignore.temporaryPath);
     } catch {
-      await cleanupTempFiles(tempFilesToCleanup);
+      await cleanupTempFiles(temporaryPaths);
       return err({
         kind: "configuration",
-        message: `${gitignorePath}: could not be renamed`,
+        message: `${stagedGitignore.path}: could not be renamed`,
       });
     }
   }
 
   try {
-    await renameFn(tempLocalConfigPath, localConfigPath);
-    const idx = tempFilesToCleanup.indexOf(tempLocalConfigPath);
-    if (idx !== -1) tempFilesToCleanup.splice(idx, 1);
+    await renameFile(temporaryLocalConfigPath, localConfigPath);
+    untrackTemporaryPath(temporaryPaths, temporaryLocalConfigPath);
+    return ok(undefined);
   } catch {
-    await cleanupTempFiles(tempFilesToCleanup);
-    if (shouldWriteGitignore) {
-      return err({
-        kind: "stage_failure",
-        message: `${localConfigPath}: could not be renamed after writing ${gitignorePath}`,
-        completed: ["gitignore"],
-        failed: ["local_config"],
-      });
-    }
-    return err({
-      kind: "configuration",
-      message: `${localConfigPath}: could not be renamed`,
-    });
+    await cleanupTempFiles(temporaryPaths);
+    return stagedGitignore
+      ? err({
+          kind: "stage_failure",
+          message: `${localConfigPath}: could not be renamed after writing ${stagedGitignore.path}`,
+          completed: ["gitignore"],
+          failed: ["local_config"],
+        })
+      : err({
+          kind: "configuration",
+          message: `${localConfigPath}: could not be renamed`,
+        });
   }
+};
+
+const writeLocalConfigFiles = async (
+  environment: LocalConfigEnvironment,
+  localConfig: PreparedLocalConfig,
+): Promise<Result<void, ConfigError | StageFailureError>> => {
+  let stagedGitignore: StagedGitignore | undefined;
+  if (environment.shouldWriteGitignore) {
+    const staged = await stageGitignore(
+      environment.gitRoot,
+      environment.fileOperations.stageFile,
+    );
+    if (!staged.ok) return staged;
+    stagedGitignore = staged.value;
+  }
+
+  const priorTemporaryPaths = stagedGitignore
+    ? [stagedGitignore.temporaryPath]
+    : [];
+  const stagedLocalConfig = await stageLocalConfig(
+    localConfig,
+    environment.fileOperations.stageFile,
+    priorTemporaryPaths,
+  );
+  if (!stagedLocalConfig.ok) return stagedLocalConfig;
+
+  return commitLocalConfigFiles(
+    localConfig.path,
+    stagedLocalConfig.value,
+    stagedGitignore,
+    environment.fileOperations.renameFile,
+  );
+};
+
+export const initializeLocalConfig = async (
+  context: ConfigContext,
+  token: string,
+  discovery: MyTasksDiscoveryGateway,
+  options: { writeGitignore?: boolean },
+): Promise<Result<LocalConfigInitResult, LocalConfigInitError>> => {
+  const environment = await prepareLocalConfigEnvironment(
+    context,
+    options.writeGitignore === true,
+  );
+  if (!environment.ok) return environment;
+
+  const discoveryResult = await discovery.discoverMyTasks(
+    token,
+    environment.value.workspaceGid,
+  );
+  if (!discoveryResult.ok) return discoveryResult;
+
+  const myTasks = prepareDiscoveredMyTasks(discoveryResult.value);
+  if (!myTasks.ok) return myTasks;
+  const localConfig = await prepareLocalConfigValue(
+    environment.value.resolvedConfig,
+    myTasks.value,
+  );
+  if (!localConfig.ok) return localConfig;
+  const written = await writeLocalConfigFiles(
+    environment.value,
+    localConfig.value,
+  );
+  if (!written.ok) return written;
 
   return ok({
     layer: "local",
-    path: localConfigPath,
-    myTasks: updatedLocal.myTasks,
+    path: localConfig.value.path,
+    myTasks: localConfig.value.myTasks,
   });
 };
