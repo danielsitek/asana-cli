@@ -17,13 +17,15 @@ type HomebrewFormulaOptions = Readonly<{
   baseUrl?: string;
 }>;
 
-type PreparedHomebrewFormula = Readonly<{
+type PreparedHomebrewFormulaOptions = Readonly<{
   baseUrl: string;
-  checksums: Readonly<Record<ReleaseTarget, string>>;
   repository: string;
   version: string;
   includeVersion: boolean;
 }>;
+
+type PreparedHomebrewFormula = PreparedHomebrewFormulaOptions &
+  Readonly<{ checksums: Readonly<Record<ReleaseTarget, string>> }>;
 
 const parseChecksums = (
   manifest: string,
@@ -62,22 +64,19 @@ const parseChecksums = (
   return Object.fromEntries(checksums) as Record<ReleaseTarget, string>;
 };
 
-const prepareHomebrewFormula = async (
+const prepareHomebrewFormulaOptions = (
   options: HomebrewFormulaOptions,
-): Promise<PreparedHomebrewFormula> => {
+): PreparedHomebrewFormulaOptions => {
   const version = versionSchema.parse(options.version);
   const repository = options.repository ?? "danielsitek/asana-cli";
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("Repository must use owner/name format");
   }
-  const manifest = await Bun.file(resolve(options.checksumPath)).text();
-  const checksums = parseChecksums(manifest, version);
   const baseUrl =
     options.baseUrl ??
     `https://github.com/${repository}/releases/download/v${version}`;
   return {
     baseUrl,
-    checksums,
     repository,
     version,
     includeVersion: options.baseUrl !== undefined,
@@ -123,8 +122,10 @@ end
 export const generateHomebrewFormula = async (
   options: HomebrewFormulaOptions,
 ): Promise<string> => {
-  const input = await prepareHomebrewFormula(options);
-  const formula = renderHomebrewFormula(input);
+  const preparedOptions = prepareHomebrewFormulaOptions(options);
+  const manifest = await Bun.file(resolve(options.checksumPath)).text();
+  const checksums = parseChecksums(manifest, preparedOptions.version);
+  const formula = renderHomebrewFormula({ ...preparedOptions, checksums });
   const outputPath = resolve(options.outputPath);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, formula);
