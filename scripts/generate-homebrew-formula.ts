@@ -9,6 +9,24 @@ const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const releaseTargetNames = Object.keys(releaseTargets) as ReleaseTarget[];
 
+type HomebrewFormulaOptions = Readonly<{
+  checksumPath: string;
+  outputPath: string;
+  version: string;
+  repository?: string;
+  baseUrl?: string;
+}>;
+
+type PreparedHomebrewFormulaOptions = Readonly<{
+  baseUrl: string;
+  repository: string;
+  version: string;
+  includeVersion: boolean;
+}>;
+
+type PreparedHomebrewFormula = PreparedHomebrewFormulaOptions &
+  Readonly<{ checksums: Readonly<Record<ReleaseTarget, string>> }>;
+
 const parseChecksums = (
   manifest: string,
   version: string,
@@ -46,31 +64,32 @@ const parseChecksums = (
   return Object.fromEntries(checksums) as Record<ReleaseTarget, string>;
 };
 
-export const generateHomebrewFormula = async (
-  options: Readonly<{
-    checksumPath: string;
-    outputPath: string;
-    version: string;
-    repository?: string;
-    baseUrl?: string;
-  }>,
-): Promise<string> => {
+const prepareHomebrewFormulaOptions = (
+  options: HomebrewFormulaOptions,
+): PreparedHomebrewFormulaOptions => {
   const version = versionSchema.parse(options.version);
   const repository = options.repository ?? "danielsitek/asana-cli";
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("Repository must use owner/name format");
   }
-  const manifest = await Bun.file(resolve(options.checksumPath)).text();
-  const checksums = parseChecksums(manifest, version);
   const baseUrl =
     options.baseUrl ??
     `https://github.com/${repository}/releases/download/v${version}`;
+  return {
+    baseUrl,
+    repository,
+    version,
+    includeVersion: options.baseUrl !== undefined,
+  };
+};
+
+const renderHomebrewFormula = (input: PreparedHomebrewFormula): string => {
+  const { baseUrl, checksums, repository, version } = input;
   const archiveUrl = (target: ReleaseTarget) =>
     `${baseUrl}/asana-cli-v${version}-${target}.tar.gz`;
-  const versionLine =
-    options.baseUrl === undefined ? "" : `  version "${version}"\n`;
+  const versionLine = input.includeVersion ? `  version "${version}"\n` : "";
 
-  const formula = `class AsanaCli < Formula
+  return `class AsanaCli < Formula
   desc "Command-line interface for safe Asana task workflows"
   homepage "https://github.com/${repository}"
 ${versionLine}  license "MIT"
@@ -98,6 +117,15 @@ ${versionLine}  license "MIT"
   end
 end
 `;
+};
+
+export const generateHomebrewFormula = async (
+  options: HomebrewFormulaOptions,
+): Promise<string> => {
+  const preparedOptions = prepareHomebrewFormulaOptions(options);
+  const manifest = await Bun.file(resolve(options.checksumPath)).text();
+  const checksums = parseChecksums(manifest, preparedOptions.version);
+  const formula = renderHomebrewFormula({ ...preparedOptions, checksums });
   const outputPath = resolve(options.outputPath);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, formula);
