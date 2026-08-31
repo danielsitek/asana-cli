@@ -1762,6 +1762,7 @@ describe("AsanaHttpClient", () => {
       expect(await request.json()).toEqual({
         data: {
           name: "Section task",
+          projects: ["800"],
           memberships: [{ project: "800", section: "456" }],
         },
       });

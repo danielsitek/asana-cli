@@ -995,6 +995,7 @@ export class AsanaHttpClient
           : target.kind === "section"
             ? {
                 ...mutation,
+                projects: [sectionProjectGid],
                 memberships: [
                   {
                     project: sectionProjectGid,
