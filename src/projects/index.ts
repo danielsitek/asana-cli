@@ -205,76 +205,113 @@ type BoundedPage<Item> = Readonly<{
   nextOffset?: string;
 }>;
 
-const executeBoundedPages = async <Item, Error>(
+type BoundedPageProgress =
+  | Readonly<{
+      kind: "complete";
+      scanned: number;
+      scanTruncated: boolean;
+      nextOffset?: string;
+    }>
+  | Readonly<{ kind: "continue"; scanned: number; offset: string }>;
+
+const boundedPaginationAdvanced = <Item>(
+  page: BoundedPage<Item>,
+  requestedOffsets: ReadonlySet<string>,
+): boolean =>
+  page.nextOffset === undefined ||
+  (page.items.length > 0 && !requestedOffsets.has(page.nextOffset));
+
+const processBoundedPage = <Item>(
+  page: BoundedPage<Item>,
+  prepared: PreparedBoundedList,
+  items: Item[],
+  previouslyScanned: number,
+): BoundedPageProgress => {
+  const remaining = prepared.scanCap - previouslyScanned;
+  const withinBudget = page.items.slice(0, remaining);
+  let scanned = previouslyScanned;
+
+  for (const [index, item] of withinBudget.entries()) {
+    scanned += 1;
+    items.push(item);
+    if (
+      prepared.resultCap !== undefined &&
+      items.length >= prepared.resultCap
+    ) {
+      const stoppedMidPage = index < page.items.length - 1;
+      return {
+        kind: "complete",
+        scanned,
+        scanTruncated:
+          scanned >= prepared.scanCap &&
+          (stoppedMidPage || page.nextOffset !== undefined),
+        ...(stoppedMidPage || page.nextOffset === undefined
+          ? {}
+          : { nextOffset: page.nextOffset }),
+      };
+    }
+  }
+
+  if (scanned >= prepared.scanCap) {
+    const pageExceedsBudget = page.items.length > withinBudget.length;
+    return {
+      kind: "complete",
+      scanned,
+      scanTruncated: pageExceedsBudget || page.nextOffset !== undefined,
+      ...(pageExceedsBudget || page.nextOffset === undefined
+        ? {}
+        : { nextOffset: page.nextOffset }),
+    };
+  }
+  return page.nextOffset === undefined
+    ? { kind: "complete", scanned, scanTruncated: false }
+    : { kind: "continue", scanned, offset: page.nextOffset };
+};
+
+const completeBoundedList = <Item>(
+  items: readonly Item[],
+  progress: Extract<BoundedPageProgress, Readonly<{ kind: "complete" }>>,
+): Readonly<{ items: readonly Item[]; meta: ProjectListMeta }> => ({
+  items,
+  meta: {
+    scanned: progress.scanned,
+    returned: items.length,
+    scan_truncated: progress.scanTruncated,
+    ...(progress.nextOffset === undefined
+      ? {}
+      : { next_offset: progress.nextOffset }),
+  },
+});
+
+const executeBoundedPages = async <Item, Failure>(
   prepared: PreparedBoundedList,
   readPage: (
     limit: number,
     offset?: string,
-  ) => Promise<Result<BoundedPage<Item>, Error>>,
-  paginationError: Error,
+  ) => Promise<Result<BoundedPage<Item>, Failure>>,
+  paginationError: Failure,
 ): Promise<
-  Result<Readonly<{ items: readonly Item[]; meta: ProjectListMeta }>, Error>
+  Result<Readonly<{ items: readonly Item[]; meta: ProjectListMeta }>, Failure>
 > => {
   const items: Item[] = [];
   let scanned = 0;
   let offset: string | undefined;
   const requestedOffsets = new Set<string>();
-  const complete = (
-    scanTruncated: boolean,
-    nextOffset?: string,
-  ): Result<
-    Readonly<{ items: readonly Item[]; meta: ProjectListMeta }>,
-    Error
-  > =>
-    ok({
-      items,
-      meta: {
-        scanned,
-        returned: items.length,
-        scan_truncated: scanTruncated,
-        ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
-      },
-    });
 
   for (;;) {
     if (offset !== undefined) requestedOffsets.add(offset);
-    const remaining = prepared.scanCap - scanned;
-    const page = await readPage(Math.min(100, remaining), offset);
+    const page = await readPage(
+      Math.min(100, prepared.scanCap - scanned),
+      offset,
+    );
     if (!page.ok) return page;
-    if (
-      page.value.nextOffset !== undefined &&
-      (page.value.items.length === 0 ||
-        requestedOffsets.has(page.value.nextOffset))
-    ) {
+    if (!boundedPaginationAdvanced(page.value, requestedOffsets))
       return err(paginationError);
-    }
-
-    const withinBudget = page.value.items.slice(0, remaining);
-    for (const [index, item] of withinBudget.entries()) {
-      scanned += 1;
-      items.push(item);
-      if (
-        prepared.resultCap !== undefined &&
-        items.length >= prepared.resultCap
-      ) {
-        const stoppedMidPage = index < page.value.items.length - 1;
-        return complete(
-          scanned >= prepared.scanCap &&
-            (stoppedMidPage || page.value.nextOffset !== undefined),
-          stoppedMidPage ? undefined : page.value.nextOffset,
-        );
-      }
-    }
-
-    if (scanned >= prepared.scanCap) {
-      const pageExceedsBudget = page.value.items.length > withinBudget.length;
-      return complete(
-        pageExceedsBudget || page.value.nextOffset !== undefined,
-        pageExceedsBudget ? undefined : page.value.nextOffset,
-      );
-    }
-    if (page.value.nextOffset === undefined) return complete(false);
-    offset = page.value.nextOffset;
+    const progress = processBoundedPage(page.value, prepared, items, scanned);
+    if (progress.kind === "complete")
+      return ok(completeBoundedList(items, progress));
+    scanned = progress.scanned;
+    offset = progress.offset;
   }
 };
 
