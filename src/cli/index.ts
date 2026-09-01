@@ -78,16 +78,22 @@ import {
   renderProjectList,
   renderProjectDetail,
   renderProjectListScanWarning,
+  renderProjectSectionList,
+  renderProjectSectionListScanWarning,
   renderWorkspaceList,
 } from "../output/index.ts";
 import {
   executeProjectList,
+  executeProjectSectionList,
   DEFAULT_PROJECT_FIELDS,
+  DEFAULT_PROJECT_SECTION_FIELDS,
   parseProjectGid,
   prepareProjectList,
+  prepareProjectSectionList,
   type ProjectGateway,
   type ProjectReadGateway,
   type ProjectReadError,
+  type ProjectSectionGateway,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
@@ -117,6 +123,7 @@ export type ExecuteDependencies = Readonly<{
   workspaceReader?: WorkspaceGateway;
   projectReader?: ProjectGateway;
   projectDetailReader?: ProjectReadGateway;
+  projectSectionReader?: ProjectSectionGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -1336,6 +1343,85 @@ export const execute = async (
 
   projectsGet.exitOverride();
   projectsGet.configureOutput(captureOutput);
+
+  const projectsSections = projects
+    .command("sections")
+    .argument(PROJECT_ID_ARGUMENT, "project GID")
+    .description("list a project's sections")
+    .addOption(new Option("--max <n>", "cap sections scanned"))
+    .option("--all", "return all sections within the scan cap")
+    .action(
+      async (
+        idArg: string,
+        options: Readonly<{ max?: string; all?: boolean }>,
+      ) => {
+        invokedState.value = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+
+        const fieldsInput = program.opts<{ fields?: string }>().fields;
+        const validatedFields =
+          fieldsInput === undefined
+            ? { ok: true as const, value: DEFAULT_PROJECT_SECTION_FIELDS }
+            : validateFieldList(fieldsInput);
+        if (!validatedFields.ok) {
+          result = usageError(validatedFields.error);
+          return;
+        }
+        const prepared = prepareProjectSectionList({
+          projectGid: idArg,
+          ...options,
+          fields: validatedFields.value,
+        });
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+
+        const token = requireToken(dependencies);
+        if (!token.ok) {
+          stopWith(token.error);
+          return;
+        }
+        if (!dependencies.projectSectionReader) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Project section reader is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+
+        const listed = await executeProjectSectionList(
+          token.value,
+          prepared.value,
+          { reader: dependencies.projectSectionReader },
+        );
+        if (!listed.ok) {
+          result = renderProjectReadFailure(listed.error.kind);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(listed.value.sections, listed.value.meta)
+            : renderProjectSectionList(
+                listed.value.sections,
+                prepared.value.fields,
+              ),
+          stderr: json
+            ? ""
+            : renderProjectSectionListScanWarning(
+                listed.value.meta.scan_truncated,
+              ),
+          exitCode: 0,
+        };
+      },
+    );
+
+  projectsSections.exitOverride();
+  projectsSections.configureOutput(captureOutput);
 
   const projectsList = projects.command("list");
   projectsList.description("list projects visible in a workspace");

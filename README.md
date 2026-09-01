@@ -285,6 +285,12 @@ command fails with exit 2.
 - Reads one project by digit-only GID.
 - Default fields: `gid,name,archived`; use `--fields=<comma-separated>` to select others.
 
+### `projects sections`
+
+- `projects sections <gid>` lists visible sections in API order.
+- Bounded like `projects list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
+- Default fields: `gid,name`; use `--fields=<comma-separated>` to select others.
+
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
@@ -301,7 +307,7 @@ command fails with exit 2.
 
 ### Output (`--json` / `--fields`)
 
-- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`, and `projects get`.
+- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`, `projects get`, and `projects sections`.
 - `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
@@ -354,7 +360,7 @@ credentials, or the Asana API.
 
 - The CLI is non-interactive; missing required input fails immediately.
 - Reads are bounded; complete traversal requires `--max=<n>` with `--all` for
-  `tasks comments`, `tasks list`, and `projects list`.
+  `tasks comments`, `tasks list`, `projects list`, and `projects sections`.
 - `tasks comments --latest=<n>` returns only the globally newest `n` comments,
   newest first, and requires an explicit `--max=<scan-cap>`; it is mutually
   exclusive with `--all` and `--offset`. If the cap is reached before the

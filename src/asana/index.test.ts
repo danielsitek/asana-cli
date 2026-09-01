@@ -2573,6 +2573,89 @@ describe("AsanaHttpClient projects", () => {
     expect(attempts).toBe(1);
   });
 
+  test("lists project sections with exact query and selected fields", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("authorization")).toBe("Bearer token");
+      expect(url.pathname).toBe("/api/1.0/projects/123/sections");
+      expect(url.searchParams.get("limit")).toBe("25");
+      expect(url.searchParams.get("offset")).toBe("page-2");
+      expect(url.searchParams.get("opt_fields")).toBe("name,gid");
+      return Response.json({
+        data: [{ gid: "1", name: "Planning", resource_type: "section" }],
+        next_page: { offset: "page-3", path: "/ignored" },
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listProjectSections({
+      token: "token",
+      projectGid: "123",
+      limit: 25,
+      offset: "page-2",
+      fields: ["name", "gid"],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        sections: [{ name: "Planning", gid: "1" }],
+        nextOffset: "page-3",
+      },
+    });
+  });
+
+  test("rejects malformed project sections, offsets, and request values", async () => {
+    let attempts = 0;
+    let response: unknown = { data: [{ gid: "not-a-gid", name: "Bad" }] };
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json(response);
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const request = {
+      token: "token",
+      projectGid: "123",
+      limit: 100,
+      fields: ["gid", "name"],
+    } as const;
+
+    expect((await client.listProjectSections(request)).ok).toBe(false);
+    response = { data: [{ gid: "1" }] };
+    expect((await client.listProjectSections(request)).ok).toBe(false);
+    response = {
+      data: [{ gid: "1", name: "Fine" }],
+      next_page: { offset: "" },
+    };
+    expect((await client.listProjectSections(request)).ok).toBe(false);
+    expect(
+      (
+        await client.listProjectSections({
+          ...request,
+          projectGid: "bad",
+        })
+      ).ok,
+    ).toBe(false);
+    for (const limit of [0, 101, 1.5]) {
+      expect((await client.listProjectSections({ ...request, limit })).ok).toBe(
+        false,
+      );
+    }
+    expect(attempts).toBe(3);
+  });
+
+  test("maps a missing project section collection to not_found", async () => {
+    const baseUrl = serverFor(() => new Response(null, { status: 404 }));
+    const result = await new AsanaHttpClient({ baseUrl }).listProjectSections({
+      token: "token",
+      projectGid: "123",
+      limit: 100,
+      fields: ["gid", "name"],
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "not_found", message: "Project not found", status: 404 },
+    });
+  });
+
   test("lists workspace projects with exact pagination query and schema", async () => {
     const baseUrl = serverFor((request) => {
       const url = new URL(request.url);

@@ -24,6 +24,8 @@ import type {
   ProjectListItem,
   ProjectReadGateway,
   ProjectReadError,
+  ProjectSection,
+  ProjectSectionGateway,
 } from "../projects/index.ts";
 import {
   type Task,
@@ -150,6 +152,16 @@ const projectMatchesFields = (
 
 const buildProjectSchema = (fields: readonly string[]): z.ZodType<Project> =>
   z.custom<Project>((value) => projectMatchesFields(value, fields));
+
+const buildProjectSectionSchema = (
+  fields: readonly string[],
+): z.ZodType<ProjectSection> =>
+  z
+    .custom<ProjectSection>((value) => projectMatchesFields(value, fields))
+    .transform((value) => {
+      const selected = projectFields(value, fields);
+      return selected.found ? selected.value : value;
+    });
 
 const projectTaskFields = (
   value: unknown,
@@ -334,6 +346,7 @@ export class AsanaHttpClient
     IdentityGateway,
     MyTasksDiscoveryGateway,
     MyTaskSectionsDiscoveryGateway,
+    ProjectSectionGateway,
     TaskGateway,
     TaskCreationGateway,
     TaskListGateway,
@@ -576,6 +589,68 @@ export class AsanaHttpClient
           kind: "invalid_response",
           message: "Asana returned an invalid response",
         });
+  }
+
+  async listProjectSections(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      limit: number;
+      offset?: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<
+    Result<
+      Readonly<{ sections: readonly ProjectSection[]; nextOffset?: string }>,
+      ProjectReadError
+    >
+  > {
+    if (!isDigitOnlyGid(request.projectGid)) {
+      return err({
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      });
+    }
+    if (
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Project section page limit must be between 1 and 100",
+      });
+    }
+
+    const result = await this.#request(
+      request.token,
+      `projects/${request.projectGid}/sections`,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(request.limit),
+          opt_fields: request.fields.join(","),
+          ...(request.offset === undefined ? {} : { offset: request.offset }),
+        },
+      },
+      z.object({
+        data: z.array(buildProjectSectionSchema(request.fields)),
+        next_page: z
+          .object({ offset: z.string().min(1) })
+          .passthrough()
+          .nullable()
+          .optional(),
+      }),
+    );
+    if (!result.ok) {
+      return err(mapTaskReadError(result.error, "Project not found"));
+    }
+    return ok({
+      sections: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
   }
 
   async discoverMyTaskSections(

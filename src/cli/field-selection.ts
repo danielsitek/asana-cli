@@ -6,6 +6,7 @@ const FIELD_SELECTING_COMMANDS = new Set([
   "tasks/create",
   "tasks/list",
   "projects/get",
+  "projects/sections",
 ]);
 
 export const acceptsFieldsOptionAtPath = (commandPath: string): boolean =>
