@@ -15,6 +15,8 @@ import {
   renderTaskListScanWarning,
   renderCommentDetail,
   renderWorkspaceList,
+  renderProjectSectionList,
+  renderProjectSectionListScanWarning,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -294,5 +296,20 @@ describe("workspace output", () => {
 
   test("renderWorkspaceList renders a header-only table for an empty list", () => {
     expect(renderWorkspaceList([])).toBe("gid  name\n");
+  });
+});
+
+describe("project section output", () => {
+  test("renders selected fields in order and the bounded-read warning", () => {
+    expect(
+      renderProjectSectionList(
+        [{ gid: "1", name: "Planning" }],
+        ["name", "gid"],
+      ),
+    ).toBe("name      gid\nPlanning  1\n");
+    expect(renderProjectSectionListScanWarning(true)).toBe(
+      "Warning: section scan cap reached; more sections may exist.\n",
+    );
+    expect(renderProjectSectionListScanWarning(false)).toBe("");
   });
 });

@@ -18,6 +18,12 @@ const fixture = (): Command => {
     .command("completion <shell>")
     .description("generate shell completion script");
   program.command("workspaces").command("list").description("list workspaces");
+  program
+    .command("projects")
+    .command("sections <gid>")
+    .description("list project sections")
+    .option("--max <n>", "scan cap")
+    .option("--all", "all within cap");
   return program;
 };
 
@@ -57,6 +63,12 @@ describe("shell completion", () => {
     expect(output).toContain('COMPREPLY+=("--file=${candidate}")');
     expect(output).not.toContain("COMPREPLY=( $(compgen -f");
     expect(output).not.toContain("'workspaces/list:--fields'");
+    expect(output).toContain(
+      "'projects:sections') context='projects/sections'",
+    );
+    expect(output).toContain(
+      "'projects/sections') candidates='--json --fields --max --all -h --help'",
+    );
     expect(output).toContain(
       "'completion') candidates='bash zsh fish --json -h --help'",
     );

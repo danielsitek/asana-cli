@@ -27,6 +27,8 @@ import type {
   ProjectListError,
   ProjectReadError,
   ProjectReadGateway,
+  ProjectSection,
+  ProjectSectionGateway,
 } from "../projects/index.ts";
 import {
   DEFAULT_TASK_LIST_FIELDS,
@@ -349,6 +351,28 @@ class InMemoryProjectDetailReader implements ProjectReadGateway {
   ): Promise<Result<Project, ProjectReadError>> {
     this.calls.push(request);
     return Promise.resolve(this.response);
+  }
+}
+
+class InMemoryProjectSectionReader implements ProjectSectionGateway {
+  public readonly calls: Parameters<
+    ProjectSectionGateway["listProjectSections"]
+  >[0][] = [];
+
+  constructor(
+    private readonly pages: readonly Result<
+      Readonly<{ sections: readonly ProjectSection[]; nextOffset?: string }>,
+      ProjectReadError
+    >[],
+  ) {}
+
+  listProjectSections(
+    request: Parameters<ProjectSectionGateway["listProjectSections"]>[0],
+  ) {
+    this.calls.push(request);
+    const page = this.pages[this.calls.length - 1];
+    if (page === undefined) throw new Error("no section page queued");
+    return Promise.resolve(page);
   }
 }
 
@@ -3946,6 +3970,128 @@ describe("projects get command", () => {
       identity,
     });
     expect(missingReader.exitCode).toBe(6);
+  });
+});
+
+describe("projects sections command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+
+  test("lists sections as a human table in selected field order", async () => {
+    const reader = new InMemoryProjectSectionReader([
+      ok({ sections: [{ name: "Planning", gid: "1" }] }),
+    ]);
+    const result = await execute(
+      ["--fields", "name,gid", "projects", "sections", "100"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity,
+        projectSectionReader: reader,
+      },
+    );
+    expect(result).toEqual({
+      stdout: "name      gid\nPlanning  1\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(reader.calls).toEqual([
+      {
+        token: "token",
+        projectGid: "100",
+        limit: 100,
+        fields: ["name", "gid"],
+      },
+    ]);
+  });
+
+  test("renders JSON metadata and accepts fields after the subcommand", async () => {
+    const reader = new InMemoryProjectSectionReader([
+      ok({
+        sections: [{ gid: "1", name: "Planning" }],
+        nextOffset: "next",
+      }),
+    ]);
+    const result = await execute(
+      [
+        "projects",
+        "sections",
+        "100",
+        "--fields",
+        "gid,name",
+        "--max",
+        "1",
+        "--all",
+        "--json",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity,
+        projectSectionReader: reader,
+      },
+    );
+    expect(result).toEqual({
+      stdout:
+        '{"data":[{"gid":"1","name":"Planning"}],"meta":{"scanned":1,"returned":1,"scan_truncated":true,"next_offset":"next"}}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("validates syntax before authentication and network", async () => {
+    for (const argv of [
+      ["projects", "sections", "abc"],
+      ["projects", "sections", "100", "--max", "0"],
+      ["projects", "sections", "100", "--all"],
+      ["projects", "sections", "100", "--fields", "gid,,name"],
+    ]) {
+      const reader = new InMemoryProjectSectionReader([]);
+      const result = await execute(argv, {
+        environment: {},
+        identity,
+        projectSectionReader: reader,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(reader.calls).toHaveLength(0);
+    }
+  });
+
+  test.each([
+    ["authentication", 3],
+    ["api", 4],
+    ["not_found", 4],
+    ["rate_limit", 5],
+    ["network", 4],
+    ["invalid_response", 4],
+  ] as const)("maps %s failures safely", async (kind, exitCode) => {
+    const result = await execute(["projects", "sections", "100"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity,
+      projectSectionReader: new InMemoryProjectSectionReader([
+        err({ kind, message: "secret" }),
+      ]),
+    });
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.stderr).not.toContain("secret");
+  });
+
+  test("requires the reader and exposes help", async () => {
+    const missing = await execute(["projects", "sections", "100"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity,
+    });
+    expect(missing.exitCode).toBe(6);
+
+    const help = await execute(["projects", "sections", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(help.stdout).toContain("project GID");
+    expect(help.stdout).toContain("--max");
+    expect(help.stdout).toContain("--all");
+    const projectsHelp = await execute(["projects", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(projectsHelp.stdout).toContain("sections");
   });
 });
 

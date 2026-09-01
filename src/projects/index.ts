@@ -10,6 +10,12 @@ export type Project = Readonly<{
 
 export type ProjectListItem = Project & Readonly<{ gid: string; name: string }>;
 
+export type ProjectSection = Readonly<{
+  gid?: string;
+  name?: string;
+  [key: string]: unknown;
+}>;
+
 export type ProjectReadError = Readonly<{
   kind:
     | "authentication"
@@ -47,7 +53,25 @@ export interface ProjectReadGateway {
   ): Promise<Result<Project, ProjectReadError>>;
 }
 
+export type ProjectSectionPage = Readonly<{
+  sections: readonly ProjectSection[];
+  nextOffset?: string;
+}>;
+
+export interface ProjectSectionGateway {
+  listProjectSections(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      limit: number;
+      offset?: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<Result<ProjectSectionPage, ProjectReadError>>;
+}
+
 export const DEFAULT_PROJECT_FIELDS = ["gid", "name", "archived"] as const;
+export const DEFAULT_PROJECT_SECTION_FIELDS = ["gid", "name"] as const;
 
 export const parseProjectGid = (
   input: string,
@@ -109,6 +133,42 @@ const parseMax = (
         kind: "invalid_usage",
         message: "--max must be a positive safe integer",
       });
+};
+
+export type ProjectSectionListOptions = Readonly<{
+  projectGid: string;
+  max?: string;
+  all?: boolean;
+  fields: readonly string[];
+}>;
+
+export type PreparedProjectSectionList = Readonly<{
+  projectGid: string;
+  scanCap: number;
+  resultCap?: number;
+  fields: readonly string[];
+}>;
+
+export const prepareProjectSectionList = (
+  options: ProjectSectionListOptions,
+): Result<
+  PreparedProjectSectionList,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const projectGid = parseProjectGid(options.projectGid);
+  if (!projectGid.ok) return projectGid;
+  if (options.all && options.max === undefined) {
+    return err({ kind: "invalid_usage", message: "--all requires --max" });
+  }
+  const scanCap =
+    options.max === undefined ? ok(DEFAULT_SCAN_CAP) : parseMax(options.max);
+  if (!scanCap.ok) return scanCap;
+  return ok({
+    projectGid: projectGid.value,
+    scanCap: scanCap.value,
+    ...(options.all ? {} : { resultCap: DEFAULT_RESULT_CAP }),
+    fields: options.fields,
+  });
 };
 
 export const prepareProjectList = (
@@ -277,5 +337,97 @@ export const executeProjectList = async (
     if (progress.kind === "complete") return progress.result;
     scanned = progress.scanned;
     offset = progress.offset;
+  }
+};
+
+export type ProjectSectionListMeta = ProjectListMeta;
+
+export const executeProjectSectionList = async (
+  token: string,
+  prepared: PreparedProjectSectionList,
+  dependencies: Readonly<{ reader: ProjectSectionGateway }>,
+): Promise<
+  Result<
+    Readonly<{
+      sections: readonly ProjectSection[];
+      meta: ProjectSectionListMeta;
+    }>,
+    ProjectReadError
+  >
+> => {
+  const sections: ProjectSection[] = [];
+  let scanned = 0;
+  let offset: string | undefined;
+  const requestedOffsets = new Set<string>();
+
+  const complete = (
+    scanTruncated: boolean,
+    nextOffset?: string,
+  ): Result<
+    Readonly<{
+      sections: readonly ProjectSection[];
+      meta: ProjectSectionListMeta;
+    }>,
+    ProjectReadError
+  > =>
+    ok({
+      sections,
+      meta: {
+        scanned,
+        returned: sections.length,
+        scan_truncated: scanTruncated,
+        ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
+      },
+    });
+
+  for (;;) {
+    if (offset !== undefined) requestedOffsets.add(offset);
+    const remaining = prepared.scanCap - scanned;
+    const page = await dependencies.reader.listProjectSections({
+      token,
+      projectGid: prepared.projectGid,
+      limit: Math.min(100, remaining),
+      ...(offset === undefined ? {} : { offset }),
+      fields: prepared.fields,
+    });
+    if (!page.ok) return page;
+    if (
+      page.value.nextOffset !== undefined &&
+      (page.value.sections.length === 0 ||
+        requestedOffsets.has(page.value.nextOffset))
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Project section pagination did not advance",
+      });
+    }
+
+    const withinBudget = page.value.sections.slice(0, remaining);
+    for (const [index, section] of withinBudget.entries()) {
+      scanned += 1;
+      sections.push(section);
+      if (
+        prepared.resultCap !== undefined &&
+        sections.length >= prepared.resultCap
+      ) {
+        const stoppedMidPage = index < page.value.sections.length - 1;
+        return complete(
+          scanned >= prepared.scanCap &&
+            (stoppedMidPage || page.value.nextOffset !== undefined),
+          stoppedMidPage ? undefined : page.value.nextOffset,
+        );
+      }
+    }
+
+    if (scanned >= prepared.scanCap) {
+      const pageExceedsBudget =
+        page.value.sections.length > withinBudget.length;
+      return complete(
+        pageExceedsBudget || page.value.nextOffset !== undefined,
+        pageExceedsBudget ? undefined : page.value.nextOffset,
+      );
+    }
+    if (page.value.nextOffset === undefined) return complete(false);
+    offset = page.value.nextOffset;
   }
 };
