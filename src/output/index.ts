@@ -281,27 +281,27 @@ export const renderProjectSectionList = (
   fields: readonly string[],
 ): string => renderRecordTable(sections, fields);
 
-export const renderCommentScanWarning = (scanTruncated: boolean): string =>
+const renderScanWarning = (
+  scanTruncated: boolean,
+  scannedResource: string,
+  returnedResource: string,
+): string =>
   scanTruncated
-    ? "Warning: story scan cap reached; more comments may exist.\n"
+    ? `Warning: ${scannedResource} scan cap reached; more ${returnedResource} may exist.\n`
     : "";
+
+export const renderCommentScanWarning = (scanTruncated: boolean): string =>
+  renderScanWarning(scanTruncated, "story", "comments");
 
 export const renderTaskListScanWarning = (scanTruncated: boolean): string =>
-  scanTruncated
-    ? "Warning: task scan cap reached; more tasks may exist.\n"
-    : "";
+  renderScanWarning(scanTruncated, "task", "tasks");
 
 export const renderProjectListScanWarning = (scanTruncated: boolean): string =>
-  scanTruncated
-    ? "Warning: project scan cap reached; more projects may exist.\n"
-    : "";
+  renderScanWarning(scanTruncated, "project", "projects");
 
 export const renderProjectSectionListScanWarning = (
   scanTruncated: boolean,
-): string =>
-  scanTruncated
-    ? "Warning: section scan cap reached; more sections may exist.\n"
-    : "";
+): string => renderScanWarning(scanTruncated, "section", "sections");
 
 export const renderCommentDetail = (comment: Record<string, unknown>): string =>
   renderTaskDetail(comment);
