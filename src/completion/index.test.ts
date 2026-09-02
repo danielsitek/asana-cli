@@ -18,10 +18,15 @@ const fixture = (): Command => {
     .command("completion <shell>")
     .description("generate shell completion script");
   program.command("workspaces").command("list").description("list workspaces");
-  program
-    .command("projects")
+  const projects = program.command("projects");
+  projects
     .command("sections <gid>")
     .description("list project sections")
+    .option("--max <n>", "scan cap")
+    .option("--all", "all within cap");
+  projects
+    .command("custom-fields <gid>")
+    .description("list custom-field settings")
     .option("--max <n>", "scan cap")
     .option("--all", "all within cap");
   return program;
@@ -70,6 +75,12 @@ describe("shell completion", () => {
       "'projects/sections') candidates='--json --fields --max --all -h --help'",
     );
     expect(output).toContain(
+      "'projects/custom-fields') candidates='--json --fields --max --all -h --help'",
+    );
+    expect(output).toContain(
+      "'projects:custom-fields') context='projects/custom-fields'",
+    );
+    expect(output).toContain(
       "'completion') candidates='bash zsh fish --json -h --help'",
     );
   });
@@ -89,6 +100,9 @@ describe("shell completion", () => {
     expect(output).toContain("compset -P '*='");
     expect(output).toContain("'tasks/get:--file')");
     expect(output).toContain("'tasks/get:--file='*)");
+    expect(output).toContain("'custom-fields:list custom-field settings'");
+    expect(output).toContain("'--max:scan cap'");
+    expect(output).toContain("'--all:all within cap'");
   });
 
   test("renders Fish commands, options, and context function", () => {
@@ -109,6 +123,15 @@ describe("shell completion", () => {
     expect(output).toContain("-l 'completed' -r -a 'true false'");
     expect(output).toContain(
       "complete -c asana-cli -f -n '__asana_cli_context_is completion' -a 'zsh'",
+    );
+    expect(output).toContain(
+      "complete -c asana-cli -f -n '__asana_cli_context_is projects' -a 'custom-fields'",
+    );
+    expect(output).toContain(
+      "complete -c asana-cli -f -n '__asana_cli_context_is projects/custom-fields' -l 'max' -r",
+    );
+    expect(output).toContain(
+      "complete -c asana-cli -f -n '__asana_cli_context_is projects/custom-fields' -l 'all'",
     );
   });
 });

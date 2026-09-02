@@ -2464,6 +2464,325 @@ describe("AsanaHttpClient workspaces", () => {
   });
 });
 
+describe("AsanaHttpClient project custom fields", () => {
+  test("lists project custom-field settings with exact query and strict nested projection", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("authorization")).toBe("Bearer token");
+      expect(url.pathname).toBe("/api/1.0/projects/123/custom_field_settings");
+      expect(url.searchParams.get("limit")).toBe("25");
+      expect(url.searchParams.get("offset")).toBe("page-2");
+      expect(url.searchParams.get("opt_fields")).toBe(
+        "gid,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled",
+      );
+      return Response.json({
+        data: [
+          {
+            gid: "1",
+            is_important: true,
+            custom_field: {
+              gid: "10",
+              name: "Priority",
+              resource_subtype: "enum",
+              enum_options: [
+                { gid: "2", name: "High", enabled: true, ignored: "no" },
+              ],
+              ignored: "no",
+            },
+            ignored: "no",
+          },
+        ],
+        next_page: { offset: "page-3", path: "/ignored" },
+      });
+    });
+    const result = await new AsanaHttpClient({
+      baseUrl,
+    }).listProjectCustomFieldSettings({
+      token: "token",
+      projectGid: "123",
+      limit: 25,
+      offset: "page-2",
+      fields: [
+        "gid",
+        "custom_field.enum_options.gid",
+        "custom_field.enum_options.name",
+        "custom_field.enum_options.enabled",
+      ],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        settings: [
+          {
+            gid: "1",
+            custom_field: {
+              enum_options: [{ gid: "2", name: "High", enabled: true }],
+            },
+          },
+        ],
+        nextOffset: "page-3",
+      },
+    });
+  });
+
+  test("omits next offset when Asana has no next page", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [{ gid: "1", custom_field: { gid: "2" } }],
+        next_page: null,
+      }),
+    );
+    await expect(
+      new AsanaHttpClient({ baseUrl }).listProjectCustomFieldSettings({
+        token: "token",
+        projectGid: "123",
+        limit: 100,
+        fields: ["gid", "custom_field.gid"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      value: { settings: [{ gid: "1", custom_field: { gid: "2" } }] },
+    });
+  });
+
+  test("projects conditional definition fields across mixed custom-field types", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [
+          {
+            gid: "1",
+            custom_field: {
+              resource_subtype: "number",
+              precision: 2,
+              format: "currency",
+              currency_code: "EUR",
+              custom_label: null,
+              custom_label_position: null,
+            },
+          },
+          {
+            gid: "2",
+            custom_field: {
+              resource_subtype: "enum",
+              enum_options: [{ gid: "3", name: "High", enabled: true }],
+            },
+          },
+        ],
+      }),
+    );
+    const fields = [
+      "gid",
+      "custom_field.resource_subtype",
+      "custom_field.precision",
+      "custom_field.format",
+      "custom_field.currency_code",
+      "custom_field.custom_label",
+      "custom_field.custom_label_position",
+      "custom_field.enum_options.gid",
+      "custom_field.enum_options.name",
+      "custom_field.enum_options.enabled",
+    ];
+    await expect(
+      new AsanaHttpClient({ baseUrl }).listProjectCustomFieldSettings({
+        token: "token",
+        projectGid: "123",
+        limit: 100,
+        fields,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      value: {
+        settings: [
+          {
+            gid: "1",
+            custom_field: {
+              resource_subtype: "number",
+              precision: 2,
+              format: "currency",
+              currency_code: "EUR",
+              custom_label: null,
+              custom_label_position: null,
+            },
+          },
+          {
+            gid: "2",
+            custom_field: {
+              resource_subtype: "enum",
+              enum_options: [{ gid: "3", name: "High", enabled: true }],
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  test.each([
+    [
+      "setting gid",
+      { gid: "bad", custom_field: { gid: "2" } },
+      ["gid", "custom_field.gid"],
+    ],
+    [
+      "is important",
+      { gid: "1", is_important: "yes" },
+      ["gid", "is_important"],
+    ],
+    [
+      "custom field object",
+      { gid: "1", custom_field: "bad" },
+      ["gid", "custom_field.gid"],
+    ],
+    [
+      "custom field gid",
+      { gid: "1", custom_field: { gid: "bad" } },
+      ["gid", "custom_field.gid"],
+    ],
+    [
+      "custom field name",
+      { gid: "1", custom_field: { name: 1 } },
+      ["gid", "custom_field.name"],
+    ],
+    [
+      "resource subtype",
+      { gid: "1", custom_field: { resource_subtype: 1 } },
+      ["gid", "custom_field.resource_subtype"],
+    ],
+    [
+      "enum option gid",
+      { gid: "1", custom_field: { enum_options: [{ gid: "bad" }] } },
+      ["gid", "custom_field.enum_options.gid"],
+    ],
+    [
+      "enum option name",
+      { gid: "1", custom_field: { enum_options: [{ name: 1 }] } },
+      ["gid", "custom_field.enum_options.name"],
+    ],
+    [
+      "enum option enabled",
+      { gid: "1", custom_field: { enum_options: [{ enabled: "yes" }] } },
+      ["gid", "custom_field.enum_options.enabled"],
+    ],
+    [
+      "number precision",
+      { gid: "1", custom_field: { precision: 1.5 } },
+      ["gid", "custom_field.precision"],
+    ],
+    [
+      "number format",
+      { gid: "1", custom_field: { format: 1 } },
+      ["gid", "custom_field.format"],
+    ],
+    [
+      "currency code",
+      { gid: "1", custom_field: { currency_code: 1 } },
+      ["gid", "custom_field.currency_code"],
+    ],
+    [
+      "custom label",
+      { gid: "1", custom_field: { custom_label: false } },
+      ["gid", "custom_field.custom_label"],
+    ],
+    [
+      "custom label position",
+      { gid: "1", custom_field: { custom_label_position: 1 } },
+      ["gid", "custom_field.custom_label_position"],
+    ],
+    [
+      "missing nested leaf",
+      { gid: "1", custom_field: {} },
+      ["gid", "custom_field.name"],
+    ],
+  ])(
+    "rejects malformed custom-field setting %s",
+    async (_name, setting, fields) => {
+      const baseUrl = serverFor(() => Response.json({ data: [setting] }));
+      await expect(
+        new AsanaHttpClient({ baseUrl }).listProjectCustomFieldSettings({
+          token: "token",
+          projectGid: "123",
+          limit: 100,
+          fields,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          kind: "invalid_response",
+          message: "Asana returned an invalid response",
+        },
+      });
+    },
+  );
+
+  test("rejects empty next offsets and invalid requests before the network", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return Response.json({
+        data: [{ gid: "1" }],
+        next_page: { offset: "" },
+      });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const request = {
+      token: "token",
+      projectGid: "123",
+      limit: 100,
+      fields: ["gid"],
+    } as const;
+    await expect(
+      client.listProjectCustomFieldSettings(request),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    });
+    await expect(
+      client.listProjectCustomFieldSettings({ ...request, projectGid: "bad" }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      },
+    });
+    for (const limit of [0, 101, 1.5])
+      await expect(
+        client.listProjectCustomFieldSettings({ ...request, limit }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          kind: "invalid_response",
+          message:
+            "Project custom field setting page limit must be between 1 and 100",
+        },
+      });
+    expect(attempts).toBe(1);
+  });
+
+  test("maps a missing custom-field setting collection without retrying", async () => {
+    let attempts = 0;
+    const baseUrl = serverFor(() => {
+      attempts += 1;
+      return new Response(null, { status: 404 });
+    });
+    await expect(
+      new AsanaHttpClient({ baseUrl }).listProjectCustomFieldSettings({
+        token: "token",
+        projectGid: "123",
+        limit: 100,
+        fields: ["gid"],
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { kind: "not_found", message: "Project not found", status: 404 },
+    });
+    expect(attempts).toBe(1);
+  });
+});
+
 describe("AsanaHttpClient projects", () => {
   test("gets one project with exact fields and projects the response", async () => {
     const baseUrl = serverFor((request) => {

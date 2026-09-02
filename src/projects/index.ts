@@ -16,6 +16,13 @@ export type ProjectSection = Readonly<{
   [key: string]: unknown;
 }>;
 
+export type ProjectCustomFieldSetting = Readonly<{
+  gid?: string;
+  is_important?: boolean;
+  custom_field?: Record<string, unknown>;
+  [key: string]: unknown;
+}>;
+
 export type ProjectReadError = Readonly<{
   kind:
     | "authentication"
@@ -70,8 +77,32 @@ export interface ProjectSectionGateway {
   ): Promise<Result<ProjectSectionPage, ProjectReadError>>;
 }
 
+export type ProjectCustomFieldSettingPage = Readonly<{
+  settings: readonly ProjectCustomFieldSetting[];
+  nextOffset?: string;
+}>;
+
+export interface ProjectCustomFieldSettingGateway {
+  listProjectCustomFieldSettings(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      limit: number;
+      offset?: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<Result<ProjectCustomFieldSettingPage, ProjectReadError>>;
+}
+
 export const DEFAULT_PROJECT_FIELDS = ["gid", "name", "archived"] as const;
 export const DEFAULT_PROJECT_SECTION_FIELDS = ["gid", "name"] as const;
+export const DEFAULT_PROJECT_CUSTOM_FIELD_SETTING_FIELDS = [
+  "gid",
+  "is_important",
+  "custom_field.gid",
+  "custom_field.name",
+  "custom_field.resource_subtype",
+] as const;
 
 export const parseProjectGid = (
   input: string,
@@ -162,6 +193,37 @@ export const prepareProjectSectionList = (
   options: ProjectSectionListOptions,
 ): Result<
   PreparedProjectSectionList,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const projectGid = parseProjectGid(options.projectGid);
+  if (!projectGid.ok) return projectGid;
+  const bounded = prepareBoundedList(options);
+  if (!bounded.ok) return bounded;
+  return ok({
+    projectGid: projectGid.value,
+    ...bounded.value,
+    fields: options.fields,
+  });
+};
+
+export type ProjectCustomFieldSettingListOptions = Readonly<{
+  projectGid: string;
+  max?: string;
+  all?: boolean;
+  fields: readonly string[];
+}>;
+
+export type PreparedProjectCustomFieldSettingList = Readonly<{
+  projectGid: string;
+  scanCap: number;
+  resultCap?: number;
+  fields: readonly string[];
+}>;
+
+export const prepareProjectCustomFieldSettingList = (
+  options: ProjectCustomFieldSettingListOptions,
+): Result<
+  PreparedProjectCustomFieldSettingList,
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
   const projectGid = parseProjectGid(options.projectGid);
@@ -393,5 +455,50 @@ export const executeProjectSectionList = async (
   );
   return result.ok
     ? ok({ sections: result.value.items, meta: result.value.meta })
+    : result;
+};
+
+export const executeProjectCustomFieldSettingList = async (
+  token: string,
+  prepared: PreparedProjectCustomFieldSettingList,
+  dependencies: Readonly<{ reader: ProjectCustomFieldSettingGateway }>,
+): Promise<
+  Result<
+    Readonly<{
+      settings: readonly ProjectCustomFieldSetting[];
+      meta: ProjectListMeta;
+    }>,
+    ProjectReadError
+  >
+> => {
+  const result = await executeBoundedPages<
+    ProjectCustomFieldSetting,
+    ProjectReadError
+  >(
+    prepared,
+    async (limit, offset) => {
+      const page = await dependencies.reader.listProjectCustomFieldSettings({
+        token,
+        projectGid: prepared.projectGid,
+        limit,
+        ...(offset === undefined ? {} : { offset }),
+        fields: prepared.fields,
+      });
+      return page.ok
+        ? ok({
+            items: page.value.settings,
+            ...(page.value.nextOffset === undefined
+              ? {}
+              : { nextOffset: page.value.nextOffset }),
+          })
+        : page;
+    },
+    {
+      kind: "invalid_response",
+      message: "Project custom field setting pagination did not advance",
+    },
+  );
+  return result.ok
+    ? ok({ settings: result.value.items, meta: result.value.meta })
     : result;
 };

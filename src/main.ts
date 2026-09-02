@@ -23,6 +23,7 @@ const result = await execute(Bun.argv.slice(2), {
   projectReader: client,
   projectDetailReader: client,
   projectSectionReader: client,
+  projectCustomFieldSettingReader: client,
   discovery: client,
   myTaskSectionsDiscovery: client,
   configuration: {

@@ -17,6 +17,8 @@ import {
   renderWorkspaceList,
   renderProjectSectionList,
   renderProjectSectionListScanWarning,
+  renderProjectCustomFieldSettingList,
+  renderProjectCustomFieldSettingListScanWarning,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -311,5 +313,20 @@ describe("project section output", () => {
       "Warning: section scan cap reached; more sections may exist.\n",
     );
     expect(renderProjectSectionListScanWarning(false)).toBe("");
+  });
+
+  test("renders custom-field settings and scan warning", () => {
+    expect(
+      renderProjectCustomFieldSettingList(
+        [{ gid: "1", custom_field: { gid: "2", name: "Priority" } }],
+        ["gid", "custom_field.gid", "custom_field.name"],
+      ),
+    ).toBe(
+      "gid  custom_field.gid  custom_field.name\n1    2                 Priority\n",
+    );
+    expect(renderProjectCustomFieldSettingListScanWarning(true)).toBe(
+      "Warning: custom-field setting scan cap reached; more custom-field settings may exist.\n",
+    );
+    expect(renderProjectCustomFieldSettingListScanWarning(false)).toBe("");
   });
 });

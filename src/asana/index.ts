@@ -26,6 +26,8 @@ import type {
   ProjectReadError,
   ProjectSection,
   ProjectSectionGateway,
+  ProjectCustomFieldSetting,
+  ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import {
   type Task,
@@ -293,6 +295,88 @@ const buildStoriesPageSchema = (fields: readonly string[]) =>
       .optional(),
   });
 
+const enumOptionIsValid = (value: unknown): boolean =>
+  isRecord(value) &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "enabled") || typeof value.enabled === "boolean");
+
+const nullableStringIsValid = (value: unknown): boolean =>
+  value === null || typeof value === "string";
+
+const OPTIONAL_CUSTOM_FIELD_DEFINITION_FIELDS = new Set([
+  "currency_code",
+  "custom_label",
+  "custom_label_position",
+  "enum_options",
+  "format",
+  "precision",
+]);
+
+const customFieldIsValid = (value: unknown): boolean =>
+  isRecord(value) &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "resource_subtype") ||
+    typeof value.resource_subtype === "string") &&
+  (!hasOwn(value, "format") || typeof value.format === "string") &&
+  (!hasOwn(value, "precision") ||
+    (typeof value.precision === "number" &&
+      Number.isInteger(value.precision) &&
+      value.precision >= 0)) &&
+  (!hasOwn(value, "currency_code") ||
+    nullableStringIsValid(value.currency_code)) &&
+  (!hasOwn(value, "custom_label") ||
+    nullableStringIsValid(value.custom_label)) &&
+  (!hasOwn(value, "custom_label_position") ||
+    nullableStringIsValid(value.custom_label_position)) &&
+  (!hasOwn(value, "enum_options") ||
+    (Array.isArray(value.enum_options) &&
+      value.enum_options.every(enumOptionIsValid)));
+
+const applicableCustomFieldSettingFields = (
+  value: Record<string, unknown>,
+  fields: readonly string[],
+): readonly string[] => {
+  const customField = value.custom_field;
+  if (!isRecord(customField)) return fields;
+  return fields.filter((field) => {
+    const [parent, definitionField] = field.split(".");
+    return !(
+      parent === "custom_field" &&
+      definitionField !== undefined &&
+      OPTIONAL_CUSTOM_FIELD_DEFINITION_FIELDS.has(definitionField) &&
+      !hasOwn(customField, definitionField)
+    );
+  });
+};
+
+const customFieldSettingMatchesFields = (
+  value: unknown,
+  fields: readonly string[],
+): boolean =>
+  isRecord(value) &&
+  projectFields(value, applicableCustomFieldSettingFields(value, fields))
+    .found &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "is_important") || typeof value.is_important === "boolean") &&
+  (!hasOwn(value, "custom_field") || customFieldIsValid(value.custom_field));
+
+const buildProjectCustomFieldSettingSchema = (
+  fields: readonly string[],
+): z.ZodType<ProjectCustomFieldSetting> =>
+  z
+    .custom<ProjectCustomFieldSetting>((value) =>
+      customFieldSettingMatchesFields(value, fields),
+    )
+    .transform((value) => {
+      const selected = projectFields(
+        value,
+        applicableCustomFieldSettingFields(value, fields),
+      );
+      return selected.found ? selected.value : value;
+    });
+
 const buildTaskListPageSchema = (fields: readonly string[]) =>
   z.object({
     data: z.array(buildTaskSchema(fields)),
@@ -347,6 +431,7 @@ export class AsanaHttpClient
     MyTasksDiscoveryGateway,
     MyTaskSectionsDiscoveryGateway,
     ProjectSectionGateway,
+    ProjectCustomFieldSettingGateway,
     TaskGateway,
     TaskCreationGateway,
     TaskListGateway,
@@ -647,6 +732,68 @@ export class AsanaHttpClient
     }
     return ok({
       sections: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async listProjectCustomFieldSettings(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      limit: number;
+      offset?: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<
+    Result<
+      Readonly<{
+        settings: readonly ProjectCustomFieldSetting[];
+        nextOffset?: string;
+      }>,
+      ProjectReadError
+    >
+  > {
+    if (!isDigitOnlyGid(request.projectGid))
+      return err({
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      });
+    if (
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > 100
+    )
+      return err({
+        kind: "invalid_response",
+        message:
+          "Project custom field setting page limit must be between 1 and 100",
+      });
+    const result = await this.#request(
+      request.token,
+      `projects/${request.projectGid}/custom_field_settings`,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(request.limit),
+          opt_fields: request.fields.join(","),
+          ...(request.offset === undefined ? {} : { offset: request.offset }),
+        },
+      },
+      z.object({
+        data: z.array(buildProjectCustomFieldSettingSchema(request.fields)),
+        next_page: z
+          .object({ offset: z.string().min(1) })
+          .passthrough()
+          .nullable()
+          .optional(),
+      }),
+    );
+    if (!result.ok)
+      return err(mapTaskReadError(result.error, "Project not found"));
+    return ok({
+      settings: result.value.data,
       ...(result.value.next_page?.offset === undefined
         ? {}
         : { nextOffset: result.value.next_page.offset }),
