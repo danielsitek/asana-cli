@@ -291,6 +291,13 @@ command fails with exit 2.
 - Bounded like `projects list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 - Default fields: `gid,name`; use `--fields=<comma-separated>` to select others.
 
+### `projects custom-fields`
+
+- `projects custom-fields <gid>` lists project custom-field settings in API order.
+- Defaults: `gid,is_important,custom_field.gid,custom_field.name,custom_field.resource_subtype`.
+- Bounded like `projects list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
+- `gid` identifies the setting; `custom_field.gid` identifies the field definition. Use `custom_field.enum_options.gid,name,enabled` to select enum options.
+
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
@@ -307,7 +314,7 @@ command fails with exit 2.
 
 ### Output (`--json` / `--fields`)
 
-- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`, `projects get`, and `projects sections`.
+- `--fields=<comma-separated>` selects explicit Asana fields; supported on `tasks get`, `comments`, `comment`, `update`, `create`, `list`, `projects get`, `projects sections`, and `projects custom-fields`.
 - `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
