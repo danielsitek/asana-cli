@@ -1436,6 +1436,10 @@ export const execute = async (
     .description("list a project's custom-field settings")
     .addOption(new Option("--max <n>", "cap custom-field settings scanned"))
     .option("--all", "return all custom-field settings within the scan cap")
+    .addHelpText(
+      "after",
+      "\nGlobal options:\n  --json             output JSON\n  --fields <fields>  select explicit Asana fields",
+    )
     .action(
       async (
         idArg: string,

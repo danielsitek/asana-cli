@@ -2546,6 +2546,77 @@ describe("AsanaHttpClient project custom fields", () => {
     });
   });
 
+  test("projects conditional definition fields across mixed custom-field types", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json({
+        data: [
+          {
+            gid: "1",
+            custom_field: {
+              resource_subtype: "number",
+              precision: 2,
+              format: "currency",
+              currency_code: "EUR",
+              custom_label: null,
+              custom_label_position: null,
+            },
+          },
+          {
+            gid: "2",
+            custom_field: {
+              resource_subtype: "enum",
+              enum_options: [{ gid: "3", name: "High", enabled: true }],
+            },
+          },
+        ],
+      }),
+    );
+    const fields = [
+      "gid",
+      "custom_field.resource_subtype",
+      "custom_field.precision",
+      "custom_field.format",
+      "custom_field.currency_code",
+      "custom_field.custom_label",
+      "custom_field.custom_label_position",
+      "custom_field.enum_options.gid",
+      "custom_field.enum_options.name",
+      "custom_field.enum_options.enabled",
+    ];
+    await expect(
+      new AsanaHttpClient({ baseUrl }).listProjectCustomFieldSettings({
+        token: "token",
+        projectGid: "123",
+        limit: 100,
+        fields,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      value: {
+        settings: [
+          {
+            gid: "1",
+            custom_field: {
+              resource_subtype: "number",
+              precision: 2,
+              format: "currency",
+              currency_code: "EUR",
+              custom_label: null,
+              custom_label_position: null,
+            },
+          },
+          {
+            gid: "2",
+            custom_field: {
+              resource_subtype: "enum",
+              enum_options: [{ gid: "3", name: "High", enabled: true }],
+            },
+          },
+        ],
+      },
+    });
+  });
+
   test.each([
     [
       "setting gid",
@@ -2591,6 +2662,31 @@ describe("AsanaHttpClient project custom fields", () => {
       "enum option enabled",
       { gid: "1", custom_field: { enum_options: [{ enabled: "yes" }] } },
       ["gid", "custom_field.enum_options.enabled"],
+    ],
+    [
+      "number precision",
+      { gid: "1", custom_field: { precision: 1.5 } },
+      ["gid", "custom_field.precision"],
+    ],
+    [
+      "number format",
+      { gid: "1", custom_field: { format: 1 } },
+      ["gid", "custom_field.format"],
+    ],
+    [
+      "currency code",
+      { gid: "1", custom_field: { currency_code: 1 } },
+      ["gid", "custom_field.currency_code"],
+    ],
+    [
+      "custom label",
+      { gid: "1", custom_field: { custom_label: false } },
+      ["gid", "custom_field.custom_label"],
+    ],
+    [
+      "custom label position",
+      { gid: "1", custom_field: { custom_label_position: 1 } },
+      ["gid", "custom_field.custom_label_position"],
     ],
     [
       "missing nested leaf",

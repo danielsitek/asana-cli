@@ -823,6 +823,8 @@ describe("projects custom-fields command", () => {
     expect(help.stdout).toContain("project GID");
     expect(help.stdout).toContain("--max");
     expect(help.stdout).toContain("--all");
+    expect(help.stdout).toContain("--json");
+    expect(help.stdout).toContain("--fields <fields>");
     expect(projectsHelp.stdout).toContain("custom-fields");
   });
 });
