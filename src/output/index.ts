@@ -281,6 +281,11 @@ export const renderProjectSectionList = (
   fields: readonly string[],
 ): string => renderRecordTable(sections, fields);
 
+export const renderProjectCustomFieldSettingList = (
+  settings: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): string => renderRecordTable(settings, fields);
+
 const renderScanWarning = (
   scanTruncated: boolean,
   scannedResource: string,
@@ -302,6 +307,15 @@ export const renderProjectListScanWarning = (scanTruncated: boolean): string =>
 export const renderProjectSectionListScanWarning = (
   scanTruncated: boolean,
 ): string => renderScanWarning(scanTruncated, "section", "sections");
+
+export const renderProjectCustomFieldSettingListScanWarning = (
+  scanTruncated: boolean,
+): string =>
+  renderScanWarning(
+    scanTruncated,
+    "custom-field setting",
+    "custom-field settings",
+  );
 
 export const renderCommentDetail = (comment: Record<string, unknown>): string =>
   renderTaskDetail(comment);

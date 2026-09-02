@@ -26,6 +26,8 @@ import type {
   ProjectReadError,
   ProjectSection,
   ProjectSectionGateway,
+  ProjectCustomFieldSetting,
+  ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import {
   type Task,
@@ -293,6 +295,44 @@ const buildStoriesPageSchema = (fields: readonly string[]) =>
       .optional(),
   });
 
+const enumOptionIsValid = (value: unknown): boolean =>
+  isRecord(value) &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "enabled") || typeof value.enabled === "boolean");
+
+const customFieldIsValid = (value: unknown): boolean =>
+  isRecord(value) &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "name") || typeof value.name === "string") &&
+  (!hasOwn(value, "resource_subtype") ||
+    typeof value.resource_subtype === "string") &&
+  (!hasOwn(value, "enum_options") ||
+    (Array.isArray(value.enum_options) &&
+      value.enum_options.every(enumOptionIsValid)));
+
+const customFieldSettingMatchesFields = (
+  value: unknown,
+  fields: readonly string[],
+): boolean =>
+  isRecord(value) &&
+  projectFields(value, fields).found &&
+  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
+  (!hasOwn(value, "is_important") || typeof value.is_important === "boolean") &&
+  (!hasOwn(value, "custom_field") || customFieldIsValid(value.custom_field));
+
+const buildProjectCustomFieldSettingSchema = (
+  fields: readonly string[],
+): z.ZodType<ProjectCustomFieldSetting> =>
+  z
+    .custom<ProjectCustomFieldSetting>((value) =>
+      customFieldSettingMatchesFields(value, fields),
+    )
+    .transform((value) => {
+      const selected = projectFields(value, fields);
+      return selected.found ? selected.value : value;
+    });
+
 const buildTaskListPageSchema = (fields: readonly string[]) =>
   z.object({
     data: z.array(buildTaskSchema(fields)),
@@ -347,6 +387,7 @@ export class AsanaHttpClient
     MyTasksDiscoveryGateway,
     MyTaskSectionsDiscoveryGateway,
     ProjectSectionGateway,
+    ProjectCustomFieldSettingGateway,
     TaskGateway,
     TaskCreationGateway,
     TaskListGateway,
@@ -647,6 +688,68 @@ export class AsanaHttpClient
     }
     return ok({
       sections: result.value.data,
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async listProjectCustomFieldSettings(
+    request: Readonly<{
+      token: string;
+      projectGid: string;
+      limit: number;
+      offset?: string;
+      fields: readonly string[];
+    }>,
+  ): Promise<
+    Result<
+      Readonly<{
+        settings: readonly ProjectCustomFieldSetting[];
+        nextOffset?: string;
+      }>,
+      ProjectReadError
+    >
+  > {
+    if (!isDigitOnlyGid(request.projectGid))
+      return err({
+        kind: "invalid_response",
+        message: "Project GID must contain digits only",
+      });
+    if (
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > 100
+    )
+      return err({
+        kind: "invalid_response",
+        message:
+          "Project custom field setting page limit must be between 1 and 100",
+      });
+    const result = await this.#request(
+      request.token,
+      `projects/${request.projectGid}/custom_field_settings`,
+      {
+        method: "GET",
+        searchParams: {
+          limit: String(request.limit),
+          opt_fields: request.fields.join(","),
+          ...(request.offset === undefined ? {} : { offset: request.offset }),
+        },
+      },
+      z.object({
+        data: z.array(buildProjectCustomFieldSettingSchema(request.fields)),
+        next_page: z
+          .object({ offset: z.string().min(1) })
+          .passthrough()
+          .nullable()
+          .optional(),
+      }),
+    );
+    if (!result.ok)
+      return err(mapTaskReadError(result.error, "Project not found"));
+    return ok({
+      settings: result.value.data,
       ...(result.value.next_page?.offset === undefined
         ? {}
         : { nextOffset: result.value.next_page.offset }),

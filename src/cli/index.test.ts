@@ -29,6 +29,7 @@ import type {
   ProjectReadGateway,
   ProjectSection,
   ProjectSectionGateway,
+  ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import {
   DEFAULT_TASK_LIST_FIELDS,
@@ -608,6 +609,221 @@ describe("execute", () => {
       exitCode: 6,
     });
     expect(result.stderr).not.toContain("secret-value");
+  });
+});
+
+describe("projects custom-fields command", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+  const readerFor = (
+    pages: readonly Result<
+      Readonly<{
+        settings: readonly Record<string, unknown>[];
+        nextOffset?: string;
+      }>,
+      ProjectReadError
+    >[],
+  ) => {
+    const calls: Parameters<
+      ProjectCustomFieldSettingGateway["listProjectCustomFieldSettings"]
+    >[0][] = [];
+    return {
+      calls,
+      reader: {
+        async listProjectCustomFieldSettings(request) {
+          calls.push(request);
+          const page = pages[calls.length - 1];
+          if (page === undefined) throw new Error("no setting page queued");
+          return page;
+        },
+      } satisfies ProjectCustomFieldSettingGateway,
+    };
+  };
+
+  test("uses exact defaults and renders both setting and field GIDs", async () => {
+    const { calls, reader } = readerFor([
+      ok({
+        settings: [
+          {
+            gid: "10",
+            is_important: false,
+            custom_field: {
+              gid: "20",
+              name: "Priority",
+              resource_subtype: "enum",
+            },
+          },
+        ],
+      }),
+    ]);
+    const result = await execute(["projects", "custom-fields", "100"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity,
+      projectCustomFieldSettingReader: reader,
+    });
+    expect(result).toEqual({
+      stdout:
+        "gid  is_important  custom_field.gid  custom_field.name  custom_field.resource_subtype\n10   false         20                Priority           enum\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(calls).toEqual([
+      {
+        token: "token",
+        projectGid: "100",
+        limit: 100,
+        fields: [
+          "gid",
+          "is_important",
+          "custom_field.gid",
+          "custom_field.name",
+          "custom_field.resource_subtype",
+        ],
+      },
+    ]);
+  });
+
+  test("renders exact nested JSON and accepts fields on either side", async () => {
+    const before = readerFor([
+      ok({
+        settings: [
+          {
+            gid: "10",
+            custom_field: {
+              enum_options: [{ gid: "30", name: "High", enabled: true }],
+            },
+          },
+        ],
+      }),
+    ]);
+    const after = readerFor([
+      ok({
+        settings: [
+          {
+            gid: "11",
+            custom_field: {
+              enum_options: [{ gid: "31", name: "Low", enabled: false }],
+            },
+          },
+        ],
+      }),
+    ]);
+    const fields =
+      "gid,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled";
+    await expect(
+      execute(
+        ["--json", "--fields", fields, "projects", "custom-fields", "100"],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity,
+          projectCustomFieldSettingReader: before.reader,
+        },
+      ),
+    ).resolves.toEqual({
+      stdout:
+        '{"data":[{"gid":"10","custom_field":{"enum_options":[{"gid":"30","name":"High","enabled":true}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false}}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+    await expect(
+      execute(
+        ["projects", "custom-fields", "100", "--fields", fields, "--json"],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity,
+          projectCustomFieldSettingReader: after.reader,
+        },
+      ),
+    ).resolves.toEqual({
+      stdout:
+        '{"data":[{"gid":"11","custom_field":{"enum_options":[{"gid":"31","name":"Low","enabled":false}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false}}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(before.calls[0]?.fields).toEqual(fields.split(","));
+    expect(after.calls[0]?.fields).toEqual(fields.split(","));
+  });
+
+  test("rejects invalid input before token lookup or reader use", async () => {
+    for (const argv of [
+      ["projects", "custom-fields", "bad"],
+      ["projects", "custom-fields", "100", "--max", "0"],
+      ["projects", "custom-fields", "100", "--all"],
+      ["projects", "custom-fields", "100", "--fields", "gid,,custom_field.gid"],
+    ]) {
+      const { calls, reader } = readerFor([]);
+      const result = await execute(argv, {
+        environment: {},
+        identity,
+        projectCustomFieldSettingReader: reader,
+      });
+      expect(result).toMatchObject({ exitCode: 2, stdout: "" });
+      expect(calls).toEqual([]);
+    }
+  });
+
+  test.each([
+    ["authentication", 3],
+    ["api", 4],
+    ["not_found", 4],
+    ["rate_limit", 5],
+    ["network", 4],
+    ["invalid_response", 4],
+  ] as const)("maps %s failures safely", async (kind, exitCode) => {
+    const { reader } = readerFor([err({ kind, message: "secret" })]);
+    const result = await execute(["projects", "custom-fields", "100"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity,
+      projectCustomFieldSettingReader: reader,
+    });
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.stderr).not.toContain("secret");
+  });
+
+  test("requires a reader, exposes help, and warns only human output", async () => {
+    await expect(
+      execute(["projects", "custom-fields", "100"], {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity,
+      }),
+    ).resolves.toMatchObject({ exitCode: 6 });
+    const human = readerFor([
+      ok({ settings: [{ gid: "1" }], nextOffset: "next" }),
+    ]);
+    const json = readerFor([
+      ok({ settings: [{ gid: "1" }], nextOffset: "next" }),
+    ]);
+    await expect(
+      execute(["projects", "custom-fields", "100", "--max", "1", "--all"], {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity,
+        projectCustomFieldSettingReader: human.reader,
+      }),
+    ).resolves.toMatchObject({
+      stderr:
+        "Warning: custom-field setting scan cap reached; more custom-field settings may exist.\n",
+    });
+    await expect(
+      execute(
+        ["--json", "projects", "custom-fields", "100", "--max", "1", "--all"],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity,
+          projectCustomFieldSettingReader: json.reader,
+        },
+      ),
+    ).resolves.toMatchObject({ stderr: "" });
+    const help = await execute(["projects", "custom-fields", "--help"], {
+      environment: {},
+      identity,
+    });
+    const projectsHelp = await execute(["projects", "--help"], {
+      environment: {},
+      identity,
+    });
+    expect(help.stdout).toContain("project GID");
+    expect(help.stdout).toContain("--max");
+    expect(help.stdout).toContain("--all");
+    expect(projectsHelp.stdout).toContain("custom-fields");
   });
 });
 

@@ -80,20 +80,26 @@ import {
   renderProjectListScanWarning,
   renderProjectSectionList,
   renderProjectSectionListScanWarning,
+  renderProjectCustomFieldSettingList,
+  renderProjectCustomFieldSettingListScanWarning,
   renderWorkspaceList,
 } from "../output/index.ts";
 import {
   executeProjectList,
   executeProjectSectionList,
+  executeProjectCustomFieldSettingList,
   DEFAULT_PROJECT_FIELDS,
   DEFAULT_PROJECT_SECTION_FIELDS,
+  DEFAULT_PROJECT_CUSTOM_FIELD_SETTING_FIELDS,
   parseProjectGid,
   prepareProjectList,
   prepareProjectSectionList,
+  prepareProjectCustomFieldSettingList,
   type ProjectGateway,
   type ProjectReadGateway,
   type ProjectReadError,
   type ProjectSectionGateway,
+  type ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
@@ -124,6 +130,7 @@ export type ExecuteDependencies = Readonly<{
   projectReader?: ProjectGateway;
   projectDetailReader?: ProjectReadGateway;
   projectSectionReader?: ProjectSectionGateway;
+  projectCustomFieldSettingReader?: ProjectCustomFieldSettingGateway;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   discovery?: MyTasksDiscoveryGateway;
@@ -1422,6 +1429,85 @@ export const execute = async (
 
   projectsSections.exitOverride();
   projectsSections.configureOutput(captureOutput);
+
+  const projectsCustomFields = projects
+    .command("custom-fields")
+    .argument(PROJECT_ID_ARGUMENT, "project GID")
+    .description("list a project's custom-field settings")
+    .addOption(new Option("--max <n>", "cap custom-field settings scanned"))
+    .option("--all", "return all custom-field settings within the scan cap")
+    .action(
+      async (
+        idArg: string,
+        options: Readonly<{ max?: string; all?: boolean }>,
+      ) => {
+        invokedState.value = true;
+        json = program.opts<{ json?: boolean }>().json ?? false;
+        const fieldsInput = program.opts<{ fields?: string }>().fields;
+        const validatedFields =
+          fieldsInput === undefined
+            ? {
+                ok: true as const,
+                value: DEFAULT_PROJECT_CUSTOM_FIELD_SETTING_FIELDS,
+              }
+            : validateFieldList(fieldsInput);
+        if (!validatedFields.ok) {
+          result = usageError(validatedFields.error);
+          return;
+        }
+        const prepared = prepareProjectCustomFieldSettingList({
+          projectGid: idArg,
+          ...options,
+          fields: validatedFields.value,
+        });
+        if (!prepared.ok) {
+          result = usageError(prepared.error.message);
+          return;
+        }
+        const token = requireToken(dependencies);
+        if (!token.ok) {
+          stopWith(token.error);
+          return;
+        }
+        if (!dependencies.projectCustomFieldSettingReader) {
+          result = {
+            stdout: "",
+            stderr: renderError({
+              code: "internal_error",
+              message: "Project custom-field setting reader is required",
+            }),
+            exitCode: 6,
+          };
+          return;
+        }
+        const listed = await executeProjectCustomFieldSettingList(
+          token.value,
+          prepared.value,
+          { reader: dependencies.projectCustomFieldSettingReader },
+        );
+        if (!listed.ok) {
+          result = renderProjectReadFailure(listed.error.kind);
+          return;
+        }
+        result = {
+          stdout: json
+            ? renderJson(listed.value.settings, listed.value.meta)
+            : renderProjectCustomFieldSettingList(
+                listed.value.settings,
+                prepared.value.fields,
+              ),
+          stderr: json
+            ? ""
+            : renderProjectCustomFieldSettingListScanWarning(
+                listed.value.meta.scan_truncated,
+              ),
+          exitCode: 0,
+        };
+      },
+    );
+
+  projectsCustomFields.exitOverride();
+  projectsCustomFields.configureOutput(captureOutput);
 
   const projectsList = projects.command("list");
   projectsList.description("list projects visible in a workspace");
