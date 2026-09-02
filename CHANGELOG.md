@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.5.0
+
+- Add bounded `projects sections` and `projects custom-fields` discovery.
+- Fix `tasks create --section` by including the inferred project in the
+  creation payload (issues #104 and #100).
+- Improve internal task, pagination, static-analysis, and release tooling
+  maintainability.
+
 ## 0.4.0
 
 - Add `projects list` and `projects get` commands for workspace project
