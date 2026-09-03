@@ -10,6 +10,18 @@ type RunCommand = (
   options?: Readonly<{ cwd?: string }>,
 ) => Promise<void>;
 
+type ResolvedReleaseOptions = Readonly<{
+  version: string;
+  inputDirectory: string;
+  outputDirectory: string;
+  licensePath: string;
+}>;
+
+type PackagedTarget = Readonly<{
+  archivePath: string;
+  checksumLine: string;
+}>;
+
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
 const releaseTargetNames = Object.keys(releaseTargets) as ReleaseTarget[];
 
@@ -26,6 +38,104 @@ const defaultRunCommand: RunCommand = async (command, options = {}) => {
   }
 };
 
+const validateReleaseTargets = async (
+  inputDirectory: string,
+): Promise<void> => {
+  for (const target of releaseTargetNames) {
+    const binary = join(inputDirectory, target, "asana-cli");
+    const metadata = await stat(binary).catch(() => undefined);
+    if (metadata === undefined || !metadata.isFile()) {
+      throw new Error(`Missing release executable for ${target}`);
+    }
+  }
+};
+
+const resolveReleaseOptions = async (
+  options: Readonly<{
+    inputDirectory: string;
+    outputDirectory: string;
+    version: string;
+    licensePath?: string;
+  }>,
+): Promise<ResolvedReleaseOptions> => {
+  const version = versionSchema.parse(options.version);
+  const inputDirectory = resolve(options.inputDirectory);
+  const outputDirectory = resolve(options.outputDirectory);
+  const licensePath = resolve(options.licensePath ?? "LICENSE");
+
+  await stat(licensePath);
+  await validateReleaseTargets(inputDirectory);
+
+  return { version, inputDirectory, outputDirectory, licensePath };
+};
+
+const prepareReleaseWorkspace = async (outputDirectory: string) => {
+  await mkdir(outputDirectory, { recursive: true });
+  const stagingRoot = join(outputDirectory, ".staging");
+  await rm(stagingRoot, { recursive: true, force: true });
+  await mkdir(stagingRoot, { recursive: true });
+  return stagingRoot;
+};
+
+const packageReleaseTarget = async (
+  release: ResolvedReleaseOptions,
+  target: ReleaseTarget,
+  stagingRoot: string,
+  runCommand: RunCommand,
+): Promise<PackagedTarget> => {
+  const stagingDirectory = join(stagingRoot, target);
+  await mkdir(stagingDirectory, { recursive: true });
+  await copyFile(
+    join(release.inputDirectory, target, "asana-cli"),
+    join(stagingDirectory, "asana-cli"),
+  );
+  await copyFile(release.licensePath, join(stagingDirectory, "LICENSE"));
+  await chmod(join(stagingDirectory, "asana-cli"), 0o755);
+  await chmod(join(stagingDirectory, "LICENSE"), 0o644);
+
+  const archiveName = `asana-cli-v${release.version}-${target}.tar.gz`;
+  const tarPath = join(release.outputDirectory, archiveName.slice(0, -3));
+  const archivePath = join(release.outputDirectory, archiveName);
+  await rm(tarPath, { force: true });
+  await rm(archivePath, { force: true });
+  await runCommand([
+    "tar",
+    "--sort=name",
+    "--format=pax",
+    "--owner=0",
+    "--group=0",
+    "--numeric-owner",
+    "--mtime=@0",
+    "--mode=u+rwX,go+rX,go-w",
+    "--pax-option=delete=atime,delete=ctime",
+    "-cf",
+    tarPath,
+    "-C",
+    stagingDirectory,
+    "LICENSE",
+    "asana-cli",
+  ]);
+  await runCommand(["gzip", "-n", "-9", "-f", tarPath]);
+
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(await Bun.file(archivePath).arrayBuffer())
+    .digest("hex");
+  return { archivePath, checksumLine: `${digest}  ${archiveName}` };
+};
+
+const writeChecksumManifest = async (
+  outputDirectory: string,
+  checksums: readonly string[],
+  runCommand: RunCommand,
+): Promise<string> => {
+  const checksumPath = join(outputDirectory, "SHA256SUMS");
+  await writeFile(checksumPath, `${[...checksums].sort().join("\n")}\n`);
+  await runCommand(["sha256sum", "-c", basename(checksumPath)], {
+    cwd: outputDirectory,
+  });
+  return checksumPath;
+};
+
 export const packageRelease = async (
   options: Readonly<{
     inputDirectory: string;
@@ -35,75 +145,28 @@ export const packageRelease = async (
   }>,
   runCommand: RunCommand = defaultRunCommand,
 ): Promise<Readonly<{ archives: readonly string[]; checksumPath: string }>> => {
-  const version = versionSchema.parse(options.version);
-  const inputDirectory = resolve(options.inputDirectory);
-  const outputDirectory = resolve(options.outputDirectory);
-  const licensePath = resolve(options.licensePath ?? "LICENSE");
-
-  await stat(licensePath);
-  for (const target of releaseTargetNames) {
-    const binary = join(inputDirectory, target, "asana-cli");
-    const metadata = await stat(binary).catch(() => undefined);
-    if (metadata === undefined || !metadata.isFile()) {
-      throw new Error(`Missing release executable for ${target}`);
-    }
-  }
-
-  await mkdir(outputDirectory, { recursive: true });
-  const stagingRoot = join(outputDirectory, ".staging");
-  await rm(stagingRoot, { recursive: true, force: true });
-  await mkdir(stagingRoot, { recursive: true });
+  const release = await resolveReleaseOptions(options);
+  const stagingRoot = await prepareReleaseWorkspace(release.outputDirectory);
 
   const archives: string[] = [];
   const checksums: string[] = [];
   try {
     for (const target of releaseTargetNames) {
-      const stagingDirectory = join(stagingRoot, target);
-      await mkdir(stagingDirectory, { recursive: true });
-      await copyFile(
-        join(inputDirectory, target, "asana-cli"),
-        join(stagingDirectory, "asana-cli"),
+      const packagedTarget = await packageReleaseTarget(
+        release,
+        target,
+        stagingRoot,
+        runCommand,
       );
-      await copyFile(licensePath, join(stagingDirectory, "LICENSE"));
-      await chmod(join(stagingDirectory, "asana-cli"), 0o755);
-      await chmod(join(stagingDirectory, "LICENSE"), 0o644);
-
-      const archiveName = `asana-cli-v${version}-${target}.tar.gz`;
-      const tarPath = join(outputDirectory, archiveName.slice(0, -3));
-      const archivePath = join(outputDirectory, archiveName);
-      await rm(tarPath, { force: true });
-      await rm(archivePath, { force: true });
-      await runCommand([
-        "tar",
-        "--sort=name",
-        "--format=pax",
-        "--owner=0",
-        "--group=0",
-        "--numeric-owner",
-        "--mtime=@0",
-        "--mode=u+rwX,go+rX,go-w",
-        "--pax-option=delete=atime,delete=ctime",
-        "-cf",
-        tarPath,
-        "-C",
-        stagingDirectory,
-        "LICENSE",
-        "asana-cli",
-      ]);
-      await runCommand(["gzip", "-n", "-9", "-f", tarPath]);
-
-      const digest = new Bun.CryptoHasher("sha256")
-        .update(await Bun.file(archivePath).arrayBuffer())
-        .digest("hex");
-      archives.push(archivePath);
-      checksums.push(`${digest}  ${archiveName}`);
+      archives.push(packagedTarget.archivePath);
+      checksums.push(packagedTarget.checksumLine);
     }
 
-    const checksumPath = join(outputDirectory, "SHA256SUMS");
-    await writeFile(checksumPath, `${checksums.sort().join("\n")}\n`);
-    await runCommand(["sha256sum", "-c", basename(checksumPath)], {
-      cwd: outputDirectory,
-    });
+    const checksumPath = await writeChecksumManifest(
+      release.outputDirectory,
+      checksums,
+      runCommand,
+    );
     return { archives, checksumPath };
   } finally {
     await rm(stagingRoot, { recursive: true, force: true });

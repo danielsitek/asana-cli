@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { releaseTargets } from "./build.ts";
 import { packageRelease } from "./package-release.ts";
@@ -14,6 +14,11 @@ afterEach(async () => {
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
+
+const pathExists = async (path: string) =>
+  stat(path)
+    .then(() => true)
+    .catch(() => false);
 
 const fixture = async () => {
   const root = await mkdtemp(`${tmpdir()}/asana-cli-package-test-`);
@@ -29,6 +34,59 @@ const fixture = async () => {
   return { inputDirectory, outputDirectory, licensePath };
 };
 
+const createRecordingRunner = (failureStage?: "tar" | "gzip" | "sha256sum") => {
+  const commands: Array<{
+    command: readonly string[];
+    options?: Readonly<{ cwd?: string }>;
+  }> = [];
+  const run = async (
+    command: readonly string[],
+    options?: Readonly<{ cwd?: string }>,
+  ) => {
+    commands.push(
+      options === undefined
+        ? { command: [...command] }
+        : { command: [...command], options },
+    );
+    if (command[0] === failureStage) {
+      throw new Error(`forced ${failureStage} failure`);
+    }
+    if (command[0] === "tar") {
+      const tarPath = command[command.indexOf("-cf") + 1];
+      if (tarPath === undefined) {
+        throw new Error("expected tar output path after -cf");
+      }
+      const stagingDirectory = command[command.indexOf("-C") + 1];
+      if (stagingDirectory === undefined) {
+        throw new Error("expected staging directory after -C");
+      }
+      const target = basename(stagingDirectory);
+      expect(await Bun.file(join(stagingDirectory, "asana-cli")).text()).toBe(
+        target,
+      );
+      expect(await Bun.file(join(stagingDirectory, "LICENSE")).text()).toBe(
+        "MIT fixture\n",
+      );
+      expect(
+        (await stat(join(stagingDirectory, "asana-cli"))).mode & 0o777,
+      ).toBe(0o755);
+      expect((await stat(join(stagingDirectory, "LICENSE"))).mode & 0o777).toBe(
+        0o644,
+      );
+      await writeFile(tarPath, "normalized tar fixture");
+    }
+    if (command[0] === "gzip") {
+      const tarPath = command.at(-1);
+      if (tarPath === undefined) {
+        throw new Error("expected tar path argument");
+      }
+      await writeFile(`${tarPath}.gz`, await Bun.file(tarPath).bytes());
+      await rm(tarPath);
+    }
+  };
+  return { commands, run };
+};
+
 describe("release packaging", () => {
   test("fails before packaging when a target is missing", async () => {
     const setup = await fixture();
@@ -40,32 +98,17 @@ describe("release packaging", () => {
       }),
     ).rejects.toThrow("Missing release executable for linux-arm64");
     expect(commands).toBe(0);
+    expect(await pathExists(setup.outputDirectory)).toBe(false);
   });
 
   test("creates deterministic archive names and a sorted checksum manifest", async () => {
     const setup = await fixture();
-    const commands: readonly string[][] = [];
-    const mutableCommands = commands as string[][];
-    const run = async (command: readonly string[]) => {
-      mutableCommands.push([...command]);
-      if (command[0] === "tar") {
-        const tarPath = command[command.indexOf("-cf") + 1];
-        if (tarPath === undefined) {
-          throw new Error("expected tar output path after -cf");
-        }
-        await writeFile(tarPath, "normalized tar fixture");
-      }
-      if (command[0] === "gzip") {
-        const tarPath = command.at(-1);
-        if (tarPath === undefined) {
-          throw new Error("expected tar path argument");
-        }
-        await writeFile(`${tarPath}.gz`, await Bun.file(tarPath).bytes());
-        await rm(tarPath);
-      }
-    };
+    const { commands, run } = createRecordingRunner();
 
     const packaged = await packageRelease({ ...setup, version: "0.1.0" }, run);
+    expect(packaged.checksumPath).toBe(
+      join(setup.outputDirectory, "SHA256SUMS"),
+    );
     expect(packaged.archives.map((path) => path.split("/").at(-1))).toEqual([
       "asana-cli-v0.1.0-darwin-arm64.tar.gz",
       "asana-cli-v0.1.0-darwin-x64.tar.gz",
@@ -77,17 +120,46 @@ describe("release packaging", () => {
     expect(checksumLines).toHaveLength(4);
     expect(checksumLines).toEqual([...checksumLines].sort());
     expect(manifest).toContain("  asana-cli-v0.1.0-darwin-arm64.tar.gz");
-    expect(commands.filter(([command]) => command === "tar")).toHaveLength(4);
-    expect(commands[0]).toEqual(
-      expect.arrayContaining([
+    const targets = Object.keys(releaseTargets);
+    expect(commands).toHaveLength(targets.length * 2 + 1);
+    for (const [index, target] of targets.entries()) {
+      const stagingDirectory = join(setup.outputDirectory, ".staging", target);
+      const tarPath = join(
+        setup.outputDirectory,
+        `asana-cli-v0.1.0-${target}.tar`,
+      );
+      const archivePath = `${tarPath}.gz`;
+      expect(commands[index * 2]?.command).toEqual([
+        "tar",
         "--sort=name",
+        "--format=pax",
         "--owner=0",
         "--group=0",
+        "--numeric-owner",
         "--mtime=@0",
+        "--mode=u+rwX,go+rX,go-w",
         "--pax-option=delete=atime,delete=ctime",
-      ]),
+        "-cf",
+        tarPath,
+        "-C",
+        stagingDirectory,
+        "LICENSE",
+        "asana-cli",
+      ]);
+      expect(commands[index * 2 + 1]?.command).toEqual([
+        "gzip",
+        "-n",
+        "-9",
+        "-f",
+        tarPath,
+      ]);
+      expect(packaged.archives[index]).toBe(archivePath);
+    }
+    expect(commands.at(-1)?.command).toEqual(["sha256sum", "-c", "SHA256SUMS"]);
+    expect(commands.at(-1)?.options?.cwd).toBe(setup.outputDirectory);
+    expect(await pathExists(join(setup.outputDirectory, ".staging"))).toBe(
+      false,
     );
-    expect(commands.at(-1)?.slice(0, 2)).toEqual(["sha256sum", "-c"]);
   });
 
   test("rejects malformed versions", async () => {
@@ -95,6 +167,7 @@ describe("release packaging", () => {
     await expect(
       packageRelease({ ...setup, version: "v0.1" }, async () => undefined),
     ).rejects.toThrow();
+    expect(await pathExists(setup.outputDirectory)).toBe(false);
   });
 
   const withFakeCommandsOnPath = async (
@@ -149,6 +222,20 @@ describe("release packaging", () => {
       process.env.PATH = priorPath;
     }
   });
+
+  test.each(["tar", "gzip", "sha256sum"] as const)(
+    "cleans staging after a %s failure",
+    async (failureStage) => {
+      const setup = await fixture();
+      const { run } = createRecordingRunner(failureStage);
+      await expect(
+        packageRelease({ ...setup, version: "0.1.0" }, run),
+      ).rejects.toThrow(`forced ${failureStage} failure`);
+      expect(await pathExists(join(setup.outputDirectory, ".staging"))).toBe(
+        false,
+      );
+    },
+  );
 
   describe("CLI entry point", () => {
     test("fails with a usage message when required flags are missing", async () => {
