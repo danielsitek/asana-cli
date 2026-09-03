@@ -56,15 +56,7 @@ const requireResult = (
   }
 };
 
-export const runExecutableSmoke = async (
-  binaryInput: string,
-): Promise<void> => {
-  const binary = resolve(binaryInput);
-  const metadata = await stat(binary);
-  if ((metadata.mode & 0o111) === 0) {
-    throw new Error("Packaged executable is missing its executable bit");
-  }
-
+const checkCoreCommands = async (binary: string): Promise<void> => {
   const { version } = packageManifest.parse(
     await Bun.file(new URL("../package.json", import.meta.url)).json(),
   );
@@ -91,7 +83,9 @@ export const runExecutableSmoke = async (
     { exitCode: 0, stdoutIncludes: "#compdef asana-cli", stderr: "" },
     "shell completion",
   );
+};
 
+const checkConfigurationIsolation = async (binary: string): Promise<void> => {
   const isolationDirectory = await mkdtemp(`${tmpdir()}/asana-cli-isolation-`);
   try {
     await writeFile(
@@ -129,6 +123,19 @@ export const runExecutableSmoke = async (
   } finally {
     await rm(isolationDirectory, { recursive: true, force: true });
   }
+};
+
+export const runExecutableSmoke = async (
+  binaryInput: string,
+): Promise<void> => {
+  const binary = resolve(binaryInput);
+  const metadata = await stat(binary);
+  if ((metadata.mode & 0o111) === 0) {
+    throw new Error("Packaged executable is missing its executable bit");
+  }
+
+  await checkCoreCommands(binary);
+  await checkConfigurationIsolation(binary);
 };
 
 if (import.meta.main) {
