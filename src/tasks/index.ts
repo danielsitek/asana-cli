@@ -1296,28 +1296,27 @@ const withTaskListInternalFields = (
   return [...withCompleted, "assignee.gid"];
 };
 
-export const prepareTaskListRead = (
+type TaskListPreparationError = Readonly<{
+  kind: "invalid_usage";
+  message: string;
+}>;
+
+const prepareTaskListSource = (
   options: TaskListOptions,
-  fieldsInput?: string,
-): Result<
-  PreparedTaskListRead,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  const sourcesSupplied = [
+): Result<TaskListSource, TaskListPreparationError> => {
+  const supplied = [
     options.mySection,
     options.section,
     options.project,
     options.parent,
   ].filter((value) => value !== undefined).length;
-  if (sourcesSupplied !== 1) {
+  if (supplied !== 1) {
     return err({
       kind: "invalid_usage",
       message:
         "Exactly one of --my-section, --section, --project, or --parent is required",
     });
   }
-
-  let source: TaskListSource;
   if (options.mySection !== undefined) {
     if (!options.mySection.startsWith("@") || options.mySection.length <= 1) {
       return err({
@@ -1325,62 +1324,72 @@ export const prepareTaskListRead = (
         message: "--my-section must use an @alias",
       });
     }
-    source = {
+    return ok({
       kind: "my_section",
       selector: { kind: "alias", value: options.mySection.slice(1) },
-    };
-  } else if (options.section !== undefined) {
-    if (!/^\d+$/.test(options.section)) {
-      return err({
-        kind: "invalid_usage",
-        message: "--section must be a digit-only GID",
-      });
-    }
-    source = { kind: "section", sectionGid: options.section };
-  } else if (options.project !== undefined) {
-    const project = options.project;
-    if (!/^\d+$/.test(project)) {
-      return err({
-        kind: "invalid_usage",
-        message: "--project must be a digit-only GID",
-      });
-    }
-    source = { kind: "project", projectGid: project };
-  } else {
-    const parent = parseTaskId(options.parent as string);
-    if (!parent.ok) {
-      return err({
+    });
+  }
+  if (options.section !== undefined) {
+    return /^\d+$/.test(options.section)
+      ? ok({ kind: "section", sectionGid: options.section })
+      : err({
+          kind: "invalid_usage",
+          message: "--section must be a digit-only GID",
+        });
+  }
+  if (options.project !== undefined) {
+    return /^\d+$/.test(options.project)
+      ? ok({ kind: "project", projectGid: options.project })
+      : err({
+          kind: "invalid_usage",
+          message: "--project must be a digit-only GID",
+        });
+  }
+  const parent = parseTaskId(options.parent as string);
+  return parent.ok
+    ? ok({ kind: "parent", parentGid: parent.value })
+    : err({
         kind: "invalid_usage",
         message: "--parent must use a digit-only GID or Asana task URL",
       });
-    }
-    source = { kind: "parent", parentGid: parent.value };
-  }
+};
 
-  let assigneeFilter: TaskListAssigneeFilter | undefined;
-  if (options.assignee !== undefined) {
-    if (options.assignee === "me") {
-      assigneeFilter = { kind: "me" };
-    } else if (/^\d+$/.test(options.assignee)) {
-      assigneeFilter = { kind: "gid", value: options.assignee };
-    } else {
-      return err({
-        kind: "invalid_usage",
-        message: "--assignee must be me or a digit-only user GID",
-      });
-    }
-  }
+const prepareTaskListAssignee = (
+  input: string | undefined,
+): Result<TaskListAssigneeFilter | undefined, TaskListPreparationError> => {
+  if (input === undefined) return ok(undefined);
+  if (input === "me") return ok({ kind: "me" });
+  if (/^\d+$/.test(input)) return ok({ kind: "gid", value: input });
+  return err({
+    kind: "invalid_usage",
+    message: "--assignee must be me or a digit-only user GID",
+  });
+};
 
-  let completed = false;
-  if (options.completed !== undefined) {
-    if (options.completed !== "true" && options.completed !== "false") {
-      return err({
-        kind: "invalid_usage",
-        message: "--completed must be true or false",
-      });
-    }
-    completed = options.completed === "true";
-  }
+const prepareTaskListCompleted = (
+  input: string | undefined,
+): Result<boolean, TaskListPreparationError> => {
+  if (input === undefined) return ok(false);
+  if (input === "true" || input === "false") return ok(input === "true");
+  return err({
+    kind: "invalid_usage",
+    message: "--completed must be true or false",
+  });
+};
+
+export const prepareTaskListRead = (
+  options: TaskListOptions,
+  fieldsInput?: string,
+): Result<
+  PreparedTaskListRead,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  const source = prepareTaskListSource(options);
+  if (!source.ok) return source;
+  const assigneeFilter = prepareTaskListAssignee(options.assignee);
+  if (!assigneeFilter.ok) return assigneeFilter;
+  const completed = prepareTaskListCompleted(options.completed);
+  if (!completed.ok) return completed;
 
   if (options.all && options.max === undefined) {
     return err({ kind: "invalid_usage", message: "--all requires --max" });
@@ -1397,13 +1406,15 @@ export const prepareTaskListRead = (
   const outputFields = selectedFields.value ?? DEFAULT_TASK_LIST_FIELDS;
   const requestFields = withTaskListInternalFields(
     outputFields,
-    assigneeFilter !== undefined,
+    assigneeFilter.value !== undefined,
   );
 
   return ok({
-    source,
-    ...(assigneeFilter === undefined ? {} : { assigneeFilter }),
-    completed,
+    source: source.value,
+    ...(assigneeFilter.value === undefined
+      ? {}
+      : { assigneeFilter: assigneeFilter.value }),
+    completed: completed.value,
     outputFields,
     requestFields,
     scanCap: scanCap.value,
@@ -1419,6 +1430,223 @@ const projectTaskListFields = (task: Task, fields: readonly string[]): Task => {
   return projected.found ? (projected.value as Task) : {};
 };
 
+type ResolvedTaskListSource = Readonly<
+  | { kind: "section"; gid: string }
+  | { kind: "project"; gid: string }
+  | { kind: "parent"; gid: string }
+>;
+
+type TaskListReadResult = Result<
+  Readonly<{ tasks: readonly Task[]; meta: TaskListMeta }>,
+  TaskUpdateError
+>;
+
+const resolveTaskListSource = async (
+  token: string,
+  source: TaskListSource,
+  resolver: MySectionResolver | undefined,
+): Promise<Result<ResolvedTaskListSource, TaskUpdateError>> => {
+  if (source.kind !== "my_section") {
+    const gid =
+      source.kind === "section"
+        ? source.sectionGid
+        : source.kind === "project"
+          ? source.projectGid
+          : source.parentGid;
+    return ok({ kind: source.kind, gid });
+  }
+  if (!resolver) {
+    return err({
+      kind: "internal_error",
+      message: "My Tasks section resolution dependencies are unavailable",
+    });
+  }
+  const resolved = await resolver.resolve(token, source.selector);
+  return resolved.ok
+    ? ok({ kind: "section", gid: resolved.value.sectionGid })
+    : resolved;
+};
+
+const resolveTaskListAssignee = async (
+  token: string,
+  filter: TaskListAssigneeFilter | undefined,
+  resolveAuthenticatedUserGid: TaskListDependencies["resolveAuthenticatedUserGid"],
+): Promise<Result<string | undefined, TaskUpdateError>> => {
+  if (filter?.kind === "gid") return ok(filter.value);
+  if (filter?.kind === "me") return resolveAuthenticatedUserGid(token);
+  return ok(undefined);
+};
+
+const readTaskListPage = (
+  token: string,
+  source: ResolvedTaskListSource,
+  prepared: PreparedTaskListRead,
+  limit: number,
+  offset: string | undefined,
+  reader: TaskListGateway,
+): Promise<Result<TaskListPage, TaskReadError>> => {
+  const options = {
+    fields: prepared.requestFields,
+    limit,
+    ...(offset === undefined ? {} : { offset }),
+  };
+  if (source.kind === "parent") {
+    return reader.getTaskSubtasks(token, source.gid, options);
+  }
+  const completedSince = prepared.completed ? EPOCH_COMPLETED_SINCE : "now";
+  return source.kind === "section"
+    ? reader.getSectionTasks(token, source.gid, { ...options, completedSince })
+    : reader.getProjectTasks(token, source.gid, { ...options, completedSince });
+};
+
+const taskListResult = (
+  tasks: readonly Task[],
+  scanned: number,
+  scanTruncated: boolean,
+  nextOffset?: string,
+): TaskListReadResult =>
+  ok({
+    tasks,
+    meta: {
+      scanned,
+      returned: tasks.length,
+      scan_truncated: scanTruncated,
+      ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
+    },
+  });
+
+const collectMatchingPageTasks = (
+  pageTasks: readonly Task[],
+  prepared: PreparedTaskListRead,
+  assigneeGid: string | undefined,
+  tasks: Task[],
+  remaining: number,
+) => {
+  const tasksWithinBudget = pageTasks.slice(0, remaining);
+  let consumed = 0;
+  for (const task of tasksWithinBudget) {
+    consumed += 1;
+    const matchesCompleted = task.completed === prepared.completed;
+    const matchesAssignee =
+      assigneeGid === undefined || task.assignee?.gid === assigneeGid;
+    if (matchesCompleted && matchesAssignee) {
+      tasks.push(projectTaskListFields(task, prepared.outputFields));
+      if (
+        prepared.resultCap !== undefined &&
+        tasks.length >= prepared.resultCap
+      ) {
+        break;
+      }
+    }
+  }
+  return {
+    consumed,
+    pageExceedsBudget: pageTasks.length > tasksWithinBudget.length,
+    resultCapReached:
+      prepared.resultCap !== undefined && tasks.length >= prepared.resultCap,
+  };
+};
+
+const taskListPaginationError = (
+  page: TaskListPage,
+  requestedOffsets: ReadonlySet<string>,
+): TaskUpdateError | undefined => {
+  if (
+    page.nextOffset !== undefined &&
+    (page.tasks.length === 0 || requestedOffsets.has(page.nextOffset))
+  ) {
+    return {
+      kind: "invalid_response",
+      message: "Task pagination did not advance",
+    };
+  }
+  return undefined;
+};
+
+const completedTaskListPageResult = (
+  tasks: readonly Task[],
+  prepared: PreparedTaskListRead,
+  scanned: number,
+  page: TaskListPage,
+  collected: ReturnType<typeof collectMatchingPageTasks>,
+): TaskListReadResult | undefined => {
+  if (collected.resultCapReached) {
+    const stoppedMidPage = collected.consumed < page.tasks.length;
+    const truncated =
+      scanned >= prepared.scanCap &&
+      (stoppedMidPage || page.nextOffset !== undefined);
+    return taskListResult(
+      tasks,
+      scanned,
+      truncated,
+      stoppedMidPage ? undefined : page.nextOffset,
+    );
+  }
+  if (scanned >= prepared.scanCap) {
+    const truncated =
+      collected.pageExceedsBudget || page.nextOffset !== undefined;
+    return taskListResult(
+      tasks,
+      scanned,
+      truncated,
+      collected.pageExceedsBudget ? undefined : page.nextOffset,
+    );
+  }
+  return page.nextOffset === undefined
+    ? taskListResult(tasks, scanned, false)
+    : undefined;
+};
+
+const collectTaskListPages = async (
+  token: string,
+  prepared: PreparedTaskListRead,
+  dependencies: TaskListDependencies,
+  source: ResolvedTaskListSource,
+  assigneeGid: string | undefined,
+): Promise<TaskListReadResult> => {
+  const tasks: Task[] = [];
+  let scanned = 0;
+  let offset = prepared.offset;
+  const requestedOffsets = new Set<string>();
+  while (scanned < prepared.scanCap) {
+    if (offset !== undefined) requestedOffsets.add(offset);
+    const remaining = prepared.scanCap - scanned;
+    const page = await readTaskListPage(
+      token,
+      source,
+      prepared,
+      Math.min(100, remaining),
+      offset,
+      dependencies.reader,
+    );
+    if (!page.ok) return page;
+    const paginationError = taskListPaginationError(
+      page.value,
+      requestedOffsets,
+    );
+    if (paginationError !== undefined) return err(paginationError);
+    const { tasks: pageTasks, nextOffset } = page.value;
+    const collected = collectMatchingPageTasks(
+      pageTasks,
+      prepared,
+      assigneeGid,
+      tasks,
+      remaining,
+    );
+    scanned += collected.consumed;
+    const result = completedTaskListPageResult(
+      tasks,
+      prepared,
+      scanned,
+      page.value,
+      collected,
+    );
+    if (result !== undefined) return result;
+    offset = nextOffset;
+  }
+  return taskListResult(tasks, scanned, false);
+};
+
 export const executeTaskListRead = async (
   token: string,
   prepared: PreparedTaskListRead,
@@ -1429,139 +1657,23 @@ export const executeTaskListRead = async (
     TaskUpdateError
   >
 > => {
-  let sectionGid: string | undefined;
-  let projectGid: string | undefined;
-  let parentGid: string | undefined;
-  if (prepared.source.kind === "section") {
-    sectionGid = prepared.source.sectionGid;
-  } else if (prepared.source.kind === "project") {
-    projectGid = prepared.source.projectGid;
-  } else if (prepared.source.kind === "parent") {
-    parentGid = prepared.source.parentGid;
-  } else {
-    if (!dependencies.mySectionResolver) {
-      return err({
-        kind: "internal_error",
-        message: "My Tasks section resolution dependencies are unavailable",
-      });
-    }
-    const resolved = await dependencies.mySectionResolver.resolve(
-      token,
-      prepared.source.selector,
-    );
-    if (!resolved.ok) return resolved;
-    sectionGid = resolved.value.sectionGid;
-  }
-
-  let assigneeGid: string | undefined;
-  if (prepared.assigneeFilter?.kind === "me") {
-    const identity = await dependencies.resolveAuthenticatedUserGid(token);
-    if (!identity.ok) return identity;
-    assigneeGid = identity.value;
-  } else if (prepared.assigneeFilter?.kind === "gid") {
-    assigneeGid = prepared.assigneeFilter.value;
-  }
-
-  const completedSince = prepared.completed ? EPOCH_COMPLETED_SINCE : "now";
-
-  const tasks: Task[] = [];
-  let scanned = 0;
-  let offset = prepared.offset;
-  const requestedOffsets = new Set<string>();
-
-  while (scanned < prepared.scanCap) {
-    if (offset !== undefined) requestedOffsets.add(offset);
-    const remaining = prepared.scanCap - scanned;
-    const pageOptions = {
-      fields: prepared.requestFields,
-      limit: Math.min(100, remaining),
-      ...(offset === undefined ? {} : { offset }),
-    };
-    const page =
-      sectionGid !== undefined
-        ? await dependencies.reader.getSectionTasks(token, sectionGid, {
-            ...pageOptions,
-            completedSince,
-          })
-        : projectGid !== undefined
-          ? await dependencies.reader.getProjectTasks(token, projectGid, {
-              ...pageOptions,
-              completedSince,
-            })
-          : await dependencies.reader.getTaskSubtasks(
-              token,
-              parentGid as string,
-              pageOptions,
-            );
-    if (!page.ok) return page;
-
-    const { tasks: pageTasks, nextOffset } = page.value;
-    if (
-      nextOffset !== undefined &&
-      (pageTasks.length === 0 || requestedOffsets.has(nextOffset))
-    ) {
-      return err({
-        kind: "invalid_response",
-        message: "Task pagination did not advance",
-      });
-    }
-    const tasksWithinBudget = pageTasks.slice(0, remaining);
-    const pageExceedsBudget = pageTasks.length > tasksWithinBudget.length;
-    for (const [index, task] of tasksWithinBudget.entries()) {
-      scanned += 1;
-      const matchesCompleted = task.completed === prepared.completed;
-      const matchesAssignee =
-        assigneeGid === undefined || task.assignee?.gid === assigneeGid;
-      if (matchesCompleted && matchesAssignee) {
-        tasks.push(projectTaskListFields(task, prepared.outputFields));
-        if (
-          prepared.resultCap !== undefined &&
-          tasks.length >= prepared.resultCap
-        ) {
-          const stoppedMidPage = index < pageTasks.length - 1;
-          const scanCapReached = scanned >= prepared.scanCap;
-          const scanTruncated =
-            scanCapReached && (stoppedMidPage || nextOffset !== undefined);
-          return ok({
-            tasks,
-            meta: {
-              scanned,
-              returned: tasks.length,
-              scan_truncated: scanTruncated,
-              ...(!stoppedMidPage && nextOffset !== undefined
-                ? { next_offset: nextOffset }
-                : {}),
-            },
-          });
-        }
-      }
-    }
-
-    if (scanned >= prepared.scanCap) {
-      return ok({
-        tasks,
-        meta: {
-          scanned,
-          returned: tasks.length,
-          scan_truncated: pageExceedsBudget || nextOffset !== undefined,
-          ...(pageExceedsBudget || nextOffset === undefined
-            ? {}
-            : { next_offset: nextOffset }),
-        },
-      });
-    }
-
-    if (nextOffset === undefined) {
-      return ok({
-        tasks,
-        meta: { scanned, returned: tasks.length, scan_truncated: false },
-      });
-    }
-    offset = nextOffset;
-  }
-
-  return ok({
-    tasks,
-    meta: { scanned, returned: tasks.length, scan_truncated: false },
-  });
+  const source = await resolveTaskListSource(
+    token,
+    prepared.source,
+    dependencies.mySectionResolver,
+  );
+  if (!source.ok) return source;
+  const assignee = await resolveTaskListAssignee(
+    token,
+    prepared.assigneeFilter,
+    dependencies.resolveAuthenticatedUserGid,
+  );
+  if (!assignee.ok) return assignee;
+  return collectTaskListPages(
+    token,
+    prepared,
+    dependencies,
+    source.value,
+    assignee.value,
+  );
 };
