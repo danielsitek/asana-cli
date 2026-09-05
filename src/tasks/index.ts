@@ -1301,6 +1301,21 @@ type TaskListPreparationError = Readonly<{
   message: string;
 }>;
 
+const prepareMySectionTaskListSource = (
+  input: string,
+): Result<TaskListSource, TaskListPreparationError> => {
+  if (!input.startsWith("@") || input.length <= 1) {
+    return err({
+      kind: "invalid_usage",
+      message: "--my-section must use an @alias",
+    });
+  }
+  return ok({
+    kind: "my_section",
+    selector: { kind: "alias", value: input.slice(1) },
+  });
+};
+
 const prepareTaskListSource = (
   options: TaskListOptions,
 ): Result<TaskListSource, TaskListPreparationError> => {
@@ -1318,16 +1333,7 @@ const prepareTaskListSource = (
     });
   }
   if (options.mySection !== undefined) {
-    if (!options.mySection.startsWith("@") || options.mySection.length <= 1) {
-      return err({
-        kind: "invalid_usage",
-        message: "--my-section must use an @alias",
-      });
-    }
-    return ok({
-      kind: "my_section",
-      selector: { kind: "alias", value: options.mySection.slice(1) },
-    });
+    return prepareMySectionTaskListSource(options.mySection);
   }
   if (options.section !== undefined) {
     return /^\d+$/.test(options.section)
