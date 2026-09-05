@@ -1316,6 +1316,18 @@ const prepareMySectionTaskListSource = (
   });
 };
 
+const prepareParentTaskListSource = (
+  input: string | undefined,
+): Result<TaskListSource, TaskListPreparationError> => {
+  const parent = input === undefined ? undefined : parseTaskId(input);
+  return parent?.ok
+    ? ok({ kind: "parent", parentGid: parent.value })
+    : err({
+        kind: "invalid_usage",
+        message: "--parent must use a digit-only GID or Asana task URL",
+      });
+};
+
 const prepareTaskListSource = (
   options: TaskListOptions,
 ): Result<TaskListSource, TaskListPreparationError> => {
@@ -1351,13 +1363,7 @@ const prepareTaskListSource = (
           message: "--project must be a digit-only GID",
         });
   }
-  const parent = parseTaskId(options.parent as string);
-  return parent.ok
-    ? ok({ kind: "parent", parentGid: parent.value })
-    : err({
-        kind: "invalid_usage",
-        message: "--parent must use a digit-only GID or Asana task URL",
-      });
+  return prepareParentTaskListSource(options.parent);
 };
 
 const prepareTaskListAssignee = (
