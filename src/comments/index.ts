@@ -31,6 +31,19 @@ type TaskCommentsReadMode =
   | Readonly<{ kind: "all"; offset?: string }>
   | Readonly<{ kind: "latest"; count: number }>;
 
+type TaskCommentsReadOptions = Readonly<{
+  fields?: string;
+  max?: string;
+  offset?: string;
+  all?: boolean;
+  latest?: string;
+}>;
+
+type PreparedTaskCommentsReadMode = Readonly<{
+  scanCap: number;
+  mode: TaskCommentsReadMode;
+}>;
+
 export type PreparedTaskCommentsRead = Readonly<{
   taskId: string;
   outputFields: readonly string[];
@@ -170,6 +183,96 @@ const withInternalFields = (fields: readonly string[]): readonly string[] =>
     ? fields
     : [...fields, RESOURCE_SUBTYPE_FIELD];
 
+const resolvedCommentsScanCap = (
+  input: string | undefined,
+): Result<number, CommentPreparationError> =>
+  input === undefined
+    ? ok(DEFAULT_SCAN_CAP)
+    : parsePositiveSafeInteger(input, "--max");
+
+const prepareLatestCommentsReadMode = (
+  options: TaskCommentsReadOptions,
+  latestInput: string,
+): Result<PreparedTaskCommentsReadMode, CommentPreparationError> => {
+  if (options.all) {
+    return err({
+      kind: "invalid_usage",
+      message: "--latest and --all are mutually exclusive",
+    });
+  }
+  if (options.offset !== undefined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--latest and --offset are mutually exclusive",
+    });
+  }
+  if (options.max === undefined) {
+    return err({
+      kind: "invalid_usage",
+      message: "--latest requires --max",
+    });
+  }
+
+  const count = parsePositiveSafeInteger(latestInput, "--latest");
+  if (!count.ok) return count;
+
+  const scanCap = resolvedCommentsScanCap(options.max);
+  if (!scanCap.ok) return scanCap;
+
+  return ok({
+    scanCap: scanCap.value,
+    mode: { kind: "latest", count: count.value },
+  });
+};
+
+const prepareAllCommentsReadMode = (
+  options: TaskCommentsReadOptions,
+): Result<PreparedTaskCommentsReadMode, CommentPreparationError> => {
+  if (options.max === undefined) {
+    return err({ kind: "invalid_usage", message: "--all requires --max" });
+  }
+
+  const scanCap = resolvedCommentsScanCap(options.max);
+  if (!scanCap.ok) return scanCap;
+
+  return ok({
+    scanCap: scanCap.value,
+    mode: {
+      kind: "all",
+      ...(options.offset === undefined ? {} : { offset: options.offset }),
+    },
+  });
+};
+
+const prepareCappedCommentsReadMode = (
+  options: TaskCommentsReadOptions,
+): Result<PreparedTaskCommentsReadMode, CommentPreparationError> => {
+  const scanCap = resolvedCommentsScanCap(options.max);
+  if (!scanCap.ok) return scanCap;
+
+  return ok({
+    scanCap: scanCap.value,
+    mode: {
+      kind: "capped",
+      resultCap: DEFAULT_RESULT_CAP,
+      ...(options.offset === undefined ? {} : { offset: options.offset }),
+    },
+  });
+};
+
+const prepareTaskCommentsReadMode = (
+  options: TaskCommentsReadOptions,
+): Result<PreparedTaskCommentsReadMode, CommentPreparationError> => {
+  if (options.offset === "") {
+    return err({ kind: "invalid_usage", message: "--offset cannot be empty" });
+  }
+  if (options.latest !== undefined) {
+    return prepareLatestCommentsReadMode(options, options.latest);
+  }
+  if (options.all) return prepareAllCommentsReadMode(options);
+  return prepareCappedCommentsReadMode(options);
+};
+
 const projectCommentFields = (
   comment: Comment,
   fields: readonly string[],
@@ -183,82 +286,18 @@ const projectCommentFields = (
 
 export const prepareTaskCommentsRead = (
   taskIdInput: string,
-  options: Readonly<{
-    fields?: string;
-    max?: string;
-    offset?: string;
-    all?: boolean;
-    latest?: string;
-  }>,
+  options: TaskCommentsReadOptions,
 ): Result<PreparedTaskCommentsRead, CommentPreparationError> => {
   const target = prepareCommentTarget(taskIdInput, options.fields);
   if (!target.ok) return target;
-  const { taskId, outputFields } = target.value;
-
-  if (options.offset === "") {
-    return err({ kind: "invalid_usage", message: "--offset cannot be empty" });
-  }
-
-  let latestValue: number | undefined;
-  if (options.latest !== undefined) {
-    if (options.all) {
-      return err({
-        kind: "invalid_usage",
-        message: "--latest and --all are mutually exclusive",
-      });
-    }
-    if (options.offset !== undefined) {
-      return err({
-        kind: "invalid_usage",
-        message: "--latest and --offset are mutually exclusive",
-      });
-    }
-    if (options.max === undefined) {
-      return err({
-        kind: "invalid_usage",
-        message: "--latest requires --max",
-      });
-    }
-    const parsedLatest = parsePositiveSafeInteger(options.latest, "--latest");
-    if (!parsedLatest.ok) return parsedLatest;
-    latestValue = parsedLatest.value;
-  }
-
-  if (options.all && options.max === undefined) {
-    return err({
-      kind: "invalid_usage",
-      message: "--all requires --max",
-    });
-  }
-
-  const scanCap =
-    options.max === undefined
-      ? ok(DEFAULT_SCAN_CAP)
-      : parsePositiveSafeInteger(options.max, "--max");
-  if (!scanCap.ok) return scanCap;
+  const preparedMode = prepareTaskCommentsReadMode(options);
+  if (!preparedMode.ok) return preparedMode;
 
   return ok({
-    taskId,
-    outputFields,
-    requestFields: withInternalFields(outputFields),
-    scanCap: scanCap.value,
-    mode:
-      latestValue !== undefined
-        ? { kind: "latest", count: latestValue }
-        : options.all
-          ? {
-              kind: "all",
-              ...(options.offset === undefined
-                ? {}
-                : { offset: options.offset }),
-            }
-          : {
-              kind: "capped",
-              resultCap: DEFAULT_RESULT_CAP,
-              ...(options.offset === undefined
-                ? {}
-                : { offset: options.offset }),
-            },
+    taskId: target.value.taskId,
+    outputFields: target.value.outputFields,
+    requestFields: withInternalFields(target.value.outputFields),
+    ...preparedMode.value,
   });
 };
 

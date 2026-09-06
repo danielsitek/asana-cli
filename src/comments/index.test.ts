@@ -131,6 +131,54 @@ describe("prepareTaskCommentsRead", () => {
     expect(prepared.error.message).toBe("--offset cannot be empty");
   });
 
+  test("preserves target and option validation order", () => {
+    const cases = [
+      {
+        taskId: "not-a-gid",
+        options: { fields: "gid,,text", offset: "", max: "abc" },
+        message: "Invalid task identifier",
+      },
+      {
+        taskId: "123",
+        options: { fields: "gid,,text", offset: "", max: "abc" },
+        message: "Fields list cannot contain empty segments",
+      },
+      {
+        taskId: "123",
+        options: { offset: "", latest: "abc", all: true },
+        message: "--offset cannot be empty",
+      },
+      {
+        taskId: "123",
+        options: { offset: "opaque", latest: "abc", all: true },
+        message: "--latest and --all are mutually exclusive",
+      },
+      {
+        taskId: "123",
+        options: { offset: "opaque", latest: "abc" },
+        message: "--latest and --offset are mutually exclusive",
+      },
+      {
+        taskId: "123",
+        options: { latest: "abc" },
+        message: "--latest requires --max",
+      },
+      {
+        taskId: "123",
+        options: { latest: "abc", max: "xyz" },
+        message: "--latest must be a positive safe integer",
+      },
+    ] as const;
+
+    for (const { taskId, options, message } of cases) {
+      const prepared = prepareTaskCommentsRead(taskId, options);
+      expect(prepared).toEqual({
+        ok: false,
+        error: { kind: "invalid_usage", message },
+      });
+    }
+  });
+
   test("--all requires --max", () => {
     const prepared = prepareTaskCommentsRead("123", { all: true });
     expect(prepared.ok).toBe(false);
