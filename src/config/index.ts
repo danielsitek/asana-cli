@@ -5,6 +5,7 @@ import { dirname, join, parse, resolve } from "node:path";
 import { z } from "zod";
 
 import { err, ok, type Result } from "../shared/result.ts";
+import { localConfigIsIgnored } from "./gitignore.ts";
 
 const gid = z.string().regex(/^\d+$/, "must be a digit-only GID");
 const gidMap = z.record(z.string().min(1), gid);
@@ -332,132 +333,6 @@ const schemaForLayer = (layer: ConfigLayer): z.ZodType =>
       ? localConfigSchema
       : globalConfigSchema;
 
-const localFileIsIgnored = async (gitRoot: string): Promise<boolean> => {
-  try {
-    const contents = await readFile(join(gitRoot, ".gitignore"), "utf8");
-    let ignored = false;
-    for (const rawLine of contents.split(/\r?\n/)) {
-      let rule = rawLine.trimEnd();
-      if (!rule || rule.startsWith("#")) continue;
-      let negated = false;
-      if (rule.startsWith("\\!") || rule.startsWith("\\#")) {
-        rule = rule.slice(1);
-      } else if (rule.startsWith("!")) {
-        negated = true;
-        rule = rule.slice(1);
-      }
-      if (!rule || rule.endsWith("/")) continue;
-      if (rule.startsWith("/")) rule = rule.slice(1);
-      const target = ".asana-cli.local.json";
-      if (globMatches(rule, target)) ignored = !negated;
-    }
-    return ignored;
-  } catch {
-    return false;
-  }
-};
-
-type GlobToken =
-  | Readonly<{ kind: "literal"; value: string }>
-  | Readonly<{ kind: "anyChar" }>
-  | Readonly<{ kind: "anySegmentChars" }>
-  | Readonly<{ kind: "anySegments" }>
-  | Readonly<{ kind: "anyChars" }>;
-
-const tokenizeGlob = (pattern: string): readonly GlobToken[] => {
-  const tokens: GlobToken[] = [];
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    const next = pattern[index + 1];
-    if (character === "*" && next === "*") {
-      if (pattern[index + 2] === "/") {
-        tokens.push({ kind: "anySegments" });
-        index += 2;
-      } else {
-        tokens.push({ kind: "anyChars" });
-        index += 1;
-      }
-    } else if (character === "*") {
-      tokens.push({ kind: "anySegmentChars" });
-    } else if (character === "?") {
-      tokens.push({ kind: "anyChar" });
-    } else if (character) {
-      tokens.push({ kind: "literal", value: character });
-    }
-  }
-  return tokens;
-};
-
-// Matches a .gitignore-style glob against `target` without building a RegExp
-// from untrusted pattern text — a memoized two-pointer walk (linear in
-// pattern/target length) instead of catastrophic-backtracking-prone regex.
-const globMatches = (pattern: string, target: string): boolean => {
-  const tokens = tokenizeGlob(pattern);
-  const memo = new Map<string, boolean>();
-
-  const matchLiteral = (
-    value: string,
-    tokenIndex: number,
-    targetIndex: number,
-  ): boolean =>
-    target[targetIndex] === value && match(tokenIndex + 1, targetIndex + 1);
-
-  const matchAnyChar = (tokenIndex: number, targetIndex: number): boolean => {
-    const character = target[targetIndex];
-    return (
-      character !== undefined &&
-      character !== "/" &&
-      match(tokenIndex + 1, targetIndex + 1)
-    );
-  };
-
-  const matchAnySegmentChars = (
-    tokenIndex: number,
-    targetIndex: number,
-  ): boolean =>
-    match(tokenIndex + 1, targetIndex) ||
-    (targetIndex < target.length &&
-      target[targetIndex] !== "/" &&
-      match(tokenIndex, targetIndex + 1));
-
-  const matchAnySegments = (
-    tokenIndex: number,
-    targetIndex: number,
-  ): boolean => {
-    if (match(tokenIndex + 1, targetIndex)) return true;
-    const slashIndex = target.indexOf("/", targetIndex);
-    return slashIndex !== -1 && match(tokenIndex, slashIndex + 1);
-  };
-
-  const matchAnyChars = (tokenIndex: number, targetIndex: number): boolean =>
-    match(tokenIndex + 1, targetIndex) ||
-    (targetIndex < target.length && match(tokenIndex, targetIndex + 1));
-
-  function match(tokenIndex: number, targetIndex: number): boolean {
-    const key = `${tokenIndex}:${targetIndex}`;
-    const cached = memo.get(key);
-    if (cached !== undefined) return cached;
-
-    const token = tokens[tokenIndex];
-    const result = !token
-      ? targetIndex === target.length
-      : token.kind === "literal"
-        ? matchLiteral(token.value, tokenIndex, targetIndex)
-        : token.kind === "anyChar"
-          ? matchAnyChar(tokenIndex, targetIndex)
-          : token.kind === "anySegmentChars"
-            ? matchAnySegmentChars(tokenIndex, targetIndex)
-            : token.kind === "anySegments"
-              ? matchAnySegments(tokenIndex, targetIndex)
-              : matchAnyChars(tokenIndex, targetIndex);
-
-    memo.set(key, result);
-    return result;
-  }
-
-  return match(0, 0);
-};
-
 const stageWrite = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, {
@@ -514,7 +389,7 @@ const writeLayer = async (
   if (!path.ok) return path;
   if (layer === "local") {
     const gitRoot = resolvedConfig.paths.gitRoot;
-    if (!gitRoot || !(await localFileIsIgnored(gitRoot))) {
+    if (!gitRoot || !(await localConfigIsIgnored(gitRoot))) {
       return err({
         kind: "configuration",
         message:
@@ -776,7 +651,7 @@ const prepareLocalConfigEnvironment = async (
     });
   }
 
-  const isIgnored = await localFileIsIgnored(gitRoot);
+  const isIgnored = await localConfigIsIgnored(gitRoot);
   if (!isIgnored && !writeGitignore) {
     return err({
       kind: "configuration",
