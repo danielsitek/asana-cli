@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  chmod,
   rm,
   stat,
   writeFile,
@@ -524,6 +525,50 @@ describe("configuration writes", () => {
     if (!unignored.ok) expect(unignored.error.message).toContain("not ignored");
   });
 
+  test("accepts direct, anchored, and wildcard ignore rules", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    const configContext = context(root, join(root, "home"));
+
+    for (const gitignore of [
+      ".asana-cli.local.json\n",
+      "/.asana-cli.local.json\n",
+      "**/*.local.json\n",
+    ]) {
+      await writeFile(join(root, ".gitignore"), gitignore);
+      const result = await setConfigValue(
+        configContext,
+        "myTasks.sections.review",
+        "300",
+      );
+      expect(result.ok).toBe(true);
+      expect(
+        JSON.parse(await readFile(join(root, ".asana-cli.local.json"), "utf8")),
+      ).toEqual({ myTasks: { sections: { review: "300" } } });
+      await rm(join(root, ".asana-cli.local.json"));
+    }
+  });
+
+  test("treats escaped leading markers as literals", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    await writeFile(
+      join(root, ".gitignore"),
+      "**/*.local.json\n\\!/.asana-cli.local.json\n\\#/.asana-cli.local.json\n",
+    );
+
+    const result = await setConfigValue(
+      context(root, join(root, "home")),
+      "myTasks.sections.review",
+      "300",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.local.json"), "utf8")),
+    ).toEqual({ myTasks: { sections: { review: "300" } } });
+  });
+
   test("rejects a local write for an ignore rule with leading whitespace", async () => {
     const root = await temporaryDirectory();
     await mkdir(join(root, ".git"));
@@ -535,6 +580,27 @@ describe("configuration writes", () => {
       "300",
     );
 
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("not ignored");
+    expect(await Bun.file(join(root, ".asana-cli.local.json")).exists()).toBe(
+      false,
+    );
+  });
+
+  test("fails closed when .gitignore is unreadable", async () => {
+    const root = await temporaryDirectory();
+    await mkdir(join(root, ".git"));
+    const gitignorePath = join(root, ".gitignore");
+    await writeFile(gitignorePath, ".asana-cli.local.json\n");
+    await chmod(gitignorePath, 0o000);
+
+    const result = await setConfigValue(
+      context(root, join(root, "home")),
+      "myTasks.sections.review",
+      "300",
+    );
+
+    await chmod(gitignorePath, 0o644);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toContain("not ignored");
     expect(await Bun.file(join(root, ".asana-cli.local.json")).exists()).toBe(
