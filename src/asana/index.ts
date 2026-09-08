@@ -48,7 +48,6 @@ import type {
 } from "../workspaces/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
-import { resolvePath } from "../utils/resolve-path.ts";
 import {
   AsanaHttpTransport,
   type HttpRequestOptions,
@@ -57,10 +56,14 @@ import {
 import {
   hasOwn,
   isDigitOnlyGid,
-  isNullableNamedResource,
   isRecord,
   knownTaskFieldsAreValid,
 } from "./response-validation.ts";
+import {
+  buildCommentSchema,
+  prepareTaskStoriesRequest,
+  type TaskStoriesOptions,
+} from "./stories.ts";
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
@@ -196,58 +199,6 @@ const mapTaskReadError = (
   error.kind === "api" && error.status === 404
     ? { kind: "not_found", status: 404, message }
     : error;
-
-const knownCommentFieldsAreValid = (
-  value: Record<string, unknown>,
-  requestedCreatedByFields: ReadonlySet<string>,
-): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "created_at") || typeof value.created_at === "string") &&
-  (!hasOwn(value, "text") || typeof value.text === "string") &&
-  (!hasOwn(value, "resource_subtype") ||
-    typeof value.resource_subtype === "string") &&
-  (!hasOwn(value, "created_by") ||
-    isNullableNamedResource(value.created_by, requestedCreatedByFields));
-
-const requestedCommentFieldIsPresent = (
-  value: Record<string, unknown>,
-  field: string,
-): boolean => {
-  const path = field.split(".");
-  if (path[0] === "created_by" && value.created_by === null) return true;
-  return resolvePath(value, path).found;
-};
-
-const buildCommentSchema = (fields: readonly string[]): z.ZodType<Comment> => {
-  const requestedCreatedByFields = new Set(
-    fields
-      .filter(
-        (field) => field === "created_by.gid" || field === "created_by.name",
-      )
-      .map((field) => field.slice("created_by.".length)),
-  );
-  // The stories endpoint returns every story type, not just comments, and
-  // non-comment system stories (e.g. resource_subtype "unknown") routinely
-  // omit fields like "text" outright. Only comment_added stories are kept
-  // downstream, so only they must carry every requested field.
-  return z.custom<Comment>(
-    (value) =>
-      isRecord(value) &&
-      knownCommentFieldsAreValid(value, requestedCreatedByFields) &&
-      (value.resource_subtype !== "comment_added" ||
-        fields.every((field) => requestedCommentFieldIsPresent(value, field))),
-  );
-};
-
-const buildStoriesPageSchema = (fields: readonly string[]) =>
-  z.object({
-    data: z.array(buildCommentSchema(fields)),
-    next_page: z
-      .object({ offset: z.string() })
-      .passthrough()
-      .nullable()
-      .optional(),
-  });
 
 const enumOptionIsValid = (value: unknown): boolean =>
   isRecord(value) &&
@@ -1123,11 +1074,7 @@ export class AsanaHttpClient
   async getTaskStories(
     token: string,
     taskId: string,
-    options: Readonly<{
-      fields: readonly string[];
-      limit: number;
-      offset?: string;
-    }>,
+    options: TaskStoriesOptions,
   ): Promise<
     Result<
       Readonly<{
@@ -1137,35 +1084,13 @@ export class AsanaHttpClient
       TaskReadError
     >
   > {
-    if (!/^\d+$/.test(taskId)) {
-      return err({
-        kind: "invalid_response",
-        message: "Task GID is not digit-only",
-      });
-    }
-    if (
-      !Number.isSafeInteger(options.limit) ||
-      options.limit < 1 ||
-      options.limit > 100
-    ) {
-      return err({
-        kind: "invalid_response",
-        message: "Story page limit must be between 1 and 100",
-      });
-    }
-
+    const request = prepareTaskStoriesRequest(taskId, options);
+    if (!request.ok) return request;
     const result = await this.#request(
       token,
-      `tasks/${taskId}/stories`,
-      {
-        method: "GET",
-        searchParams: {
-          limit: String(options.limit),
-          opt_fields: options.fields.join(","),
-          ...(options.offset === undefined ? {} : { offset: options.offset }),
-        },
-      },
-      buildStoriesPageSchema(options.fields),
+      request.value.path,
+      request.value.options,
+      request.value.schema,
     );
     if (!result.ok) {
       return err(mapTaskReadError(result.error, "Task not found"));
