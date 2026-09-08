@@ -48,71 +48,28 @@ import type {
 } from "../workspaces/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
-import { resolvePath } from "../utils/resolve-path.ts";
+import {
+  AsanaHttpTransport,
+  type HttpRequestOptions,
+  type HttpTransportOptions,
+} from "./http-transport.ts";
+import {
+  hasOwn,
+  isDigitOnlyGid,
+  isRecord,
+  knownTaskFieldsAreValid,
+} from "./response-validation.ts";
+import {
+  buildCommentSchema,
+  prepareTaskStoriesRequest,
+  type TaskStoriesOptions,
+} from "./stories.ts";
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
   .passthrough();
 
-export type AsanaClientOptions = Readonly<{
-  baseUrl?: string;
-  maxRetries?: number;
-  requestTimeoutMs?: number;
-  sleep?: (milliseconds: number) => Promise<void>;
-  random?: () => number;
-  now?: () => number;
-}>;
-
-const wait = (milliseconds: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-const retryAfterMs = (
-  value: string | null,
-  now: number,
-): number | undefined => {
-  if (value === null) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
-  Object.hasOwn(value, key);
-
-const isDigitOnlyGid = (value: unknown): value is string =>
-  typeof value === "string" && /^\d+$/.test(value);
-
-const isNullableNamedResource = (
-  value: unknown,
-  requestedFields: ReadonlySet<string>,
-): boolean => {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  if (hasOwn(value, "gid") && !isDigitOnlyGid(value.gid)) return false;
-  if (hasOwn(value, "name") && typeof value.name !== "string") return false;
-  for (const field of requestedFields) {
-    if (!hasOwn(value, field)) return false;
-  }
-  return true;
-};
-
-const knownTaskFieldsAreValid = (
-  value: Record<string, unknown>,
-  requestedAssigneeFields: ReadonlySet<string>,
-): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "name") || typeof value.name === "string") &&
-  (!hasOwn(value, "notes") || typeof value.notes === "string") &&
-  (!hasOwn(value, "completed") || typeof value.completed === "boolean") &&
-  (!hasOwn(value, "due_on") ||
-    typeof value.due_on === "string" ||
-    value.due_on === null) &&
-  (!hasOwn(value, "assignee") ||
-    isNullableNamedResource(value.assignee, requestedAssigneeFields));
+export type AsanaClientOptions = HttpTransportOptions;
 
 const assigneeFieldsOf = (fields: readonly string[]): ReadonlySet<string> =>
   new Set(
@@ -242,58 +199,6 @@ const mapTaskReadError = (
   error.kind === "api" && error.status === 404
     ? { kind: "not_found", status: 404, message }
     : error;
-
-const knownCommentFieldsAreValid = (
-  value: Record<string, unknown>,
-  requestedCreatedByFields: ReadonlySet<string>,
-): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "created_at") || typeof value.created_at === "string") &&
-  (!hasOwn(value, "text") || typeof value.text === "string") &&
-  (!hasOwn(value, "resource_subtype") ||
-    typeof value.resource_subtype === "string") &&
-  (!hasOwn(value, "created_by") ||
-    isNullableNamedResource(value.created_by, requestedCreatedByFields));
-
-const requestedCommentFieldIsPresent = (
-  value: Record<string, unknown>,
-  field: string,
-): boolean => {
-  const path = field.split(".");
-  if (path[0] === "created_by" && value.created_by === null) return true;
-  return resolvePath(value, path).found;
-};
-
-const buildCommentSchema = (fields: readonly string[]): z.ZodType<Comment> => {
-  const requestedCreatedByFields = new Set(
-    fields
-      .filter(
-        (field) => field === "created_by.gid" || field === "created_by.name",
-      )
-      .map((field) => field.slice("created_by.".length)),
-  );
-  // The stories endpoint returns every story type, not just comments, and
-  // non-comment system stories (e.g. resource_subtype "unknown") routinely
-  // omit fields like "text" outright. Only comment_added stories are kept
-  // downstream, so only they must carry every requested field.
-  return z.custom<Comment>(
-    (value) =>
-      isRecord(value) &&
-      knownCommentFieldsAreValid(value, requestedCreatedByFields) &&
-      (value.resource_subtype !== "comment_added" ||
-        fields.every((field) => requestedCommentFieldIsPresent(value, field))),
-  );
-};
-
-const buildStoriesPageSchema = (fields: readonly string[]) =>
-  z.object({
-    data: z.array(buildCommentSchema(fields)),
-    next_page: z
-      .object({ offset: z.string() })
-      .passthrough()
-      .nullable()
-      .optional(),
-  });
 
 const enumOptionIsValid = (value: unknown): boolean =>
   isRecord(value) &&
@@ -443,99 +348,19 @@ export class AsanaHttpClient
     ProjectGateway,
     ProjectReadGateway
 {
-  readonly #baseUrl: string;
-  readonly #maxRetries: number;
-  readonly #requestTimeoutMs: number;
-  readonly #sleep: (milliseconds: number) => Promise<void>;
-  readonly #random: () => number;
-  readonly #now: () => number;
+  readonly #transport: AsanaHttpTransport;
 
   constructor(options: AsanaClientOptions = {}) {
-    this.#baseUrl = options.baseUrl ?? "https://app.asana.com/api/1.0";
-    this.#maxRetries = options.maxRetries ?? 3;
-    this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
-    this.#sleep = options.sleep ?? wait;
-    this.#random = options.random ?? Math.random;
-    this.#now = options.now ?? Date.now;
+    this.#transport = new AsanaHttpTransport(options);
   }
 
   async #request<T>(
     token: string,
     path: string,
-    options: Readonly<{
-      method: "GET" | "POST" | "PUT";
-      searchParams?: Readonly<Record<string, string>>;
-      body?: unknown;
-    }>,
+    options: HttpRequestOptions,
     schema: z.ZodType<T>,
   ): Promise<Result<T, IdentityError>> {
-    const url = new URL(path, `${this.#baseUrl}/`);
-    for (const [key, value] of Object.entries(options.searchParams ?? {})) {
-      url.searchParams.set(key, value);
-    }
-
-    for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        this.#requestTimeoutMs,
-      );
-      try {
-        const response = await fetch(url, {
-          method: options.method,
-          headers:
-            options.body === undefined
-              ? { Authorization: `Bearer ${token}` }
-              : {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json",
-                },
-          ...(options.body === undefined
-            ? {}
-            : { body: JSON.stringify(options.body) }),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const retryable =
-            options.method === "POST"
-              ? response.status === 429
-              : [429, 502, 503, 504].includes(response.status);
-          if (retryable && attempt < this.#maxRetries) {
-            await this.#sleep(
-              this.retryDelay(attempt, response.headers.get("Retry-After")),
-            );
-            continue;
-          }
-          return err(this.responseError(response.status, retryable));
-        }
-        let body: unknown;
-        try {
-          body = await response.json();
-        } catch {
-          return err({
-            kind: "invalid_response",
-            message: "Asana returned an invalid response",
-          });
-        }
-        const parsed = schema.safeParse(body);
-        if (!parsed.success) {
-          return err({
-            kind: "invalid_response",
-            message: "Asana returned an invalid response",
-          });
-        }
-        return ok(parsed.data);
-      } catch {
-        if (options.method !== "POST" && attempt < this.#maxRetries) {
-          await this.#sleep(this.retryDelay(attempt));
-          continue;
-        }
-        return err({ kind: "network", message: "Unable to reach Asana" });
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-    return err({ kind: "network", message: "Unable to reach Asana" });
+    return this.#transport.request(token, path, options, schema);
   }
 
   async getAuthenticatedUser(
@@ -1249,11 +1074,7 @@ export class AsanaHttpClient
   async getTaskStories(
     token: string,
     taskId: string,
-    options: Readonly<{
-      fields: readonly string[];
-      limit: number;
-      offset?: string;
-    }>,
+    options: TaskStoriesOptions,
   ): Promise<
     Result<
       Readonly<{
@@ -1263,35 +1084,13 @@ export class AsanaHttpClient
       TaskReadError
     >
   > {
-    if (!/^\d+$/.test(taskId)) {
-      return err({
-        kind: "invalid_response",
-        message: "Task GID is not digit-only",
-      });
-    }
-    if (
-      !Number.isSafeInteger(options.limit) ||
-      options.limit < 1 ||
-      options.limit > 100
-    ) {
-      return err({
-        kind: "invalid_response",
-        message: "Story page limit must be between 1 and 100",
-      });
-    }
-
+    const request = prepareTaskStoriesRequest(taskId, options);
+    if (!request.ok) return request;
     const result = await this.#request(
       token,
-      `tasks/${taskId}/stories`,
-      {
-        method: "GET",
-        searchParams: {
-          limit: String(options.limit),
-          opt_fields: options.fields.join(","),
-          ...(options.offset === undefined ? {} : { offset: options.offset }),
-        },
-      },
-      buildStoriesPageSchema(options.fields),
+      request.value.path,
+      request.value.options,
+      request.value.schema,
     );
     if (!result.ok) {
       return err(mapTaskReadError(result.error, "Task not found"));
@@ -1447,36 +1246,5 @@ export class AsanaHttpClient
       return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
-  }
-
-  private retryDelay(
-    attempt: number,
-    retryAfter: string | null = null,
-  ): number {
-    return (
-      retryAfterMs(retryAfter, this.#now()) ??
-      1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000)
-    );
-  }
-
-  private responseError(status: number, retryable: boolean): IdentityError {
-    if (status === 401 || status === 403) {
-      return {
-        kind: "authentication",
-        status,
-        message: "Asana authentication failed",
-      };
-    }
-    return retryable
-      ? {
-          kind: "rate_limit",
-          status,
-          message: "Asana request retries exhausted",
-        }
-      : {
-          kind: "api",
-          status,
-          message: `Asana API request failed (${status})`,
-        };
   }
 }
