@@ -422,6 +422,37 @@ const setNestedValue = (
   };
 };
 
+const decodeConfigValueCandidates = (value: string): readonly unknown[] => {
+  try {
+    const decoded: unknown = JSON.parse(value);
+    return decoded === value ? [value] : [value, decoded];
+  } catch {
+    return [value];
+  }
+};
+
+const selectValidConfigMutation = (
+  path: string,
+  existing: JsonObject,
+  segments: readonly string[],
+  value: string,
+  schema: z.ZodType,
+): Result<JsonObject, ConfigError> => {
+  let candidateError: ConfigError | undefined;
+  for (const candidate of decodeConfigValueCandidates(value)) {
+    const proposed = setNestedValue(existing, segments, candidate);
+    const validated = validationMessage(path, proposed, schema);
+    if (validated.ok) return validated;
+    candidateError ??= validated.error;
+  }
+  return err(
+    candidateError ?? {
+      kind: "configuration",
+      message: `${segments.join(".")}: invalid configuration value`,
+    },
+  );
+};
+
 export const setConfigValue = async (
   context: ConfigContext,
   key: string,
@@ -439,41 +470,40 @@ export const setConfigValue = async (
   if (!resolvedConfig.ok) return resolvedConfig;
   const path = targetPath(resolvedConfig.value, layer);
   if (!path.ok) return path;
-  const existing = await readLayer(path.value, schemaForLayer(layer));
+  const schema = schemaForLayer(layer);
+  const existing = await readLayer(path.value, schema);
   if (!existing.ok) return existing;
-  const candidates: unknown[] = [value];
-  try {
-    const jsonValue: unknown = JSON.parse(value);
-    if (jsonValue !== value) candidates.push(jsonValue);
-  } catch {
-    // Plain strings such as GIDs are valid candidates themselves.
-  }
-  let updated: JsonObject | undefined;
-  let candidateError: ConfigError | undefined;
-  for (const candidate of candidates) {
-    const proposed = setNestedValue(existing.value, segments.value, candidate);
-    const validated = validationMessage(
-      path.value,
-      proposed,
-      schemaForLayer(layer),
-    );
-    if (validated.ok) {
-      updated = validated.value;
-      break;
-    }
-    candidateError ??= validated.error;
-  }
-  if (!updated) {
-    return err(
-      candidateError ?? {
-        kind: "configuration",
-        message: `${key}: invalid configuration value`,
-      },
-    );
-  }
-  const written = await writeLayer(resolvedConfig.value, layer, updated);
+  const updated = selectValidConfigMutation(
+    path.value,
+    existing.value,
+    segments.value,
+    value,
+    schema,
+  );
+  if (!updated.ok) return updated;
+  const written = await writeLayer(resolvedConfig.value, layer, updated.value);
   if (!written.ok) return written;
   return ok({ layer, path: path.value });
+};
+
+const configuredWorkspaceGid = (config: JsonObject): unknown =>
+  isObject(config.workspace) ? config.workspace.gid : undefined;
+
+const effectiveWorkspaceGid = (
+  requested: string | undefined,
+  shared: JsonObject,
+  global: JsonObject,
+): Result<string, ConfigError> => {
+  const workspaceGid =
+    requested ??
+    configuredWorkspaceGid(shared) ??
+    configuredWorkspaceGid(global);
+  if (typeof workspaceGid === "string") return ok(workspaceGid);
+  return err({
+    kind: "configuration",
+    message:
+      "config init --shared requires --workspace or a workspace.gid in shared/global config",
+  });
 };
 
 export const initializeSharedConfig = async (
@@ -491,24 +521,16 @@ export const initializeSharedConfig = async (
     globalConfigSchema,
   );
   if (!global.ok) return global;
-  const sharedWorkspace = isObject(existing.value.workspace)
-    ? existing.value.workspace.gid
-    : undefined;
-  const globalWorkspace = isObject(global.value.workspace)
-    ? global.value.workspace.gid
-    : undefined;
-  const effectiveWorkspace = workspaceGid ?? sharedWorkspace ?? globalWorkspace;
-  if (typeof effectiveWorkspace !== "string") {
-    return err({
-      kind: "configuration",
-      message:
-        "config init --shared requires --workspace or a workspace.gid in shared/global config",
-    });
-  }
+  const effectiveWorkspace = effectiveWorkspaceGid(
+    workspaceGid,
+    existing.value,
+    global.value,
+  );
+  if (!effectiveWorkspace.ok) return effectiveWorkspace;
   const updated = setNestedValue(
     existing.value,
     ["workspace", "gid"],
-    effectiveWorkspace,
+    effectiveWorkspace.value,
   );
   const written = await writeLayer(resolvedConfig.value, "shared", updated);
   if (!written.ok) return written;
