@@ -316,6 +316,31 @@ describe("configuration writes", () => {
     ).toEqual({ workspace: { gid: "100" } });
   });
 
+  test("prefers requested and shared workspaces over the global workspace", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    await mkdir(join(root, ".git"));
+    await mkdir(join(home, ".config", "asana-cli"), { recursive: true });
+    await writeJson(join(home, ".config", "asana-cli", "config.json"), {
+      workspace: { gid: "100" },
+    });
+    await writeJson(join(root, ".asana-cli.json"), {
+      workspace: { gid: "200" },
+    });
+
+    const shared = await initializeSharedConfig(context(root, home));
+    expect(shared.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ workspace: { gid: "200" } });
+
+    const requested = await initializeSharedConfig(context(root, home), "300");
+    expect(requested.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ workspace: { gid: "300" } });
+  });
+
   test("writes shared by default, global explicitly, and myTasks locally", async () => {
     const root = await temporaryDirectory();
     const home = join(root, "home");
@@ -497,6 +522,16 @@ describe("configuration writes", () => {
     expect(
       JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
     ).toEqual({ network: { concurrency: 8 } });
+
+    const quotedGid = await setConfigValue(
+      context(root, join(root, "home")),
+      "workspace.gid",
+      '"100"',
+    );
+    expect(quotedGid.ok).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
+    ).toEqual({ network: { concurrency: 8 }, workspace: { gid: "100" } });
   });
 
   test("accepts matching ignore globs and honors later negation", async () => {
