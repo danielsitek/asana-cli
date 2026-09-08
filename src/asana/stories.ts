@@ -6,10 +6,10 @@ import type { TaskReadError } from "../tasks/index.ts";
 import { resolvePath } from "../utils/resolve-path.ts";
 import type { HttpRequestOptions } from "./http-transport.ts";
 import {
-  hasOwn,
   isDigitOnlyGid,
   isNullableNamedResource,
   isRecord,
+  knownFieldsAreValid,
 } from "./response-validation.ts";
 
 export type TaskStoriesOptions = Readonly<{
@@ -22,13 +22,17 @@ const knownCommentFieldsAreValid = (
   value: Record<string, unknown>,
   requestedCreatedByFields: ReadonlySet<string>,
 ): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "created_at") || typeof value.created_at === "string") &&
-  (!hasOwn(value, "text") || typeof value.text === "string") &&
-  (!hasOwn(value, "resource_subtype") ||
-    typeof value.resource_subtype === "string") &&
-  (!hasOwn(value, "created_by") ||
-    isNullableNamedResource(value.created_by, requestedCreatedByFields));
+  knownFieldsAreValid(value, [
+    ["gid", isDigitOnlyGid],
+    ["created_at", (createdAt) => typeof createdAt === "string"],
+    ["text", (text) => typeof text === "string"],
+    ["resource_subtype", (subtype) => typeof subtype === "string"],
+    [
+      "created_by",
+      (createdBy) =>
+        isNullableNamedResource(createdBy, requestedCreatedByFields),
+    ],
+  ]);
 
 const requestedCommentFieldIsPresent = (
   value: Record<string, unknown>,

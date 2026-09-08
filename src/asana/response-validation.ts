@@ -7,6 +7,26 @@ export const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
 export const isDigitOnlyGid = (value: unknown): value is string =>
   typeof value === "string" && /^\d+$/.test(value);
 
+type FieldValidator = readonly [
+  field: string,
+  validate: (value: unknown) => boolean,
+];
+
+export const knownFieldsAreValid = (
+  value: Record<string, unknown>,
+  validators: readonly FieldValidator[],
+): boolean =>
+  validators.every(
+    ([field, validate]) => !hasOwn(value, field) || validate(value[field]),
+  );
+
+const isString = (value: unknown): boolean => typeof value === "string";
+
+const isBoolean = (value: unknown): boolean => typeof value === "boolean";
+
+const isNullableDate = (value: unknown): boolean =>
+  typeof value === "string" || value === null;
+
 export const isNullableNamedResource = (
   value: unknown,
   requestedFields: ReadonlySet<string>,
@@ -25,12 +45,14 @@ export const knownTaskFieldsAreValid = (
   value: Record<string, unknown>,
   requestedAssigneeFields: ReadonlySet<string>,
 ): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "name") || typeof value.name === "string") &&
-  (!hasOwn(value, "notes") || typeof value.notes === "string") &&
-  (!hasOwn(value, "completed") || typeof value.completed === "boolean") &&
-  (!hasOwn(value, "due_on") ||
-    typeof value.due_on === "string" ||
-    value.due_on === null) &&
-  (!hasOwn(value, "assignee") ||
-    isNullableNamedResource(value.assignee, requestedAssigneeFields));
+  knownFieldsAreValid(value, [
+    ["gid", isDigitOnlyGid],
+    ["name", isString],
+    ["notes", isString],
+    ["completed", isBoolean],
+    ["due_on", isNullableDate],
+    [
+      "assignee",
+      (assignee) => isNullableNamedResource(assignee, requestedAssigneeFields),
+    ],
+  ]);
