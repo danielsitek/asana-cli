@@ -49,6 +49,13 @@ import type {
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
 import { resolvePath } from "../utils/resolve-path.ts";
+import {
+  hasOwn,
+  isDigitOnlyGid,
+  isNullableNamedResource,
+  isRecord,
+  knownTaskFieldsAreValid,
+} from "./response-validation.ts";
 
 const userSchema = z
   .object({ gid: z.string(), name: z.string() })
@@ -76,43 +83,6 @@ const retryAfterMs = (
   const date = Date.parse(value);
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
-  Object.hasOwn(value, key);
-
-const isDigitOnlyGid = (value: unknown): value is string =>
-  typeof value === "string" && /^\d+$/.test(value);
-
-const isNullableNamedResource = (
-  value: unknown,
-  requestedFields: ReadonlySet<string>,
-): boolean => {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  if (hasOwn(value, "gid") && !isDigitOnlyGid(value.gid)) return false;
-  if (hasOwn(value, "name") && typeof value.name !== "string") return false;
-  for (const field of requestedFields) {
-    if (!hasOwn(value, field)) return false;
-  }
-  return true;
-};
-
-const knownTaskFieldsAreValid = (
-  value: Record<string, unknown>,
-  requestedAssigneeFields: ReadonlySet<string>,
-): boolean =>
-  (!hasOwn(value, "gid") || isDigitOnlyGid(value.gid)) &&
-  (!hasOwn(value, "name") || typeof value.name === "string") &&
-  (!hasOwn(value, "notes") || typeof value.notes === "string") &&
-  (!hasOwn(value, "completed") || typeof value.completed === "boolean") &&
-  (!hasOwn(value, "due_on") ||
-    typeof value.due_on === "string" ||
-    value.due_on === null) &&
-  (!hasOwn(value, "assignee") ||
-    isNullableNamedResource(value.assignee, requestedAssigneeFields));
 
 const assigneeFieldsOf = (fields: readonly string[]): ReadonlySet<string> =>
   new Set(
