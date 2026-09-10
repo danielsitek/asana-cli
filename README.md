@@ -44,6 +44,11 @@ sudo install -m 0755 asana-cli /usr/local/bin/asana-cli
 Replace `<target>` with the value from the table above (e.g. `darwin-arm64`).
 To upgrade, repeat these steps with the newer archive.
 
+When stderr is an interactive terminal, the CLI checks GitHub Releases at
+most once every 24 hours and prints a notice when an update is available.
+The cached result is stored under `${XDG_CACHE_HOME:-~/.cache}/asana-cli`.
+Set `ASANA_CLI_DISABLE_UPDATE_CHECK=1` to disable the check.
+
 macOS binaries carry an ad-hoc signature (no Developer ID signing or
 notarization yet); Gatekeeper may require an explicit approval on first run.
 
