@@ -155,6 +155,8 @@ const writeCache = async (
   }
 };
 
+const resolveRequest = (request: Fetch | undefined): Fetch => request ?? fetch;
+
 const resolveDependencies = (
   options: UpdateCheckOptions,
 ): UpdateCheckDependencies => ({
@@ -163,7 +165,7 @@ const resolveDependencies = (
   read: options.readFile ?? readFile,
   write: options.writeFile ?? writeFile,
   makeDirectory: options.mkdir ?? mkdir,
-  request: options.fetch ?? fetch,
+  request: resolveRequest(options.fetch),
 });
 
 export const checkForUpdate = async (
