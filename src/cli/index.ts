@@ -102,6 +102,7 @@ import {
   type ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
+import { renderUpdateNotice, type UpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import {
   executeWorkspacesList,
@@ -137,6 +138,7 @@ export type ExecuteDependencies = Readonly<{
   myTaskSectionsDiscovery?: MyTaskSectionsDiscoveryGateway;
   configuration?: ConfigContext;
   version?: string;
+  checkForUpdate?: () => Promise<UpdateNotice | undefined>;
 }>;
 
 type TaskMutationCliOptions = Readonly<{
@@ -1701,10 +1703,21 @@ export const execute = async (
       exitCode: 6,
     };
   }
-  return (
+  const execution =
     result ??
     (invokedState.value
       ? usageError("Command did not complete")
-      : usageError("A command is required"))
-  );
+      : usageError("A command is required"));
+  if (execution.exitCode !== 0 || !dependencies.checkForUpdate) {
+    return execution;
+  }
+
+  try {
+    const notice = await dependencies.checkForUpdate();
+    return notice
+      ? { ...execution, stderr: execution.stderr + renderUpdateNotice(notice) }
+      : execution;
+  } catch {
+    return execution;
+  }
 };
