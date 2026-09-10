@@ -43,6 +43,18 @@ export type UpdateCheckOptions = Readonly<{
   mkdir?: (path: string, options: { recursive: true }) => Promise<unknown>;
 }>;
 
+type UpdateCheckDependencies = Readonly<{
+  cachePath: string;
+  now: () => number;
+  read: (path: string, encoding: "utf8") => Promise<string>;
+  write: (path: string, contents: string) => Promise<void>;
+  makeDirectory: (
+    path: string,
+    options: { recursive: true },
+  ) => Promise<unknown>;
+  request: Fetch;
+}>;
+
 const parseVersion = (
   value: string,
 ): readonly [number, number, number] | null => {
@@ -143,16 +155,27 @@ const writeCache = async (
   }
 };
 
+const resolveDependencies = (
+  options: UpdateCheckOptions,
+): UpdateCheckDependencies => ({
+  cachePath: join(options.cacheDirectory, "update-check.json"),
+  now: options.now ?? Date.now,
+  read: options.readFile ?? readFile,
+  write: options.writeFile ?? writeFile,
+  makeDirectory: options.mkdir ?? mkdir,
+  request: options.fetch ?? fetch,
+});
+
 export const checkForUpdate = async (
   options: UpdateCheckOptions,
 ): Promise<UpdateNotice | undefined> => {
-  const cachePath = join(options.cacheDirectory, "update-check.json");
-  const now = options.now ?? Date.now;
-  const read = options.readFile ?? readFile;
-  const write = options.writeFile ?? writeFile;
-  const makeDirectory = options.mkdir ?? mkdir;
+  const dependencies = resolveDependencies(options);
 
-  const cached = await readFreshCache(cachePath, now, read);
+  const cached = await readFreshCache(
+    dependencies.cachePath,
+    dependencies.now,
+    dependencies.read,
+  );
   if (cached) {
     return noticeFrom(
       options.currentVersion,
@@ -163,16 +186,16 @@ export const checkForUpdate = async (
 
   const release = await fetchLatestRelease(
     options.currentVersion,
-    options.fetch ?? fetch,
+    dependencies.request,
   );
   if (!release) return undefined;
 
   await writeCache(
-    cachePath,
+    dependencies.cachePath,
     options.cacheDirectory,
-    { checkedAt: now(), ...release },
-    makeDirectory,
-    write,
+    { checkedAt: dependencies.now(), ...release },
+    dependencies.makeDirectory,
+    dependencies.write,
   );
   return noticeFrom(
     options.currentVersion,
