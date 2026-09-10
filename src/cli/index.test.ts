@@ -415,6 +415,50 @@ describe("execute", () => {
     );
   });
 
+  test("adds an update notice to stderr without changing command output", async () => {
+    const result = await execute(["whoami", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      checkForUpdate: async () => ({
+        currentVersion: "0.5.0",
+        latestVersion: "0.6.0",
+        releaseUrl: "https://example.com/releases/v0.6.0",
+      }),
+    });
+
+    expect(result).toEqual({
+      stdout: '{"data":{"gid":"123","name":"Ada Lovelace"},"meta":{}}\n',
+      stderr:
+        "\nUpdate available: 0.5.0 → 0.6.0\n" +
+        "Run `brew upgrade asana-cli` or visit https://example.com/releases/v0.6.0\n",
+      exitCode: 0,
+    });
+  });
+
+  test("ignores update-check failures and skips the check after command errors", async () => {
+    const successful = await execute(["whoami"], {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      checkForUpdate: async () => {
+        throw new Error("offline");
+      },
+    });
+    expect(successful.stderr).toBe("");
+    expect(successful.exitCode).toBe(0);
+
+    let checked = false;
+    const failed = await execute(["whoami"], {
+      environment: {},
+      identity,
+      checkForUpdate: async () => {
+        checked = true;
+        return undefined;
+      },
+    });
+    expect(failed.exitCode).toBe(3);
+    expect(checked).toBe(false);
+  });
+
   test("rejects a missing token without leaking values", async () => {
     const result = await execute(["whoami"], { environment: {}, identity });
     expect(result).toEqual({

@@ -1,12 +1,17 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { AsanaHttpClient } from "./asana/index.ts";
 import { execute } from "./cli/index.ts";
+import { checkForUpdate } from "./update/index.ts";
 
 declare const __APP_VERSION__: string | undefined;
 
 const version = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.5.0";
 const client = new AsanaHttpClient();
+const updateChecksEnabled =
+  process.stderr.isTTY === true &&
+  process.env.ASANA_CLI_DISABLE_UPDATE_CHECK !== "1";
 const result = await execute(Bun.argv.slice(2), {
   environment: process.env,
   identity: client,
@@ -32,6 +37,18 @@ const result = await execute(Bun.argv.slice(2), {
     environment: process.env,
   },
   version,
+  ...(updateChecksEnabled
+    ? {
+        checkForUpdate: () =>
+          checkForUpdate({
+            currentVersion: version,
+            cacheDirectory: join(
+              process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
+              "asana-cli",
+            ),
+          }),
+      }
+    : {}),
 });
 
 process.stdout.write(result.stdout);
