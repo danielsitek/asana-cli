@@ -14,6 +14,9 @@ const updateCacheSchema = z.object({
   releaseUrl: z.url(),
 });
 
+type CachedUpdate = z.infer<typeof updateCacheSchema>;
+type AvailableRelease = Omit<CachedUpdate, "checkedAt">;
+
 const versionPattern = /^v?(\d+)\.(\d+)\.(\d+)$/;
 
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
@@ -75,40 +78,35 @@ const noticeFrom = (
     ? { currentVersion, latestVersion, releaseUrl }
     : undefined;
 
-export const checkForUpdate = async (
-  options: UpdateCheckOptions,
-): Promise<UpdateNotice | undefined> => {
-  const cachePath = join(options.cacheDirectory, "update-check.json");
-  const now = options.now ?? Date.now;
-  const read = options.readFile ?? readFile;
-  const write = options.writeFile ?? writeFile;
-  const makeDirectory = options.mkdir ?? mkdir;
-
+const readFreshCache = async (
+  cachePath: string,
+  now: () => number,
+  read: (path: string, encoding: "utf8") => Promise<string>,
+): Promise<CachedUpdate | undefined> => {
   try {
     const cached = updateCacheSchema.safeParse(
       JSON.parse(await read(cachePath, "utf8")),
     );
-    if (
-      cached.success &&
-      now() - cached.data.checkedAt < UPDATE_CHECK_INTERVAL_MS
-    ) {
-      return noticeFrom(
-        options.currentVersion,
-        cached.data.latestVersion,
-        cached.data.releaseUrl,
-      );
-    }
+    if (!cached.success) return undefined;
+    return now() - cached.data.checkedAt < UPDATE_CHECK_INTERVAL_MS
+      ? cached.data
+      : undefined;
   } catch {
-    // A missing or invalid cache simply triggers a fresh check.
+    return undefined;
   }
+};
 
+const fetchLatestRelease = async (
+  currentVersion: string,
+  request: Fetch,
+): Promise<AvailableRelease | undefined> => {
   try {
-    const response = await (options.fetch ?? fetch)(
+    const response = await request(
       "https://api.github.com/repos/danielsitek/asana-cli/releases/latest",
       {
         headers: {
           Accept: "application/vnd.github+json",
-          "User-Agent": `asana-cli/${options.currentVersion}`,
+          "User-Agent": `asana-cli/${currentVersion}`,
           "X-GitHub-Api-Version": "2022-11-28",
         },
         signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
@@ -119,30 +117,68 @@ export const checkForUpdate = async (
     const release = latestReleaseSchema.safeParse(await response.json());
     if (!release.success) return undefined;
     const latestVersion = release.data.tag_name.replace(/^v/, "");
-    if (!parseVersion(latestVersion)) return undefined;
-
-    try {
-      await makeDirectory(options.cacheDirectory, { recursive: true });
-      await write(
-        cachePath,
-        `${JSON.stringify({
-          checkedAt: now(),
-          latestVersion,
-          releaseUrl: release.data.html_url,
-        })}\n`,
-      );
-    } catch {
-      // Cache failures must not affect the command or a successful check.
-    }
-
-    return noticeFrom(
-      options.currentVersion,
-      latestVersion,
-      release.data.html_url,
-    );
+    return parseVersion(latestVersion)
+      ? { latestVersion, releaseUrl: release.data.html_url }
+      : undefined;
   } catch {
     return undefined;
   }
+};
+
+const writeCache = async (
+  cachePath: string,
+  cacheDirectory: string,
+  update: CachedUpdate,
+  makeDirectory: (
+    path: string,
+    options: { recursive: true },
+  ) => Promise<unknown>,
+  write: (path: string, contents: string) => Promise<void>,
+): Promise<void> => {
+  try {
+    await makeDirectory(cacheDirectory, { recursive: true });
+    await write(cachePath, `${JSON.stringify(update)}\n`);
+  } catch {
+    // Cache failures must not affect the command or a successful check.
+  }
+};
+
+export const checkForUpdate = async (
+  options: UpdateCheckOptions,
+): Promise<UpdateNotice | undefined> => {
+  const cachePath = join(options.cacheDirectory, "update-check.json");
+  const now = options.now ?? Date.now;
+  const read = options.readFile ?? readFile;
+  const write = options.writeFile ?? writeFile;
+  const makeDirectory = options.mkdir ?? mkdir;
+
+  const cached = await readFreshCache(cachePath, now, read);
+  if (cached) {
+    return noticeFrom(
+      options.currentVersion,
+      cached.latestVersion,
+      cached.releaseUrl,
+    );
+  }
+
+  const release = await fetchLatestRelease(
+    options.currentVersion,
+    options.fetch ?? fetch,
+  );
+  if (!release) return undefined;
+
+  await writeCache(
+    cachePath,
+    options.cacheDirectory,
+    { checkedAt: now(), ...release },
+    makeDirectory,
+    write,
+  );
+  return noticeFrom(
+    options.currentVersion,
+    release.latestVersion,
+    release.releaseUrl,
+  );
 };
 
 export const renderUpdateNotice = (notice: UpdateNotice): string =>
