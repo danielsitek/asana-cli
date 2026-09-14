@@ -7,7 +7,6 @@ import {
   resolveConfig,
   setConfigValue,
   type ConfigContext,
-  type ConfigError,
   type ConfigLayer,
   type LocalConfigInitResult,
   type StageFailureError,
@@ -21,6 +20,7 @@ import {
   renderResolvedMyTasks,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
+import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
 
 type ConfigCommandDependencies = Pick<ExecuteDependencies, "discovery">;
@@ -39,12 +39,6 @@ type ConfigCommandRegistration = Readonly<{
   renderIdentityFailure: (kind: IdentityError["kind"]) => Execution;
   usageError: (message: string) => Execution;
 }>;
-
-const renderConfigFailure = (error: ConfigError): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "configuration", message: error.message }),
-  exitCode: 2,
-});
 
 const renderStageFailure = (
   error: StageFailureError,

@@ -7,7 +7,7 @@ import {
   prepareTaskCommentCreate,
   prepareTaskCommentsRead,
 } from "../comments/index.ts";
-import { resolveConfig, type ConfigError } from "../config/index.ts";
+import { resolveConfig } from "../config/index.ts";
 import {
   createMySectionResolver,
   createMyTasksMutationResolver,
@@ -42,6 +42,7 @@ import {
   validateFieldList,
 } from "../tasks/index.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import { renderConfigFailure } from "./config-error.ts";
 
 type TaskCommandDependencies = Pick<
   ExecuteDependencies,
@@ -131,12 +132,6 @@ const renderTaskReadFailure = (kind: TaskReadError["kind"]): Execution => {
     exitCode: mapped.exitCode,
   };
 };
-
-const renderConfigFailure = (error: ConfigError): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "configuration", message: error.message }),
-  exitCode: 2,
-});
 
 const renderTaskWorkflowFailure = (
   error: TaskUpdateError,

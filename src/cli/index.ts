@@ -6,7 +6,7 @@ import {
   isCompletionShell,
   renderCompletion,
 } from "../completion/index.ts";
-import { resolveConfig, type ConfigError } from "../config/index.ts";
+import { resolveConfig } from "../config/index.ts";
 import type { IdentityError as AsanaError } from "../identity/index.ts";
 import { validateFieldList } from "../tasks/index.ts";
 import {
@@ -39,6 +39,7 @@ import type { Result } from "../shared/result.ts";
 import { renderUpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import { registerConfigCommands } from "./config-commands.ts";
+import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
 import { registerTaskCommands } from "./task-commands.ts";
 import { executeWorkspacesList } from "../workspaces/index.ts";
@@ -121,12 +122,6 @@ const renderProjectReadFailure = (
     exitCode: mapped.exitCode,
   };
 };
-
-const renderConfigFailure = (error: ConfigError): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "configuration", message: error.message }),
-  exitCode: 2,
-});
 
 export const execute = async (
   argv: readonly string[],
