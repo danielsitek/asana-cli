@@ -40,6 +40,13 @@ type ConfigCommandRegistration = Readonly<{
   usageError: (message: string) => Execution;
 }>;
 
+type ConfigInitOptions = Readonly<{
+  shared?: boolean;
+  local?: boolean;
+  workspace?: string;
+  writeGitignore?: boolean;
+}>;
+
 const renderStageFailure = (
   error: StageFailureError,
   json: boolean,
@@ -132,19 +139,96 @@ const selectedLayer = (
     : { ok: true, value: selected[0]?.[0] };
 };
 
-export const registerConfigCommands = ({
-  program,
-  dependencies,
-  beginCommand,
-  complete,
-  requireToken,
-  renderIdentityFailure,
-  usageError,
-}: ConfigCommandRegistration): void => {
-  const config = program
-    .command("config")
-    .description("manage layered configuration");
+const validateConfigInitOptions = (
+  options: ConfigInitOptions,
+): string | undefined => {
+  if (options.shared && options.local) {
+    return "--shared and --local are mutually exclusive";
+  }
+  if (!options.shared && !options.local) {
+    return "config init requires either --shared or --local";
+  }
+  if (options.writeGitignore && !options.local) {
+    return "--write-gitignore requires --local";
+  }
+  return options.local && options.workspace !== undefined
+    ? "--workspace is not supported with --local"
+    : undefined;
+};
 
+const renderInitialized = (
+  initialized: Readonly<{ path?: string }>,
+  json: boolean,
+): Execution => ({
+  stdout: json ? renderJson(initialized) : `initialized ${initialized.path}\n`,
+  stderr: "",
+  exitCode: 0,
+});
+
+const runSharedConfigInit = async (
+  context: ConfigContext,
+  workspace: string | undefined,
+  json: boolean,
+): Promise<Execution> => {
+  const initialized = await initializeSharedConfig(context, workspace);
+  return initialized.ok
+    ? renderInitialized(initialized.value, json)
+    : renderConfigFailure(initialized.error);
+};
+
+const runLocalConfigInit = async (
+  context: ConfigContext,
+  options: ConfigInitOptions,
+  json: boolean,
+  registration: ConfigCommandRegistration,
+): Promise<Execution> => {
+  const initialized = await requireConfig(
+    context,
+    registration.dependencies,
+    registration.requireToken,
+    registration.renderIdentityFailure,
+    options.writeGitignore !== undefined
+      ? { writeGitignore: options.writeGitignore }
+      : {},
+    json,
+  );
+  return initialized.ok
+    ? renderInitialized(initialized.value, json)
+    : initialized.error;
+};
+
+const runConfigInit = async (
+  options: ConfigInitOptions,
+  registration: ConfigCommandRegistration,
+): Promise<void> => {
+  const invocation = registration.beginCommand();
+  if (!invocation) return;
+
+  const validationError = validateConfigInitOptions(options);
+  if (validationError) {
+    registration.complete(registration.usageError(validationError));
+    return;
+  }
+
+  const execution = options.shared
+    ? await runSharedConfigInit(
+        invocation.context,
+        options.workspace,
+        invocation.json,
+      )
+    : await runLocalConfigInit(
+        invocation.context,
+        options,
+        invocation.json,
+        registration,
+      );
+  registration.complete(execution);
+};
+
+const registerConfigInit = (
+  config: Command,
+  registration: ConfigCommandRegistration,
+): void => {
   config
     .command("init")
     .description("initialize configuration")
@@ -155,148 +239,132 @@ export const registerConfigCommands = ({
       "--write-gitignore",
       "automatically ignore the local configuration file",
     )
-    .action(
-      async (
-        options: Readonly<{
-          shared?: boolean;
-          local?: boolean;
-          workspace?: string;
-          writeGitignore?: boolean;
-        }>,
-      ) => {
-        const invocation = beginCommand();
-        if (!invocation) return;
-        const { context, json } = invocation;
-
-        if (options.shared && options.local) {
-          complete(usageError("--shared and --local are mutually exclusive"));
-          return;
-        }
-        if (!options.shared && !options.local) {
-          complete(
-            usageError("config init requires either --shared or --local"),
-          );
-          return;
-        }
-        if (options.writeGitignore && !options.local) {
-          complete(usageError("--write-gitignore requires --local"));
-          return;
-        }
-        if (options.local && options.workspace !== undefined) {
-          complete(usageError("--workspace is not supported with --local"));
-          return;
-        }
-
-        if (options.shared) {
-          const initialized = await initializeSharedConfig(
-            context,
-            options.workspace,
-          );
-          if (!initialized.ok) {
-            complete(renderConfigFailure(initialized.error));
-            return;
-          }
-          complete({
-            stdout: json
-              ? renderJson(initialized.value)
-              : `initialized ${initialized.value.path}\n`,
-            stderr: "",
-            exitCode: 0,
-          });
-          return;
-        }
-
-        const initialized = await requireConfig(
-          context,
-          dependencies,
-          requireToken,
-          renderIdentityFailure,
-          options.writeGitignore !== undefined
-            ? { writeGitignore: options.writeGitignore }
-            : {},
-          json,
-        );
-        if (!initialized.ok) {
-          complete(initialized.error);
-          return;
-        }
-
-        complete({
-          stdout: json
-            ? renderJson(initialized.value)
-            : `initialized ${initialized.value.path}\n`,
-          stderr: "",
-          exitCode: 0,
-        });
-      },
+    .action((options: ConfigInitOptions) =>
+      runConfigInit(options, registration),
     );
+};
 
-  const resolveCmd = config
+const runConfigResolve = async (
+  registration: ConfigCommandRegistration,
+): Promise<void> => {
+  const invocation = registration.beginCommand();
+  if (!invocation) return;
+
+  const resolved = await requireConfig(
+    invocation.context,
+    registration.dependencies,
+    registration.requireToken,
+    registration.renderIdentityFailure,
+    {},
+    invocation.json,
+  );
+  if (!resolved.ok) {
+    registration.complete(resolved.error);
+    return;
+  }
+
+  registration.complete({
+    stdout: invocation.json
+      ? renderJson(resolved.value.myTasks)
+      : renderResolvedMyTasks(resolved.value.myTasks),
+    stderr: "",
+    exitCode: 0,
+  });
+};
+
+const registerConfigResolve = (
+  config: Command,
+  registration: ConfigCommandRegistration,
+): void => {
+  config
     .command("resolve")
-    .description("resolve configuration resources");
-
-  resolveCmd
+    .description("resolve configuration resources")
     .command("my-tasks")
     .description("resolve My Tasks configuration")
-    .action(async () => {
-      const invocation = beginCommand();
-      if (!invocation) return;
-      const { context, json } = invocation;
+    .action(() => runConfigResolve(registration));
+};
 
-      const resolved = await requireConfig(
-        context,
-        dependencies,
-        requireToken,
-        renderIdentityFailure,
-        {},
-        json,
-      );
-      if (!resolved.ok) {
-        complete(resolved.error);
-        return;
-      }
+const runConfigGet = async (
+  key: string,
+  options: Readonly<{ source?: boolean }>,
+  registration: ConfigCommandRegistration,
+): Promise<void> => {
+  const invocation = registration.beginCommand();
+  if (!invocation) return;
 
-      complete({
-        stdout: json
-          ? renderJson(resolved.value.myTasks)
-          : renderResolvedMyTasks(resolved.value.myTasks),
-        stderr: "",
-        exitCode: 0,
-      });
-    });
+  const resolved = await resolveConfig(invocation.context);
+  if (!resolved.ok) {
+    registration.complete(renderConfigFailure(resolved.error));
+    return;
+  }
+  const found = getConfigValue(resolved.value, key);
+  if (!found.ok) {
+    registration.complete(renderConfigFailure(found.error));
+    return;
+  }
+  registration.complete({
+    stdout: renderConfigValue(
+      found.value.value,
+      options.source ? found.value.source : undefined,
+      options.source ? found.value.sources : {},
+      invocation.json,
+    ),
+    stderr: "",
+    exitCode: 0,
+  });
+};
 
+const registerConfigGet = (
+  config: Command,
+  registration: ConfigCommandRegistration,
+): void => {
   config
     .command("get")
     .description("read an effective configuration value")
     .argument("<key>", "dotted configuration key")
     .option("--source", "include the winning source")
-    .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
-      const invocation = beginCommand();
-      if (!invocation) return;
-      const { context, json } = invocation;
+    .action((key: string, options: Readonly<{ source?: boolean }>) =>
+      runConfigGet(key, options, registration),
+    );
+};
 
-      const resolved = await resolveConfig(context);
-      if (!resolved.ok) {
-        complete(renderConfigFailure(resolved.error));
-        return;
-      }
-      const found = getConfigValue(resolved.value, key);
-      if (!found.ok) {
-        complete(renderConfigFailure(found.error));
-        return;
-      }
-      complete({
-        stdout: renderConfigValue(
-          found.value.value,
-          options.source ? found.value.source : undefined,
-          options.source ? found.value.sources : {},
-          json,
-        ),
-        stderr: "",
-        exitCode: 0,
-      });
-    });
+const runConfigSet = async (
+  key: string,
+  value: string,
+  options: Readonly<{ shared?: boolean; local?: boolean; global?: boolean }>,
+  registration: ConfigCommandRegistration,
+): Promise<void> => {
+  const invocation = registration.beginCommand();
+  if (!invocation) return;
 
+  const layer = selectedLayer(options);
+  if (!layer.ok) {
+    registration.complete(registration.usageError(layer.error));
+    return;
+  }
+  const written = await setConfigValue(
+    invocation.context,
+    key,
+    value,
+    layer.value,
+  );
+  if (!written.ok) {
+    registration.complete(renderConfigFailure(written.error));
+    return;
+  }
+  registration.complete({
+    stdout: invocation.json
+      ? renderJson(written.value)
+      : `updated ${written.value.path}\n`,
+    stderr: "",
+    exitCode: 0,
+  });
+};
+
+const registerConfigSet = (
+  config: Command,
+  registration: ConfigCommandRegistration,
+): void => {
   config
     .command("set")
     .description("write a configuration value")
@@ -306,7 +374,7 @@ export const registerConfigCommands = ({
     .option("--local", "write personal repository configuration")
     .option("--global", "write global user configuration")
     .action(
-      async (
+      (
         key: string,
         value: string,
         options: Readonly<{
@@ -314,54 +382,57 @@ export const registerConfigCommands = ({
           local?: boolean;
           global?: boolean;
         }>,
-      ) => {
-        const invocation = beginCommand();
-        if (!invocation) return;
-        const { context, json } = invocation;
-
-        const layer = selectedLayer(options);
-        if (!layer.ok) {
-          complete(usageError(layer.error));
-          return;
-        }
-        const written = await setConfigValue(context, key, value, layer.value);
-        if (!written.ok) {
-          complete(renderConfigFailure(written.error));
-          return;
-        }
-        complete({
-          stdout: json
-            ? renderJson(written.value)
-            : `updated ${written.value.path}\n`,
-          stderr: "",
-          exitCode: 0,
-        });
-      },
+      ) => runConfigSet(key, value, options, registration),
     );
+};
 
+const runConfigShow = async (
+  options: Readonly<{ sources?: boolean }>,
+  registration: ConfigCommandRegistration,
+): Promise<void> => {
+  const invocation = registration.beginCommand();
+  if (!invocation) return;
+
+  const resolved = await resolveConfig(invocation.context);
+  if (!resolved.ok) {
+    registration.complete(renderConfigFailure(resolved.error));
+    return;
+  }
+  registration.complete({
+    stdout: renderConfig(
+      resolved.value.value,
+      resolved.value.sources,
+      options.sources ?? false,
+      invocation.json,
+    ),
+    stderr: "",
+    exitCode: 0,
+  });
+};
+
+const registerConfigShow = (
+  config: Command,
+  registration: ConfigCommandRegistration,
+): void => {
   config
     .command("show")
     .description("show effective configuration")
     .option("--sources", "include the winning source for every value")
-    .action(async (options: Readonly<{ sources?: boolean }>) => {
-      const invocation = beginCommand();
-      if (!invocation) return;
-      const { context, json } = invocation;
+    .action((options: Readonly<{ sources?: boolean }>) =>
+      runConfigShow(options, registration),
+    );
+};
 
-      const resolved = await resolveConfig(context);
-      if (!resolved.ok) {
-        complete(renderConfigFailure(resolved.error));
-        return;
-      }
-      complete({
-        stdout: renderConfig(
-          resolved.value.value,
-          resolved.value.sources,
-          options.sources ?? false,
-          json,
-        ),
-        stderr: "",
-        exitCode: 0,
-      });
-    });
+export const registerConfigCommands = (
+  registration: ConfigCommandRegistration,
+): void => {
+  const config = registration.program
+    .command("config")
+    .description("manage layered configuration");
+
+  registerConfigInit(config, registration);
+  registerConfigResolve(config, registration);
+  registerConfigGet(config, registration);
+  registerConfigSet(config, registration);
+  registerConfigShow(config, registration);
 };
