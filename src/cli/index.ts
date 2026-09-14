@@ -7,44 +7,19 @@ import {
   isCompletionShell,
   renderCompletion,
 } from "../completion/index.ts";
-import {
-  getConfigValue,
-  initializeSharedConfig,
-  initializeLocalConfig,
-  resolveConfig,
-  setConfigValue,
-  type ConfigContext,
-  type ConfigError,
-  type ConfigLayer,
-  type LocalConfigInitResult,
-  type MyTaskSectionsDiscoveryGateway,
-  type MyTasksDiscoveryGateway,
-  type StageFailureError,
-} from "../config/index.ts";
-import type {
-  IdentityError as AsanaError,
-  IdentityGateway,
-} from "../identity/index.ts";
+import { resolveConfig, type ConfigError } from "../config/index.ts";
+import type { IdentityError as AsanaError } from "../identity/index.ts";
 import {
   createMyTasksMutationResolver,
   createMySectionResolver,
 } from "../my-tasks/index.ts";
 import {
-  type TaskCommentCreationGateway,
-  type TaskStoryGateway,
   executeTaskCommentCreate,
   executeTaskCommentsRead,
   prepareTaskCommentCreate,
   prepareTaskCommentsRead,
 } from "../comments/index.ts";
 import {
-  type TaskGateway,
-  type TaskCreationGateway,
-  type TaskListGateway,
-  type TaskMutationGateway,
-  type TaskParentMutationGateway,
-  type TaskProjectMutationGateway,
-  type TaskSectionMutationGateway,
   type TaskReadError,
   type TaskUpdateError,
   type TaskUpdateOptions,
@@ -61,12 +36,9 @@ import {
   DEFAULT_FIELDS,
 } from "../tasks/index.ts";
 import {
-  renderConfig,
-  renderConfigValue,
   renderError,
   renderIdentity,
   renderJson,
-  renderResolvedMyTasks,
   renderCommentDetail,
   renderCommentList,
   renderCommentScanWarning,
@@ -95,51 +67,16 @@ import {
   prepareProjectList,
   prepareProjectSectionList,
   prepareProjectCustomFieldSettingList,
-  type ProjectGateway,
-  type ProjectReadGateway,
   type ProjectReadError,
-  type ProjectSectionGateway,
-  type ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
-import { renderUpdateNotice, type UpdateNotice } from "../update/index.ts";
+import { renderUpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
-import {
-  executeWorkspacesList,
-  type WorkspaceGateway,
-} from "../workspaces/index.ts";
+import { registerConfigCommands } from "./config-commands.ts";
+import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import { executeWorkspacesList } from "../workspaces/index.ts";
 
-export type Execution = Readonly<{
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}>;
-
-export type ExecuteDependencies = Readonly<{
-  environment: Readonly<Record<string, string | undefined>>;
-  identity: IdentityGateway;
-  taskReader?: TaskGateway;
-  taskCreator?: TaskCreationGateway;
-  taskWriter?: TaskMutationGateway;
-  taskParentWriter?: TaskParentMutationGateway;
-  taskProjectWriter?: TaskProjectMutationGateway;
-  taskSectionWriter?: TaskSectionMutationGateway;
-  taskListReader?: TaskListGateway;
-  commentReader?: TaskStoryGateway;
-  commentWriter?: TaskCommentCreationGateway;
-  workspaceReader?: WorkspaceGateway;
-  projectReader?: ProjectGateway;
-  projectDetailReader?: ProjectReadGateway;
-  projectSectionReader?: ProjectSectionGateway;
-  projectCustomFieldSettingReader?: ProjectCustomFieldSettingGateway;
-  readFile?: (path: string) => Promise<string>;
-  readStdin?: () => Promise<string>;
-  discovery?: MyTasksDiscoveryGateway;
-  myTaskSectionsDiscovery?: MyTaskSectionsDiscoveryGateway;
-  configuration?: ConfigContext;
-  version?: string;
-  checkForUpdate?: () => Promise<UpdateNotice | undefined>;
-}>;
+export type { ExecuteDependencies, Execution } from "./contracts.ts";
 
 type TaskMutationCliOptions = Readonly<{
   name?: string;
@@ -295,93 +232,6 @@ const renderTaskWorkflowFailure = (error: TaskUpdateError): Execution => {
   return renderTaskReadFailure(error.kind);
 };
 
-const renderStageFailure = (
-  error: StageFailureError,
-  json: boolean,
-): Execution => {
-  if (json) {
-    return {
-      stdout: renderJson({
-        completed: error.completed,
-        failed: error.failed,
-        message: error.message,
-      }),
-      stderr: "",
-      exitCode: 1,
-    };
-  }
-
-  const completedList = [...error.completed].sort().join(", ");
-  const failedList = [...error.failed].sort().join(", ");
-  return {
-    stdout: `Stage failure: ${error.message}\nCompleted: ${completedList || "none"}\nFailed: ${failedList || "none"}\n`,
-    stderr: "",
-    exitCode: 1,
-  };
-};
-
-const requireConfig = async (
-  context: ConfigContext,
-  dependencies: Pick<ExecuteDependencies, "environment" | "discovery">,
-  options: Readonly<{ writeGitignore?: boolean }>,
-  json: boolean,
-): Promise<Result<LocalConfigInitResult, Execution>> => {
-  const token = requireToken(dependencies);
-  if (!token.ok) return token;
-
-  const discovery = dependencies.discovery;
-  if (!discovery) {
-    return {
-      ok: false,
-      error: {
-        stdout: "",
-        stderr: renderError({
-          code: "internal_error",
-          message: "Discovery gateway is required",
-        }),
-        exitCode: 6,
-      },
-    };
-  }
-
-  const initialized = await initializeLocalConfig(
-    context,
-    token.value,
-    discovery,
-    options,
-  );
-  if (initialized.ok) return initialized;
-  if (initialized.error.kind === "configuration") {
-    return { ok: false, error: renderConfigFailure(initialized.error) };
-  }
-  if (initialized.error.kind === "stage_failure") {
-    return { ok: false, error: renderStageFailure(initialized.error, json) };
-  }
-  return { ok: false, error: renderIdentityFailure(initialized.error.kind) };
-};
-
-const selectedLayer = (
-  options: Readonly<{
-    shared?: boolean;
-    local?: boolean;
-    global?: boolean;
-  }>,
-): Result<ConfigLayer | undefined, string> => {
-  const selected = (
-    [
-      ["shared", options.shared],
-      ["local", options.local],
-      ["global", options.global],
-    ] as const
-  ).filter(([, enabled]) => enabled);
-  return selected.length > 1
-    ? {
-        ok: false,
-        error: "--shared, --local, and --global are mutually exclusive",
-      }
-    : { ok: true, value: selected[0]?.[0] };
-};
-
 export const execute = async (
   argv: readonly string[],
   dependencies: ExecuteDependencies,
@@ -397,14 +247,6 @@ export const execute = async (
 
   const stopWith = (execution: Execution): void => {
     result = execution;
-  };
-
-  const beginConfigCommand = (): ConfigContext | undefined => {
-    invokedState.value = true;
-    json = program.opts<{ json?: boolean }>().json ?? false;
-    const context = dependencies.configuration;
-    if (!context) result = usageError("Configuration context is unavailable");
-    return context;
   };
 
   const captureOutput = {
@@ -491,215 +333,24 @@ export const execute = async (
     });
   whoami.version(version, "-v, --version");
 
-  const config = program
-    .command("config")
-    .description("manage layered configuration");
-
-  config
-    .command("init")
-    .description("initialize configuration")
-    .option("--shared", "initialize shared repository configuration")
-    .option("--local", "initialize local repository configuration")
-    .option("--workspace <gid>", "Asana workspace GID")
-    .option(
-      "--write-gitignore",
-      "automatically ignore the local configuration file",
-    )
-    .action(
-      async (
-        options: Readonly<{
-          shared?: boolean;
-          local?: boolean;
-          workspace?: string;
-          writeGitignore?: boolean;
-        }>,
-      ) => {
-        const context = beginConfigCommand();
-        if (!context) return;
-
-        if (options.shared && options.local) {
-          result = usageError("--shared and --local are mutually exclusive");
-          return;
-        }
-        if (!options.shared && !options.local) {
-          result = usageError(
-            "config init requires either --shared or --local",
-          );
-          return;
-        }
-        if (options.writeGitignore && !options.local) {
-          result = usageError("--write-gitignore requires --local");
-          return;
-        }
-        if (options.local && options.workspace !== undefined) {
-          result = usageError("--workspace is not supported with --local");
-          return;
-        }
-
-        if (options.shared) {
-          const initialized = await initializeSharedConfig(
-            context,
-            options.workspace,
-          );
-          if (!initialized.ok) {
-            result = renderConfigFailure(initialized.error);
-            return;
-          }
-          result = {
-            stdout: json
-              ? renderJson(initialized.value)
-              : `initialized ${initialized.value.path}\n`,
-            stderr: "",
-            exitCode: 0,
-          };
-          return;
-        }
-
-        const initialized = await requireConfig(
-          context,
-          dependencies,
-          options.writeGitignore !== undefined
-            ? { writeGitignore: options.writeGitignore }
-            : {},
-          json,
-        );
-        if (!initialized.ok) {
-          stopWith(initialized.error);
-          return;
-        }
-
-        result = {
-          stdout: json
-            ? renderJson(initialized.value)
-            : `initialized ${initialized.value.path}\n`,
-          stderr: "",
-          exitCode: 0,
-        };
-      },
-    );
-
-  const resolveCmd = config
-    .command("resolve")
-    .description("resolve configuration resources");
-
-  resolveCmd
-    .command("my-tasks")
-    .description("resolve My Tasks configuration")
-    .action(async () => {
-      const context = beginConfigCommand();
-      if (!context) return;
-
-      const resolved = await requireConfig(context, dependencies, {}, json);
-      if (!resolved.ok) {
-        stopWith(resolved.error);
-        return;
+  registerConfigCommands({
+    program,
+    dependencies,
+    beginCommand: () => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+      const context = dependencies.configuration;
+      if (!context) {
+        result = usageError("Configuration context is unavailable");
+        return undefined;
       }
-
-      result = {
-        stdout: json
-          ? renderJson(resolved.value.myTasks)
-          : renderResolvedMyTasks(resolved.value.myTasks),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
-
-  config
-    .command("get")
-    .description("read an effective configuration value")
-    .argument("<key>", "dotted configuration key")
-    .option("--source", "include the winning source")
-    .action(async (key: string, options: Readonly<{ source?: boolean }>) => {
-      const context = beginConfigCommand();
-      if (!context) return;
-
-      const resolved = await resolveConfig(context);
-      if (!resolved.ok) {
-        result = renderConfigFailure(resolved.error);
-        return;
-      }
-      const found = getConfigValue(resolved.value, key);
-      if (!found.ok) {
-        result = renderConfigFailure(found.error);
-        return;
-      }
-      result = {
-        stdout: renderConfigValue(
-          found.value.value,
-          options.source ? found.value.source : undefined,
-          options.source ? found.value.sources : {},
-          json,
-        ),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
-
-  config
-    .command("set")
-    .description("write a configuration value")
-    .argument("<key>", "dotted configuration key")
-    .argument("<value>", "configuration value")
-    .option("--shared", "write shared repository configuration")
-    .option("--local", "write personal repository configuration")
-    .option("--global", "write global user configuration")
-    .action(
-      async (
-        key: string,
-        value: string,
-        options: Readonly<{
-          shared?: boolean;
-          local?: boolean;
-          global?: boolean;
-        }>,
-      ) => {
-        const context = beginConfigCommand();
-        if (!context) return;
-
-        const layer = selectedLayer(options);
-        if (!layer.ok) {
-          result = usageError(layer.error);
-          return;
-        }
-        const written = await setConfigValue(context, key, value, layer.value);
-        if (!written.ok) {
-          result = renderConfigFailure(written.error);
-          return;
-        }
-        result = {
-          stdout: json
-            ? renderJson(written.value)
-            : `updated ${written.value.path}\n`,
-          stderr: "",
-          exitCode: 0,
-        };
-      },
-    );
-
-  config
-    .command("show")
-    .description("show effective configuration")
-    .option("--sources", "include the winning source for every value")
-    .action(async (options: Readonly<{ sources?: boolean }>) => {
-      const context = beginConfigCommand();
-      if (!context) return;
-
-      const resolved = await resolveConfig(context);
-      if (!resolved.ok) {
-        result = renderConfigFailure(resolved.error);
-        return;
-      }
-      result = {
-        stdout: renderConfig(
-          resolved.value.value,
-          resolved.value.sources,
-          options.sources ?? false,
-          json,
-        ),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
+      return { context, json };
+    },
+    complete: stopWith,
+    requireToken: () => requireToken(dependencies),
+    renderIdentityFailure,
+    usageError,
+  });
 
   const tasks = program.command("tasks").description("manage tasks");
 
