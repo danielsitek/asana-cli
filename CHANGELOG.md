@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.6.0
+
+- Notify users when a newer GitHub release is available, with bounded cached
+  checks that do not affect command results when the network is unavailable.
+- Improve internal command registration, request handling, validation,
+  pagination, packaging, and smoke-check maintainability.
+
 ## 0.5.0
 
 - Add bounded `projects sections` and `projects custom-fields` discovery.
