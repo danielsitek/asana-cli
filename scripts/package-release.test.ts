@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -157,6 +165,12 @@ describe("release packaging", () => {
     }
     expect(commands.at(-1)?.command).toEqual(["sha256sum", "-c", "SHA256SUMS"]);
     expect(commands.at(-1)?.options?.cwd).toBe(setup.outputDirectory);
+    expect((await readdir(setup.outputDirectory)).sort()).toEqual(
+      [
+        "SHA256SUMS",
+        ...packaged.archives.map((archive) => basename(archive)),
+      ].sort(),
+    );
     expect(await pathExists(join(setup.outputDirectory, ".staging"))).toBe(
       false,
     );
