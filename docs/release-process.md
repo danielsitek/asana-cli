@@ -1,7 +1,6 @@
 # Release process
 
-Spans two repos: `asana-cli` (this repo) and `danielsitek/homebrew-tap`
-(local checkout `~/Sites/homebrew-tap`).
+Spans two repos: `asana-cli` (this repo) and `danielsitek/homebrew-tap`.
 
 ## 1. asana-cli
 
@@ -30,8 +29,8 @@ Spans two repos: `asana-cli` (this repo) and `danielsitek/homebrew-tap`
    git push origin vX.Y.Z
    ```
    This triggers `.github/workflows/release.yml`: builds all 4 targets,
-   packages archives + `asana-cli.rb` (via `formula:generate`), verifies a
-   Homebrew install, and opens/updates a **draft** GitHub release.
+   packages archives and `SHA256SUMS`, and opens/updates a **draft** GitHub
+   release. Homebrew installation is tested by the tap after publication.
 9. Find the draft's numeric release ID — its `html_url` shows a misleading
    `.../releases/tag/untagged-<hash>` (a GitHub quirk for unpublished
    releases) even though `tag_name` is already correct, so `gh release view
@@ -59,24 +58,34 @@ Spans two repos: `asana-cli` (this repo) and `danielsitek/homebrew-tap`
 
 ## 2. homebrew-tap
 
-The formula must never be hand-edited — always regenerate it from the
-published release's checksums, using the same generator CI uses. No CI, no
-reviewer, and a single generated file in this repo, so commit straight to
-`main` and push — no branch or PR:
+Publishing a stable release triggers `.github/workflows/notify-homebrew-tap.yml`,
+which sends an `upstream_release` repository dispatch containing the source
+repository and tag. The tap downloads the published release, regenerates the
+formula from `SHA256SUMS`, tests installation on macOS ARM and Intel, and only
+then commits the newer formula. Drafts and prereleases do not trigger this
+notification. The tap's daily scheduled run catches missed dispatches.
+
+The notifier requires the `HOMEBREW_TAP_DISPATCH_TOKEN` repository secret in
+`asana-cli`: a fine-grained PAT restricted to `danielsitek/homebrew-tap` with
+`Contents: read and write` permission. The ordinary `GITHUB_TOKEN` cannot
+dispatch to another repository. A missing or expired token fails the notifier
+workflow visibly; rotate it by replacing this secret, without putting the
+token in source code, release assets, or logs.
+
+After publishing, check the notifier and tap workflows:
 
 ```sh
-cd ~/Sites/homebrew-tap
-git checkout main && git pull origin main
+gh run list -R danielsitek/asana-cli --workflow notify-homebrew-tap.yml --limit 5
+gh run list -R danielsitek/homebrew-tap --workflow update-formulas.yml --limit 5
+```
 
-gh release download vX.Y.Z -R danielsitek/asana-cli -p SHA256SUMS -D /tmp --clobber
-cd ~/Sites/asana-cli
-bun run formula:generate --checksums /tmp/SHA256SUMS \
-  --output ~/Sites/homebrew-tap/Formula/asana-cli.rb --version X.Y.Z
-cd ~/Sites/homebrew-tap
-ruby -c Formula/asana-cli.rb
-git diff  # eyeball the change — this is the review step, in place of a PR
+A successful notifier means GitHub accepted the dispatch, not that the tap
+update finished. Confirm the tap workflow succeeded and
+`homebrew-tap/Formula/asana-cli.rb` points to `vX.Y.Z`. For a missed or failed
+dispatch, fix the credential or tap failure, then retry without editing the
+formula by hand:
 
-git add Formula/asana-cli.rb
-git commit -m "feat: update asana-cli to X.Y.Z"
-git push origin main
+```sh
+gh workflow run update-formulas.yml -R danielsitek/homebrew-tap \
+  -f repository=danielsitek/asana-cli -f tag=vX.Y.Z
 ```
