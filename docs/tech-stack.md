@@ -65,13 +65,15 @@ oversight.
 `package-release.ts` builds archives with fixed tar metadata
 (`--sort=name`, `--mtime=@0`, `--owner=0`, `--group=0`, normalized mode) and
 `gzip -n`, so identical input binaries produce byte-identical archives and
-checksums. This lets `generate-homebrew-formula.ts` embed a checksum per
-architecture directly from the same run's manifest.
+checksums. The published `SHA256SUMS` is the release contract consumed by
+`homebrew-tap` when it renders and tests the formula.
 
 ## Draft release and human-in-the-loop publication
 
 The tag-driven release workflow always creates or updates a **draft** GitHub
-release with built archives, checksums, and the generated Homebrew formula —
-it never publishes automatically. A maintainer must review and publish the
-draft. This keeps a broken or premature build from becoming a public,
-un-retractable release, at the cost of a manual step per release.
+release with built archives and checksums — it never publishes automatically.
+A maintainer must review and publish the draft. This keeps a broken or
+premature build from becoming a public, un-retractable release, at the cost of
+a manual step per release. Publication of a stable release dispatches the
+independent Homebrew tap updater, which tests both macOS architectures before
+committing the formula.

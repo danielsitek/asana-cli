@@ -148,16 +148,11 @@ jobs:
             tar -xf "$archive" -C "release-input/$target"
             chmod 0755 "release-input/$target/asana-cli"
           done
-      - name: Package archives and formula
+      - name: Package release assets
         shell: bash
         run: |
           bun run package:release --input release-input --output release-assets \
             --version "${{ needs.validate.outputs.version }}"
-          bun run formula:generate --checksums release-assets/SHA256SUMS \
-            --output release-assets/asana-cli.rb \
-            --version "${{ needs.validate.outputs.version }}" \
-            --repository "${{ github.repository }}"
-          ruby -c release-assets/asana-cli.rb
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets
@@ -166,55 +161,8 @@ jobs:
           overwrite: true
           retention-days: 1
 
-  homebrew-install:
-    needs: [validate, package]
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            uname: arm64
-          - runner: macos-15-intel
-            uname: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: test "$(uname -m)" = "${{ matrix.uname }}"
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-assets
-          path: release-assets
-      - name: Install formula from current-run archives
-        shell: bash
-        run: |
-          assets="$(pwd)/release-assets"
-          bun run formula:generate --checksums release-assets/SHA256SUMS \
-            --output "$RUNNER_TEMP/asana-cli.rb" \
-            --version "${{ needs.validate.outputs.version }}" \
-            --base-url "file://$assets"
-          ruby -c "$RUNNER_TEMP/asana-cli.rb"
-          tap="asana-cli/ci"
-          brew tap-new --no-git "$tap"
-          formula_dir="$(brew --repository "$tap")/Formula"
-          cp "$RUNNER_TEMP/asana-cli.rb" "$formula_dir/asana-cli.rb"
-          brew install "$tap/asana-cli"
-          brew test "$tap/asana-cli"
-      - name: Remove test formula
-        if: always()
-        run: |
-          brew uninstall asana-cli || true
-          brew untap asana-cli/ci || true
-
   release:
-    needs: [validate, package, homebrew-install]
+    needs: [validate, package]
     permissions:
       contents: write
     runs-on: ubuntu-24.04
