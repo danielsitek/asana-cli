@@ -3,6 +3,11 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.6.1
+
+- Automate Homebrew tap updates after stable releases. Formula generation and
+  macOS installation checks now run in the tap repository.
+
 ## 0.6.0
 
 - Notify users when a newer GitHub release is available, with bounded cached
