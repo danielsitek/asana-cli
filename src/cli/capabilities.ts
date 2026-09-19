@@ -16,6 +16,7 @@ type CommandCapabilityMetadata = Readonly<{
     Record<
       string,
       Readonly<{
+        required?: boolean;
         repeatable?: boolean;
       }>
     >
@@ -113,15 +114,19 @@ const optionKey = (option: CapabilityOption): string =>
 const toOption = (
   option: Option,
   metadata: CommandCapabilityMetadata | undefined,
-): CapabilityOption => ({
-  flags: optionFlags(option),
-  description: option.description,
-  required: option.mandatory,
-  repeatable:
-    option.variadic ||
-    metadata?.options?.[option.attributeName()]?.repeatable === true,
-  value: optionValue(option),
-});
+  ownerMetadata?: CommandCapabilityMetadata,
+): CapabilityOption => {
+  const override = metadata?.options?.[option.attributeName()];
+  const ownerOverride = ownerMetadata?.options?.[option.attributeName()];
+  return {
+    flags: optionFlags(option),
+    description: option.description,
+    required: override?.required ?? ownerOverride?.required ?? option.mandatory,
+    repeatable:
+      override?.repeatable ?? ownerOverride?.repeatable ?? option.variadic,
+    value: optionValue(option),
+  };
+};
 
 const compareOptions = (
   left: CapabilityOption,
@@ -132,8 +137,9 @@ const optionAppliesAtPath = (option: CapabilityOption, path: string): boolean =>
   !option.flags.includes("--fields") || acceptsFieldsOptionAtPath(path);
 
 const localOptions = (command: Command): readonly CapabilityOption[] =>
-  command.options
-    .filter((option) => !option.hidden)
+  command
+    .createHelp()
+    .visibleOptions(command)
     .map((option) => toOption(option, metadataByCommand.get(command)))
     .sort(compareOptions);
 
@@ -145,13 +151,14 @@ const inheritedOptions = (
   const inherited: InheritedCapabilityOption[] = [];
   let ancestor = command.parent;
   const path = internalCommandPath(command);
+  const commandMetadata = metadataByCommand.get(command);
 
   while (ancestor) {
     const sourcePath = commandPath(ancestor);
     const metadata = metadataByCommand.get(ancestor);
     for (const option of ancestor.options) {
       if (option.hidden) continue;
-      const descriptor = toOption(option, metadata);
+      const descriptor = toOption(option, commandMetadata, metadata);
       if (
         !optionAppliesAtPath(descriptor, path) ||
         descriptor.flags.some((flag) => seenFlags.has(flag))

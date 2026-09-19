@@ -724,6 +724,16 @@ describe("execute", () => {
       expect(command.exit_codes).toEqual(
         [...command.exit_codes].sort((left, right) => left - right),
       );
+      for (const options of [
+        command.options.local,
+        command.options.inherited,
+      ]) {
+        const keys = options.map((option) => option.flags.join("\u0000"));
+        expect(keys).toEqual([...keys].sort());
+        for (const option of options) {
+          expect(option.flags).toEqual([...option.flags].sort());
+        }
+      }
       const optionFlags = [
         ...command.options.local,
         ...command.options.inherited,
@@ -752,12 +762,20 @@ describe("execute", () => {
     expect(byPath.get("asana-cli capabilities")).toMatchObject({
       arguments: [],
       options: {
-        local: [],
+        local: expect.arrayContaining([
+          {
+            flags: ["--help", "-h"],
+            description: "display help for command",
+            required: false,
+            repeatable: false,
+            value: "none",
+          },
+        ]),
         inherited: expect.arrayContaining([
           {
             flags: ["--json"],
             description: "output JSON",
-            required: false,
+            required: true,
             repeatable: false,
             value: "none",
             source_path: "asana-cli",

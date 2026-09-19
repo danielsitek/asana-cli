@@ -687,6 +687,7 @@ export const execute = async (
     operation: "local",
     requirements: { authentication: "never", configuration: "never" },
     exitCodes: [0, 2],
+    options: { json: { required: true } },
   });
   capabilities.exitOverride();
   capabilities.configureOutput(captureOutput);
