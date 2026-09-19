@@ -139,6 +139,7 @@ export const execute = async (
   const invokedState = { value: false };
   let result: Execution | undefined;
   let parserStdout = "";
+  let skipUpdateCheck = false;
 
   const stopWith = (execution: Execution): void => {
     result = execution;
@@ -672,6 +673,7 @@ export const execute = async (
     .description("describe the CLI contract for automation")
     .action(() => {
       invokedState.value = true;
+      skipUpdateCheck = true;
       json = program.opts<{ json?: boolean }>().json ?? false;
       result = json
         ? {
@@ -725,7 +727,11 @@ export const execute = async (
     (invokedState.value
       ? usageError("Command did not complete")
       : usageError("A command is required"));
-  if (execution.exitCode !== 0 || !dependencies.checkForUpdate) {
+  if (
+    execution.exitCode !== 0 ||
+    skipUpdateCheck ||
+    !dependencies.checkForUpdate
+  ) {
     return execution;
   }
 

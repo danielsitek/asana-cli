@@ -625,24 +625,16 @@ describe("execute", () => {
   });
 
   test("describes capabilities without accessing operational dependencies", async () => {
-    const dependencies: ExecuteDependencies = {
-      get environment(): never {
-        throw new Error("environment accessed");
+    const dependencies = new Proxy(
+      { version: "test-version" } as ExecuteDependencies,
+      {
+        get: (target, property, receiver) => {
+          if (property === "version")
+            return Reflect.get(target, property, receiver);
+          throw new Error(`dependency accessed: ${String(property)}`);
+        },
       },
-      get identity(): never {
-        throw new Error("Asana identity accessed");
-      },
-      get configuration(): never {
-        throw new Error("configuration accessed");
-      },
-      get readFile(): never {
-        throw new Error("filesystem accessed");
-      },
-      get readStdin(): never {
-        throw new Error("stdin accessed");
-      },
-      version: "test-version",
-    };
+    );
 
     const result = await execute(["capabilities", "--json"], dependencies);
 
