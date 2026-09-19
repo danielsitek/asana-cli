@@ -325,6 +325,20 @@ command fails with exit 2.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
 - Errors are compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
 
+## Machine-readable capabilities
+
+Inspect the installed CLI contract without authentication or configuration:
+
+```sh
+asana-cli capabilities --json
+```
+
+The compact JSON `data` document contains an explicit schema version, the CLI
+version, and a deterministic list of command paths, arguments, local and
+inherited options, operational requirements, read/write classification, and
+possible exit codes. The command runs locally and does not read credentials,
+configuration, files, stdin, or the Asana API.
+
 ## Shell completion
 
 Homebrew installs command completion for Bash, Zsh, and Fish automatically.
