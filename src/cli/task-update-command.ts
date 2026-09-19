@@ -19,6 +19,7 @@ import {
   type TaskMutationCliOptions,
 } from "./task-command-context.ts";
 import { withTaskMutationOptions } from "./task-mutation-options.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 
 const renderUpdatedTask = (
   json: boolean,
@@ -158,6 +159,15 @@ export const registerTaskUpdateCommand = (
         options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
       ) => context.complete(await runSelectedUpdate(context, idArg, options)),
     );
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: {
+      authentication: "required",
+      configuration: "conditional",
+    },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+    options: { customField: { repeatable: true } },
+  });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);
 };

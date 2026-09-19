@@ -4,6 +4,7 @@ import {
 } from "../comments/index.ts";
 import { renderCommentDetail, renderJson } from "../output/index.ts";
 import type { Execution } from "./contracts.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
   renderTaskReadFailure,
@@ -77,6 +78,11 @@ export const registerTaskCommentCommand = (
         );
       },
     );
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);
 };

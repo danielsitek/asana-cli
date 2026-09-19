@@ -5,6 +5,7 @@ import {
   renderTaskListScanWarning,
 } from "../output/index.ts";
 import type { Execution } from "./contracts.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
   mySectionResolverFor,
@@ -96,6 +97,14 @@ export const registerTaskListCommand = (context: TaskCommandContext): void => {
     .action(async (options: TaskListOptions) => {
       context.complete(await runTaskList(context, options));
     });
+  withCommandCapabilities(command, {
+    operation: "read",
+    requirements: {
+      authentication: "required",
+      configuration: "conditional",
+    },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);
 };

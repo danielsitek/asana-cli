@@ -38,6 +38,10 @@ import {
 import type { Result } from "../shared/result.ts";
 import { renderUpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
+import {
+  capabilitiesForProgram,
+  withCommandCapabilities,
+} from "./capabilities.ts";
 import { registerConfigCommands } from "./config-commands.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
@@ -191,6 +195,11 @@ export const execute = async (
         exitCode: 0,
       };
     });
+  withCommandCapabilities(whoami, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   whoami.version(version, "-v, --version");
 
   registerConfigCommands({
@@ -228,6 +237,14 @@ export const execute = async (
   });
 
   const projects = program.command("projects").description("inspect projects");
+  withCommandCapabilities(projects, {
+    operation: "read",
+    requirements: {
+      authentication: "required",
+      configuration: "conditional",
+    },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   projects.exitOverride();
   projects.configureOutput(captureOutput);
 
@@ -289,6 +306,11 @@ export const execute = async (
         exitCode: 0,
       };
     });
+  withCommandCapabilities(projectsGet, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
 
   projectsGet.exitOverride();
   projectsGet.configureOutput(captureOutput);
@@ -368,6 +390,11 @@ export const execute = async (
         };
       },
     );
+  withCommandCapabilities(projectsSections, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
 
   projectsSections.exitOverride();
   projectsSections.configureOutput(captureOutput);
@@ -451,6 +478,11 @@ export const execute = async (
         };
       },
     );
+  withCommandCapabilities(projectsCustomFields, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
 
   projectsCustomFields.exitOverride();
   projectsCustomFields.configureOutput(captureOutput);
@@ -537,6 +569,14 @@ export const execute = async (
       };
     },
   );
+  withCommandCapabilities(projectsList, {
+    operation: "read",
+    requirements: {
+      authentication: "required",
+      configuration: "conditional",
+    },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
 
   projectsList.exitOverride();
   projectsList.configureOutput(captureOutput);
@@ -544,6 +584,11 @@ export const execute = async (
   const workspaces = program
     .command("workspaces")
     .description("inspect workspaces");
+  withCommandCapabilities(workspaces, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   workspaces.exitOverride();
   workspaces.configureOutput(captureOutput);
 
@@ -588,6 +633,11 @@ export const execute = async (
         exitCode: 0,
       };
     });
+  withCommandCapabilities(workspacesList, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
 
   workspacesList.exitOverride();
   workspacesList.configureOutput(captureOutput);
@@ -609,8 +659,35 @@ export const execute = async (
         exitCode: 0,
       };
     });
+  withCommandCapabilities(completion, {
+    operation: "local",
+    requirements: { authentication: "never", configuration: "never" },
+    exitCodes: [0, 2],
+  });
   completion.exitOverride();
   completion.configureOutput(captureOutput);
+
+  const capabilities = program
+    .command("capabilities")
+    .description("describe the CLI contract for automation")
+    .action(() => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+      result = json
+        ? {
+            stdout: renderJson(capabilitiesForProgram(program, version)),
+            stderr: "",
+            exitCode: 0,
+          }
+        : usageError("capabilities requires --json");
+    });
+  withCommandCapabilities(capabilities, {
+    operation: "local",
+    requirements: { authentication: "never", configuration: "never" },
+    exitCodes: [0, 2],
+  });
+  capabilities.exitOverride();
+  capabilities.configureOutput(captureOutput);
 
   program.exitOverride();
   program.configureOutput(captureOutput);

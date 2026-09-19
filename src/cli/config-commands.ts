@@ -21,6 +21,7 @@ import {
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { renderConfigFailure } from "./config-error.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
 
 type ConfigCommandDependencies = Pick<ExecuteDependencies, "discovery">;
@@ -229,7 +230,7 @@ const registerConfigInit = (
   config: Command,
   registration: ConfigCommandRegistration,
 ): void => {
-  config
+  const command = config
     .command("init")
     .description("initialize configuration")
     .option("--shared", "initialize shared repository configuration")
@@ -242,6 +243,14 @@ const registerConfigInit = (
     .action((options: ConfigInitOptions) =>
       runConfigInit(options, registration),
     );
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: {
+      authentication: "conditional",
+      configuration: "required",
+    },
+    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+  });
 };
 
 const runConfigResolve = async (
@@ -276,12 +285,23 @@ const registerConfigResolve = (
   config: Command,
   registration: ConfigCommandRegistration,
 ): void => {
-  config
+  const resolve = config
     .command("resolve")
-    .description("resolve configuration resources")
+    .description("resolve configuration resources");
+  withCommandCapabilities(resolve, {
+    operation: "write",
+    requirements: { authentication: "required", configuration: "required" },
+    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+  });
+  const command = resolve
     .command("my-tasks")
     .description("resolve My Tasks configuration")
     .action(() => runConfigResolve(registration));
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: { authentication: "required", configuration: "required" },
+    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+  });
 };
 
 const runConfigGet = async (
@@ -318,7 +338,7 @@ const registerConfigGet = (
   config: Command,
   registration: ConfigCommandRegistration,
 ): void => {
-  config
+  const command = config
     .command("get")
     .description("read an effective configuration value")
     .argument("<key>", "dotted configuration key")
@@ -326,6 +346,11 @@ const registerConfigGet = (
     .action((key: string, options: Readonly<{ source?: boolean }>) =>
       runConfigGet(key, options, registration),
     );
+  withCommandCapabilities(command, {
+    operation: "read",
+    requirements: { authentication: "never", configuration: "required" },
+    exitCodes: [0, 2, 6],
+  });
 };
 
 const runConfigSet = async (
@@ -365,7 +390,7 @@ const registerConfigSet = (
   config: Command,
   registration: ConfigCommandRegistration,
 ): void => {
-  config
+  const command = config
     .command("set")
     .description("write a configuration value")
     .argument("<key>", "dotted configuration key")
@@ -384,6 +409,11 @@ const registerConfigSet = (
         }>,
       ) => runConfigSet(key, value, options, registration),
     );
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: { authentication: "never", configuration: "required" },
+    exitCodes: [0, 2, 6],
+  });
 };
 
 const runConfigShow = async (
@@ -414,13 +444,18 @@ const registerConfigShow = (
   config: Command,
   registration: ConfigCommandRegistration,
 ): void => {
-  config
+  const command = config
     .command("show")
     .description("show effective configuration")
     .option("--sources", "include the winning source for every value")
     .action((options: Readonly<{ sources?: boolean }>) =>
       runConfigShow(options, registration),
     );
+  withCommandCapabilities(command, {
+    operation: "read",
+    requirements: { authentication: "never", configuration: "required" },
+    exitCodes: [0, 2, 6],
+  });
 };
 
 export const registerConfigCommands = (
@@ -429,6 +464,14 @@ export const registerConfigCommands = (
   const config = registration.program
     .command("config")
     .description("manage layered configuration");
+  withCommandCapabilities(config, {
+    operation: "mixed",
+    requirements: {
+      authentication: "conditional",
+      configuration: "required",
+    },
+    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+  });
 
   registerConfigInit(config, registration);
   registerConfigResolve(config, registration);
