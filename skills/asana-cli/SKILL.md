@@ -30,9 +30,14 @@ Before `tasks update` or `tasks comment`, read the target first with `asana-cli 
 
 Every task `<id>` below must be a digit-only GID or a URL of the exact form `https://app.asana.com/0/<project>/<task>[/f]` — other Asana URL shapes fail with exit 2. Resource arguments written as `<gid>`, including `projects get <gid>`, accept digit-only GIDs.
 
+Run `asana-cli capabilities --json` to inspect the installed CLI's versioned,
+machine-readable command contract. It is local-only and does not read
+credentials, configuration, files, stdin, or the Asana API.
+
 | Goal                                               | Command                                                                                                                                                                                                                                                |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Show authenticated user                            | `asana-cli whoami`                                                                                                                                                                                                                                     |
+| Discover the installed command contract            | `asana-cli capabilities --json`                                                                                                                                                                                                                        |
 | Generate shell completion                          | `asana-cli completion bash\|zsh\|fish`                                                                                                                                                                                                                 |
 | List workspaces (find `<gid>` for config init)     | `asana-cli workspaces list --json`                                                                                                                                                                                                                     |
 | List projects (bounded)                            | `asana-cli projects list [--workspace=<gid>] [--max=<n>] [--all] --json`                                                                                                                                                                               |

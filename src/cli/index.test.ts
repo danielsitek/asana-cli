@@ -533,6 +533,9 @@ describe("execute", () => {
     expect(helpBefore.stdout).toContain("select explicit Asana fields");
     expect(helpBefore.stdout).toContain("show the authenticated Asana user");
     expect(helpBefore.stdout).toContain("generate shell completion script");
+    expect(helpBefore.stdout).toContain(
+      "describe the CLI contract for automation",
+    );
     expect(helpAfter.exitCode).toBe(0);
     expect(helpAfter.stderr).toBe("");
     expect(helpAfter.stdout).toContain("show the authenticated Asana user");
@@ -612,10 +615,236 @@ describe("execute", () => {
     expect(bash.stdout).toContain(
       "'whoami') candidates='-v --version --json -h --help'",
     );
+    expect(bash.stdout).toContain(
+      "'root') candidates='whoami config tasks projects workspaces completion capabilities",
+    );
     expect(zsh).toMatchObject({ exitCode: 0, stderr: "" });
     expect(zsh.stdout).toContain("#compdef asana-cli");
     expect(fish).toMatchObject({ exitCode: 0, stderr: "" });
     expect(fish.stdout).toContain("function __asana_cli_context_is");
+  });
+
+  test("describes capabilities without accessing operational dependencies", async () => {
+    const dependencies = new Proxy(
+      { version: "test-version" } as ExecuteDependencies,
+      {
+        get: (target, property, receiver) => {
+          if (property === "version")
+            return Reflect.get(target, property, receiver);
+          throw new Error(`dependency accessed: ${String(property)}`);
+        },
+      },
+    );
+
+    const result = await execute(["capabilities", "--json"], dependencies);
+
+    expect(result).toEqual({
+      stdout: expect.stringMatching(/^\{"data":.*,"meta":\{\}\}\n$/),
+      stderr: "",
+      exitCode: 0,
+    });
+    const envelope = JSON.parse(result.stdout) as {
+      data: {
+        schema_version: number;
+        cli_version: string;
+        commands: Array<{
+          path: string;
+          description: string;
+          arguments: Array<{
+            name: string;
+            description: string;
+            required: boolean;
+            repeatable: boolean;
+          }>;
+          options: {
+            local: Array<{
+              flags: string[];
+              description: string;
+              required: boolean;
+              repeatable: boolean;
+              value: string;
+            }>;
+            inherited: Array<{
+              flags: string[];
+              source_path: string;
+            }>;
+          };
+          operation: string;
+          requirements: {
+            authentication: string;
+            configuration: string;
+          };
+          exit_codes: number[];
+        }>;
+      };
+      meta: Record<string, never>;
+    };
+    expect(envelope.meta).toEqual({});
+    expect(envelope.data.schema_version).toBe(1);
+    expect(envelope.data.cli_version).toBe("test-version");
+
+    const paths = envelope.data.commands.map((command) => command.path);
+    expect(paths).toEqual([
+      "asana-cli capabilities",
+      "asana-cli completion",
+      "asana-cli config",
+      "asana-cli config get",
+      "asana-cli config init",
+      "asana-cli config resolve",
+      "asana-cli config resolve my-tasks",
+      "asana-cli config set",
+      "asana-cli config show",
+      "asana-cli projects",
+      "asana-cli projects custom-fields",
+      "asana-cli projects get",
+      "asana-cli projects list",
+      "asana-cli projects sections",
+      "asana-cli tasks",
+      "asana-cli tasks comment",
+      "asana-cli tasks comments",
+      "asana-cli tasks create",
+      "asana-cli tasks get",
+      "asana-cli tasks list",
+      "asana-cli tasks update",
+      "asana-cli whoami",
+      "asana-cli workspaces",
+      "asana-cli workspaces list",
+    ]);
+    expect(new Set(paths)).toHaveLength(paths.length);
+
+    for (const command of envelope.data.commands) {
+      expect(command.description).not.toBe("");
+      expect(command.operation).toMatch(/^(local|read|write|mixed)$/);
+      expect(command.requirements.authentication).toMatch(
+        /^(never|conditional|required)$/,
+      );
+      expect(command.requirements.configuration).toMatch(
+        /^(never|conditional|required)$/,
+      );
+      expect(command.exit_codes).toEqual(
+        [...command.exit_codes].sort((left, right) => left - right),
+      );
+      for (const options of [
+        command.options.local,
+        command.options.inherited,
+      ]) {
+        const keys = options.map((option) => option.flags.join("\u0000"));
+        expect(keys).toEqual([...keys].sort());
+        for (const option of options) {
+          expect(option.flags).toEqual([...option.flags].sort());
+        }
+      }
+      const optionFlags = [
+        ...command.options.local,
+        ...command.options.inherited,
+      ].flatMap((option) => option.flags);
+      expect(new Set(optionFlags)).toHaveLength(optionFlags.length);
+    }
+
+    const byPath = new Map(
+      envelope.data.commands.map((command) => [command.path, command]),
+    );
+    expect(byPath.get("asana-cli tasks get")?.options.inherited).toContainEqual(
+      expect.objectContaining({
+        flags: ["--fields"],
+        source_path: "asana-cli",
+      }),
+    );
+    for (const path of ["asana-cli capabilities", "asana-cli projects list"]) {
+      expect(
+        byPath
+          .get(path)
+          ?.options.inherited.some((option) =>
+            option.flags.includes("--fields"),
+          ),
+      ).toBe(false);
+    }
+    expect(byPath.get("asana-cli capabilities")).toMatchObject({
+      arguments: [],
+      options: {
+        local: expect.arrayContaining([
+          {
+            flags: ["--help", "-h"],
+            description: "display help for command",
+            required: false,
+            repeatable: false,
+            value: "none",
+          },
+        ]),
+        inherited: expect.arrayContaining([
+          {
+            flags: ["--json"],
+            description: "output JSON",
+            required: true,
+            repeatable: false,
+            value: "none",
+            source_path: "asana-cli",
+          },
+        ]),
+      },
+      operation: "local",
+      requirements: { authentication: "never", configuration: "never" },
+      exit_codes: [0, 2],
+    });
+    expect(byPath.get("asana-cli tasks get")).toMatchObject({
+      arguments: [
+        {
+          name: "id",
+          description: "",
+          required: true,
+          repeatable: false,
+        },
+      ],
+      operation: "read",
+      requirements: { authentication: "required", configuration: "never" },
+    });
+    expect(byPath.get("asana-cli config set")).toMatchObject({
+      operation: "write",
+      requirements: { authentication: "never", configuration: "required" },
+    });
+    expect(byPath.get("asana-cli config resolve my-tasks")).toMatchObject({
+      operation: "write",
+      requirements: {
+        authentication: "required",
+        configuration: "required",
+      },
+      exit_codes: [0, 1, 2, 3, 4, 5, 6],
+    });
+    expect(byPath.get("asana-cli tasks create")).toMatchObject({
+      operation: "write",
+      requirements: {
+        authentication: "required",
+        configuration: "conditional",
+      },
+    });
+    expect(byPath.get("asana-cli tasks update")).toMatchObject({
+      operation: "write",
+      requirements: {
+        authentication: "required",
+        configuration: "conditional",
+      },
+    });
+
+    for (const path of ["asana-cli tasks create", "asana-cli tasks update"]) {
+      expect(byPath.get(path)?.options.local).toContainEqual(
+        expect.objectContaining({
+          flags: ["--custom-field"],
+          repeatable: true,
+          value: "required",
+        }),
+      );
+    }
+  });
+
+  test("requires JSON when reporting capabilities", async () => {
+    await expect(
+      execute(["capabilities"], { environment: {}, identity }),
+    ).resolves.toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"invalid_usage","message":"capabilities requires --json"}}\n',
+      exitCode: 2,
+    });
   });
 
   test("rejects an unsupported completion shell", async () => {

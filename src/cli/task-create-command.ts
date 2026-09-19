@@ -18,6 +18,7 @@ import {
   type TaskMutationCliOptions,
 } from "./task-command-context.ts";
 import { withTaskMutationOptions } from "./task-mutation-options.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 
 const resolveCreationDefaults = async (context: TaskCommandContext) => {
   const configuration = context.dependencies.configuration;
@@ -121,6 +122,15 @@ export const registerTaskCreateCommand = (
         Readonly<{ parent?: string; project?: string }>,
     ) => context.complete(await runTaskCreate(context, options)),
   );
+  withCommandCapabilities(command, {
+    operation: "write",
+    requirements: {
+      authentication: "required",
+      configuration: "conditional",
+    },
+    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+    options: { customField: { repeatable: true } },
+  });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);
 };

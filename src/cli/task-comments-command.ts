@@ -9,6 +9,7 @@ import {
   renderJson,
 } from "../output/index.ts";
 import type { Execution } from "./contracts.ts";
+import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
   renderTaskReadFailure,
@@ -89,6 +90,11 @@ export const registerTaskCommentsCommand = (
     .action(async (idArg: string, options: TaskCommentsOptions) => {
       context.complete(await runTaskComments(context, idArg, options));
     });
+  withCommandCapabilities(command, {
+    operation: "read",
+    requirements: { authentication: "required", configuration: "never" },
+    exitCodes: [0, 2, 3, 4, 5, 6],
+  });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);
 };
