@@ -6,3 +6,6 @@ engines:
   metric:
     exclude_paths:
       - "**/*.test.ts"
+    config:
+      languages:
+        - "typescript"
