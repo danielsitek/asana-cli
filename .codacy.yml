@@ -3,3 +3,6 @@ engines:
   lizard:
     exclude_paths:
       - "**/*.test.ts"
+  metric:
+    exclude_paths:
+      - "**/*.test.ts"
