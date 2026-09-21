@@ -15,6 +15,16 @@ Fast, script-friendly CLI for working with Asana from a terminal or autonomous a
 brew install danielsitek/homebrew-tap/asana-cli
 ```
 
+### Install script (macOS, Linux, WSL2)
+
+```sh
+bash <(curl -Ls https://raw.githubusercontent.com/danielsitek/asana-cli/main/install.sh)
+```
+
+The script resolves the latest stable GitHub release, downloads the matching
+archive and pinned `SHA256SUMS`, and aborts if verification fails. It installs
+to `/usr/local/bin` when writable; otherwise it uses `$HOME/.local/bin`.
+
 ### Direct archive (macOS, Linux, WSL2)
 
 Download the archive for your platform from the release assets, verify its

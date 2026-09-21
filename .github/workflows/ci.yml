@@ -108,6 +108,26 @@ jobs:
           overwrite: true
           retention-days: 1
 
+  installer-smoke:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install latest release
+        shell: bash
+        env:
+          ASANA_CLI_INSTALL_DIR: ${{ runner.temp }}/asana-cli-bin
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bash install.sh
+          test -x "$ASANA_CLI_INSTALL_DIR/asana-cli"
+
   package:
     needs: native-build
     runs-on: ubuntu-24.04
