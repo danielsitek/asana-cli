@@ -4,6 +4,7 @@ set -euo pipefail
 
 readonly repository="danielsitek/asana-cli"
 readonly api_url="https://api.github.com/repos/${repository}/releases/latest"
+readonly -a curl_retry_options=(--retry 3 --retry-delay 1 --retry-all-errors)
 temporary_directory=""
 
 cleanup() {
@@ -42,7 +43,7 @@ resolve_latest_tag() {
     headers+=(--header "Authorization: Bearer ${GITHUB_TOKEN}")
   fi
 
-  response="$(curl -fsSL "${headers[@]}" "$api_url")"
+  response="$(curl -fsSL "${curl_retry_options[@]}" "${headers[@]}" "$api_url")"
   if [[ "$response" =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
     tag="${BASH_REMATCH[1]}"
   else
@@ -98,8 +99,10 @@ main() {
 
   archive_path="${temporary_directory}/${archive_name}"
   checksum_path="${temporary_directory}/SHA256SUMS"
-  curl -fsSL --output "$archive_path" "${download_url}/${archive_name}"
-  curl -fsSL --output "$checksum_path" "${download_url}/SHA256SUMS"
+  curl -fsSL "${curl_retry_options[@]}" --output "$archive_path" \
+    "${download_url}/${archive_name}"
+  curl -fsSL "${curl_retry_options[@]}" --output "$checksum_path" \
+    "${download_url}/SHA256SUMS"
   verify_checksum "$temporary_directory" "$archive_name" "$checksum_path"
 
   tar -xzf "$archive_path" -C "$temporary_directory" asana-cli

@@ -59,6 +59,7 @@ while (( $# > 0 )); do
   case "$1" in
     --output) output="$2"; shift 2 ;;
     --header) shift 2 ;;
+    --retry|--retry-delay) shift 2 ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
