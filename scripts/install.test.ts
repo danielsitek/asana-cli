@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,7 +42,7 @@ const runInstaller = async ({
   const binDirectory = join(directory, "bin");
   const installDirectory = join(directory, "installed");
   const curlLog = join(directory, "curl.log");
-  await Bun.$`mkdir -p ${binDirectory}`;
+  await mkdir(binDirectory);
 
   await createExecutable(
     join(binDirectory, "uname"),
@@ -115,7 +122,6 @@ chmod 0755 "$directory/asana-cli"
     stderr,
     installDirectory,
     curlLog,
-    archiveName,
   };
 };
 
