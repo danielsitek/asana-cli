@@ -1,5 +1,17 @@
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
+import {
+  assembleParsedTaskCreate,
+  finalizeExplicitTaskCreate,
+  prepareConfiguredTaskCreate,
+  validateTaskCreationTarget,
+  type ParsedTaskCreate,
+  type PreparedTaskMutation,
+  type TaskCreateConfigResolver,
+  type TaskCreatePreparationError,
+} from "./task-create-workflow.ts";
+
+export { executeTaskCreation, executeTaskUpdate } from "./mutation-workflow.ts";
 
 export type Task = Readonly<{
   gid?: string;
@@ -171,24 +183,6 @@ export type PreparedTaskUpdate = Readonly<{
 export type TaskCreateOptions = TaskUpdateOptions &
   Readonly<{ parent?: string; project?: string }>;
 
-type TaskCreateConfigError = Readonly<{
-  kind: "configuration";
-  message: string;
-}>;
-
-type TaskCreatePreparationError =
-  | Readonly<{ kind: "invalid_usage"; message: string }>
-  | TaskCreateConfigError;
-
-type TaskCreateConfig = Readonly<{
-  defaultAssignee?: string;
-  workspaceGid?: string;
-}>;
-
-type TaskCreateConfigResolver = () => Promise<
-  Result<TaskCreateConfig, TaskCreateConfigError>
->;
-
 export type PreparedTaskCreate = Readonly<{
   target: TaskCreationTarget;
   mutation: TaskMutation & Readonly<{ name: string }>;
@@ -198,14 +192,6 @@ export type PreparedTaskCreate = Readonly<{
   customFields: readonly PreparedCustomField[];
   fields?: readonly string[];
 }>;
-
-type ParsedTaskCreate = Omit<PreparedTaskCreate, "target"> &
-  Readonly<{ target?: TaskCreationTarget }>;
-
-const withCreationTarget = (
-  prepared: ParsedTaskCreate,
-  target: TaskCreationTarget,
-): PreparedTaskCreate => ({ ...prepared, target });
 
 export type TaskCreationStageName =
   | "create"
@@ -435,8 +421,6 @@ export const executeTaskParentUpdate = async (
     : updated;
 };
 
-type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;
-
 type TaskMutationPreparationError = Readonly<{
   kind: "invalid_usage";
   message: string;
@@ -639,6 +623,33 @@ const prepareTaskMutation = (
   );
 };
 
+const parseTaskCreationTarget = (
+  options: TaskCreateOptions,
+): Result<
+  TaskCreationTarget | undefined,
+  Readonly<{ kind: "invalid_usage"; message: string }>
+> => {
+  if (options.parent !== undefined) {
+    const parentId = parseTaskId(options.parent);
+    return parentId.ok
+      ? ok({ kind: "subtask", parentId: parentId.value })
+      : err({ kind: "invalid_usage", message: parentId.error });
+  }
+  if (options.project !== undefined) {
+    return /^\d+$/.test(options.project)
+      ? ok({ kind: "project", projectGid: options.project })
+      : err({
+          kind: "invalid_usage",
+          message: "--project must be a digit-only project GID",
+        });
+  }
+  return ok(
+    options.section === undefined
+      ? undefined
+      : { kind: "section", sectionGid: options.section },
+  );
+};
+
 const parseTaskCreateInput = (
   options: TaskCreateOptions,
   fieldsInput?: string,
@@ -651,121 +662,20 @@ const parseTaskCreateInput = (
   if (options.name === undefined) {
     return err({ kind: "invalid_usage", message: "--name is required" });
   }
-  if (options.parent !== undefined && options.project !== undefined) {
-    return err({
-      kind: "invalid_usage",
-      message: "--parent and --project are mutually exclusive",
-    });
-  }
-  if (options.project !== undefined && options.mySection !== undefined) {
-    return err({
-      kind: "invalid_usage",
-      message: "--project and --my-section are mutually exclusive",
-    });
-  }
-  if (
-    options.section !== undefined &&
-    (options.parent !== undefined ||
-      options.project !== undefined ||
-      options.mySection !== undefined)
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "--section cannot be combined with --parent, --project, or --my-section",
-    });
-  }
-  if (
-    options.parent === undefined &&
-    options.project === undefined &&
-    options.mySection === undefined &&
-    options.section === undefined
-  ) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "One of --parent, --my-section, --section, or --project is required",
-    });
-  }
-
+  const validTarget = validateTaskCreationTarget(options);
+  if (!validTarget.ok) return validTarget;
   const prepared = prepareTaskMutation(options);
   if (!prepared.ok) return prepared;
-
-  let target: TaskCreationTarget | undefined;
-  if (options.parent !== undefined) {
-    const parentId = parseTaskId(options.parent);
-    if (!parentId.ok) {
-      return err({ kind: "invalid_usage", message: parentId.error });
-    }
-    target = { kind: "subtask", parentId: parentId.value };
-  } else if (options.project !== undefined) {
-    if (!/^\d+$/.test(options.project)) {
-      return err({
-        kind: "invalid_usage",
-        message: "--project must be a digit-only project GID",
-      });
-    }
-    target = { kind: "project", projectGid: options.project };
-  } else if (options.section !== undefined) {
-    target = { kind: "section", sectionGid: options.section };
-  }
-
-  return ok({
-    ...(target === undefined ? {} : { target }),
-    mutation: {
-      ...prepared.value.mutation,
-      name: options.name,
-    },
-    ...(prepared.value.notesFile === undefined
-      ? {}
-      : { notesFile: prepared.value.notesFile }),
-    resolveAssigneeMe: prepared.value.resolveAssigneeMe,
-    ...(prepared.value.mySection === undefined
-      ? {}
-      : { mySection: prepared.value.mySection }),
-    customFields: prepared.value.customFields,
-    ...(fields.value === undefined ? {} : { fields: fields.value }),
-  });
-};
-
-const applyDefaultAssignee = (
-  prepared: PreparedTaskCreate,
-  defaultAssignee: string | undefined,
-): PreparedTaskCreate => {
-  if (prepared.resolveAssigneeMe || prepared.mutation.assignee !== undefined) {
-    return prepared;
-  }
-  if (defaultAssignee === undefined) return prepared;
-  return defaultAssignee === "me"
-    ? { ...prepared, resolveAssigneeMe: true }
-    : {
-        ...prepared,
-        mutation: { ...prepared.mutation, assignee: defaultAssignee },
-      };
-};
-
-const finalizeTaskCreate = (
-  prepared: PreparedTaskCreate,
-  defaultAssignee?: string,
-): Result<
-  PreparedTaskCreate,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  const effective = applyDefaultAssignee(prepared, defaultAssignee);
-  const hasMyTasksMutation =
-    effective.mySection !== undefined || effective.customFields.length > 0;
-  const hasAssignableUser =
-    effective.resolveAssigneeMe ||
-    (effective.mutation.assignee !== undefined &&
-      effective.mutation.assignee !== null);
-  if (hasMyTasksMutation && !hasAssignableUser) {
-    return err({
-      kind: "invalid_usage",
-      message:
-        "My Tasks values on a new task require --assignee=me or a user GID",
-    });
-  }
-  return ok(effective);
+  const target = parseTaskCreationTarget(options);
+  if (!target.ok) return target;
+  return ok(
+    assembleParsedTaskCreate(
+      options.name,
+      prepared.value,
+      target.value,
+      fields.value,
+    ),
+  );
 };
 
 export const prepareTaskCreate = (
@@ -774,15 +684,7 @@ export const prepareTaskCreate = (
 ): Result<PreparedTaskCreate, TaskCreatePreparationError> => {
   const prepared = parseTaskCreateInput(options, fieldsInput);
   if (!prepared.ok) return prepared;
-  if (prepared.value.target === undefined) {
-    return err({
-      kind: "configuration",
-      message: "workspace.gid is required to create a task in My Tasks",
-    });
-  }
-  return finalizeTaskCreate(
-    withCreationTarget(prepared.value, prepared.value.target),
-  );
+  return finalizeExplicitTaskCreate(prepared.value);
 };
 
 export const prepareTaskCreateWithConfig = async (
@@ -792,327 +694,8 @@ export const prepareTaskCreateWithConfig = async (
 ): Promise<Result<PreparedTaskCreate, TaskCreatePreparationError>> => {
   const prepared = parseTaskCreateInput(options, fieldsInput);
   if (!prepared.ok) return prepared;
-  const needsDefaultAssignee = options.assignee === undefined;
-  if (
-    prepared.value.target !== undefined &&
-    (!needsDefaultAssignee || !resolveConfig)
-  ) {
-    return finalizeTaskCreate(
-      withCreationTarget(prepared.value, prepared.value.target),
-    );
-  }
-
-  const resolved = resolveConfig
-    ? await resolveConfig()
-    : ok<TaskCreateConfig>({});
-  if (!resolved.ok) return resolved;
-  const { defaultAssignee, workspaceGid } = resolved.value;
-  if (
-    defaultAssignee !== undefined &&
-    defaultAssignee !== "me" &&
-    !/^\d+$/.test(defaultAssignee)
-  ) {
-    return err({
-      kind: "configuration",
-      message: "defaultAssignee must be me or a digit-only user GID",
-    });
-  }
-  let target = prepared.value.target;
-  if (target === undefined) {
-    if (workspaceGid === undefined || !/^\d+$/.test(workspaceGid)) {
-      return err({
-        kind: "configuration",
-        message: "workspace.gid is required to create a task in My Tasks",
-      });
-    }
-    target = { kind: "workspace", workspaceGid };
-  }
-  const withTarget = withCreationTarget(prepared.value, target);
-  return finalizeTaskCreate(withTarget, defaultAssignee);
+  return prepareConfiguredTaskCreate(options, prepared.value, resolveConfig);
 };
-
-const publicTaskError = (
-  error: TaskReadError,
-): NonNullable<TaskCreationStage["error"]> => {
-  const messages: Readonly<Record<TaskReadError["kind"], string>> = {
-    authentication: "Asana authentication failed",
-    api: "Asana API request failed",
-    not_found: "Task not found",
-    rate_limit: "Asana request retries exhausted",
-    network: "Unable to reach Asana",
-    invalid_response: "Asana returned an invalid response",
-  };
-  return { kind: error.kind, message: messages[error.kind] };
-};
-
-type PreparedTaskMaterialization = Readonly<{
-  taskId?: string;
-  mutation: TaskMutation;
-  notesFile?: string;
-  resolveAssigneeMe: boolean;
-  mySection?: ResourceSelector;
-  customFields: readonly PreparedCustomField[];
-  workflow: "update" | "creation";
-}>;
-
-const materializeTaskMutation = async (
-  token: string,
-  prepared: PreparedTaskMaterialization,
-  dependencies: TaskMaterializationDependencies,
-): Promise<Result<TaskMutation, TaskUpdateError>> => {
-  const mutation = { ...prepared.mutation };
-  if (prepared.notesFile !== undefined) {
-    try {
-      mutation.notes =
-        prepared.notesFile === "-"
-          ? await dependencies.readStdin()
-          : await dependencies.readFile(prepared.notesFile);
-    } catch {
-      return err({
-        kind: "invalid_usage",
-        message:
-          prepared.notesFile === "-"
-            ? "Unable to read notes from stdin"
-            : "Unable to read notes file",
-      });
-    }
-  }
-
-  let authenticatedUserGid: string | undefined;
-  if (prepared.resolveAssigneeMe) {
-    const identity = await dependencies.resolveAuthenticatedUserGid(token);
-    if (!identity.ok) return identity;
-    mutation.assignee = identity.value;
-    authenticatedUserGid = identity.value;
-  }
-
-  const hasMyTasksMutation =
-    prepared.mySection !== undefined || prepared.customFields.length > 0;
-  if (!hasMyTasksMutation) return ok(mutation);
-  if (!dependencies.myTasksMutationResolver) {
-    return err({
-      kind: "internal_error",
-      message: `My Tasks ${prepared.workflow} dependencies are unavailable`,
-    });
-  }
-
-  const resolved = await dependencies.myTasksMutationResolver.resolve({
-    token,
-    ...(prepared.taskId === undefined ? {} : { taskId: prepared.taskId }),
-    ...(mutation.assignee === undefined
-      ? {}
-      : { finalAssignee: mutation.assignee }),
-    ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
-    ...(prepared.mySection === undefined
-      ? {}
-      : { mySection: prepared.mySection }),
-    customFields: prepared.customFields,
-  });
-  if (!resolved.ok) return resolved;
-  Object.assign(mutation, resolved.value);
-  return ok(mutation);
-};
-
-export const executeTaskCreation = async (
-  token: string,
-  prepared: PreparedTaskCreate,
-  dependencies: TaskCreationDependencies,
-): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
-  const materialized = await materializeTaskMutation(
-    token,
-    { ...prepared, workflow: "creation" },
-    dependencies,
-  );
-  if (!materialized.ok) return materialized;
-  const mutation = materialized.value;
-
-  const assignee = mutation.assignee;
-  const createMutation = orderMutation({
-    name: prepared.mutation.name,
-    ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
-    ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
-    ...(mutation.completed === undefined
-      ? {}
-      : { completed: mutation.completed }),
-  });
-  const requestedStages: ReadonlyArray<
-    readonly [TaskCreationStageName, TaskMutation | undefined]
-  > = [
-    ["assignee", assignee === undefined ? undefined : { assignee }],
-    [
-      "my_section",
-      mutation.assignee_section === undefined
-        ? undefined
-        : { assignee_section: mutation.assignee_section },
-    ],
-    [
-      "custom_fields",
-      mutation.custom_fields === undefined
-        ? undefined
-        : { custom_fields: mutation.custom_fields },
-    ],
-  ];
-  const hasStagedWrites = requestedStages.some(
-    ([, applied]) => applied !== undefined,
-  );
-  if (hasStagedWrites && dependencies.writer === undefined) {
-    return err({
-      kind: "internal_error",
-      message: "Task writer is required for staged task mutations",
-    });
-  }
-
-  const created = await dependencies.creator.createTask(
-    token,
-    prepared.target,
-    createMutation,
-    prepared.fields,
-  );
-  if (!created.ok) return created;
-
-  let task: Task = created.value;
-  const taskId = created.value.gid;
-  const stages: TaskCreationStage[] = [
-    { stage: "create", status: "completed", applied: createMutation },
-  ];
-  const writer = dependencies.writer;
-  if (writer === undefined) {
-    for (const [stage] of requestedStages) {
-      stages.push({ stage, status: "not_run", reason: "not_requested" });
-    }
-    return ok({ task, stages, complete: true });
-  }
-  let stopped = false;
-  for (const [stage, applied] of requestedStages) {
-    if (applied === undefined) {
-      stages.push({ stage, status: "not_run", reason: "not_requested" });
-      continue;
-    }
-    if (stopped) {
-      stages.push({
-        stage,
-        status: "not_run",
-        reason: "stopped_after_failure",
-      });
-      continue;
-    }
-    const updated = await writer.updateTask(
-      token,
-      taskId,
-      applied,
-      prepared.fields,
-    );
-    if (!updated.ok) {
-      stages.push({
-        stage,
-        status: "failed",
-        applied,
-        error: publicTaskError(updated.error),
-      });
-      stopped = true;
-      continue;
-    }
-    task = updated.value;
-    stages.push({ stage, status: "completed", applied });
-  }
-  return ok({ task, stages, complete: !stopped });
-};
-
-export const executeTaskUpdate = async (
-  token: string,
-  prepared: PreparedTaskUpdate,
-  dependencies: TaskUpdateDependencies,
-): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
-  const sectionWriter = dependencies.sectionWriter;
-  const projectWriter = dependencies.projectWriter;
-  if (prepared.sectionGid !== undefined && !sectionWriter) {
-    return err({
-      kind: "internal_error",
-      message: "Task section writer is required",
-    });
-  }
-  if (prepared.projectGid !== undefined && !projectWriter) {
-    return err({
-      kind: "internal_error",
-      message: "Task project writer is required",
-    });
-  }
-  const materialized = await materializeTaskMutation(
-    token,
-    { ...prepared, workflow: "update" },
-    dependencies,
-  );
-  if (!materialized.ok) return materialized;
-  const applied = orderMutation(materialized.value);
-  if (prepared.sectionGid !== undefined) {
-    if (!sectionWriter) {
-      return err({
-        kind: "internal_error",
-        message: "Task section writer is required",
-      });
-    }
-    const moved = await sectionWriter.moveTaskToSection(
-      token,
-      prepared.taskId,
-      prepared.sectionGid,
-      prepared.fields,
-    );
-    return moved.ok
-      ? ok({
-          task: moved.value,
-          applied: { section: prepared.sectionGid },
-        })
-      : moved;
-  }
-  if (prepared.projectGid !== undefined) {
-    if (!projectWriter) {
-      return err({
-        kind: "internal_error",
-        message: "Task project writer is required",
-      });
-    }
-    const added = await projectWriter.addTaskToProject(
-      token,
-      prepared.taskId,
-      prepared.projectGid,
-      prepared.fields,
-    );
-    return added.ok
-      ? ok({
-          task: added.value,
-          applied: { project: prepared.projectGid },
-        })
-      : added;
-  }
-  const updated = await dependencies.writer.updateTask(
-    token,
-    prepared.taskId,
-    applied,
-    prepared.fields,
-  );
-  return updated.ok
-    ? ok({
-        task: updated.value,
-        applied,
-      })
-    : updated;
-};
-
-const orderMutation = (mutation: TaskMutation): TaskMutation => ({
-  ...(mutation.name === undefined ? {} : { name: mutation.name }),
-  ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
-  ...(mutation.assignee === undefined ? {} : { assignee: mutation.assignee }),
-  ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
-  ...(mutation.completed === undefined
-    ? {}
-    : { completed: mutation.completed }),
-  ...(mutation.assignee_section === undefined
-    ? {}
-    : { assignee_section: mutation.assignee_section }),
-  ...(mutation.custom_fields === undefined
-    ? {}
-    : { custom_fields: mutation.custom_fields }),
-});
 
 export const DEFAULT_FIELDS = [
   "gid",
