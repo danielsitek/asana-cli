@@ -1660,6 +1660,46 @@ describe("prepareTaskListRead", () => {
     if (!result.ok) expect(result.error.kind).toBe("invalid_usage");
   });
 
+  test.each([
+    [
+      "source before assignee",
+      { section: "invalid", assignee: "invalid" },
+      undefined,
+      "--section must be a digit-only GID",
+    ],
+    [
+      "assignee before completed",
+      { section: "1", assignee: "invalid", completed: "invalid" },
+      undefined,
+      "--assignee must be me or a digit-only user GID",
+    ],
+    [
+      "completed before bounds",
+      { section: "1", completed: "invalid", all: true },
+      undefined,
+      "--completed must be true or false",
+    ],
+    [
+      "required max before fields",
+      { section: "1", all: true },
+      ",",
+      "--all requires --max",
+    ],
+    [
+      "invalid max before fields",
+      { section: "1", max: "invalid" },
+      ",",
+      "--max must be a positive safe integer",
+    ],
+  ] as const)(
+    "preserves validation order for %s",
+    (_, options, fieldsInput, message) => {
+      expect(prepareTaskListRead(options, fieldsInput)).toEqual(
+        err({ kind: "invalid_usage", message }),
+      );
+    },
+  );
+
   test("defaults completed false, default fields, and default caps", () => {
     expect(prepareTaskListRead({ section: "123" })).toEqual({
       ok: true,
