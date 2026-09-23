@@ -7,6 +7,7 @@ import {
 } from "../tasks/index.ts";
 import { renderJson, renderTaskUpdate } from "../output/index.ts";
 import type { Execution } from "./contracts.ts";
+import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
   internalError,
   myTasksMutationResolverFor,
@@ -153,6 +154,7 @@ export const registerTaskUpdateCommand = (
       "--parent <id>",
       "reparent to a task GID or URL, or null to promote; exclusive with other flags",
     )
+    .addHelpText("after", shellTextSafetyHelp("--notes-file <path>"))
     .action(
       async (
         idArg: string,
