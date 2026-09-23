@@ -541,6 +541,26 @@ describe("execute", () => {
     expect(helpAfter.stdout).toContain("show the authenticated Asana user");
   });
 
+  test("documents shell-safe comment and notes input", async () => {
+    const commentHelp = await execute(["tasks", "comment", "--help"], {
+      environment: {},
+      identity,
+    });
+    const updateHelp = await execute(["tasks", "update", "--help"], {
+      environment: {},
+      identity,
+    });
+
+    for (const help of [commentHelp, updateHelp]) {
+      expect(help.exitCode).toBe(0);
+      expect(help.stderr).toBe("");
+      expect(help.stdout).toContain("$<digit> sequence in double-quoted text");
+      expect(help.stdout).toContain("before asana-cli receives it");
+    }
+    expect(commentHelp.stdout).toContain("Use --file <path>");
+    expect(updateHelp.stdout).toContain("Use --notes-file <path>");
+  });
+
   test("empty invocation returns top-level help without dependencies", async () => {
     const environment = new Proxy<Record<string, string | undefined>>(
       {},

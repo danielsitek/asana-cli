@@ -5,6 +5,7 @@ import {
 import { renderCommentDetail, renderJson } from "../output/index.ts";
 import type { Execution } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
+import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
   internalError,
   renderTaskReadFailure,
@@ -67,6 +68,7 @@ export const registerTaskCommentCommand = (
     .command("comment <id> [text]")
     .description("create a task comment")
     .option("--file <path>", "read comment text from a file or stdin with -")
+    .addHelpText("after", shellTextSafetyHelp("--file <path>"))
     .action(
       async (
         idArg: string,
