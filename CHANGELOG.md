@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.7.0
+
+- Add `capabilities --json` for versioned, machine-readable command and option
+  discovery by autonomous agents and integrations.
+- Add a verified one-line installer for macOS, Linux, and WSL2, including
+  retries for transient download failures.
+- Document shell-safe comment and notes input for text containing `$<digit>`.
+- Improve internal task-list and task-mutation workflow maintainability.
+
 ## 0.6.1
 
 - Automate Homebrew tap updates after stable releases. Formula generation and

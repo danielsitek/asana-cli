@@ -513,7 +513,7 @@ describe("execute", () => {
       ["whoami", "--version"],
     ]) {
       expect(await execute(argv, { environment: {}, identity })).toEqual({
-        stdout: "0.6.1\n",
+        stdout: "0.7.0\n",
         stderr: "",
         exitCode: 0,
       });
