@@ -22,6 +22,10 @@ Treat initialization as incomplete if `defaultAssignee` was not set and verified
 
 Before `tasks update` or `tasks comment`, read the target first with `asana-cli tasks get <id> --json`. Before creating a subtask, read its `--parent` the same way. Before creating a task in a project, read the destination with `asana-cli projects get <gid> --json` and confirm its `gid`, `name`, and `archived` state. A standalone My Tasks or section create has no task to pre-read; confirm its explicit `--my-section` or `--section` destination instead. Decide the exact fields before issuing one write — don't narrow the change mid-write.
 
+## Preserve literal dollar amounts
+
+For comment or update-notes text containing `$` followed by digits, write the exact text to a file and use `--file=<path>` or `--notes-file=<path>`. A double-quoted shell argument expands forms such as `$2` before `asana-cli` receives it; file input preserves the intended bytes.
+
 ## Config aliases can write as a side effect
 
 `--my-section=@alias` and `--custom-field=@alias:value` resolve through the gitignored, per-user `.asana-cli.local.json`. On a machine without it, aliases fail. Both `config init --local --write-gitignore` and `config resolve my-tasks` re-discover and overwrite that file's `myTasks` block — neither is read-only; run one before relying on an alias. To inspect aliases already on disk without touching them, read the file directly or use `config get myTasks.<key> --source` / `config show --sources`.

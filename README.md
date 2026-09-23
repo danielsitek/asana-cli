@@ -230,6 +230,19 @@ and `tasks update`; on `tasks list` it accepts only `@<alias>`.
 See [Safety and mutation contract](#safety-and-mutation-contract) below for
 bounded-read caps, write-retry behavior, and partial-write reporting.
 
+### Shell-safe text input
+
+Shells expand `$<digit>` sequences inside double-quoted arguments before
+`asana-cli` receives them, which can silently change literal dollar amounts.
+Write the exact text to a file and use `tasks comment --file=<path>` or
+`tasks update --notes-file=<path>`:
+
+```sh
+printf '%s\n' 'Standard rate is $2.00/$10.00 per Mtok.' > message.txt
+asana-cli tasks comment 1215978111726134 --file=message.txt
+asana-cli tasks update 1215978111726134 --notes-file=message.txt
+```
+
 ### Mutation options (`tasks create` / `tasks update`)
 
 Both commands accept the same mutation flags:
