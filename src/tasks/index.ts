@@ -1,6 +1,11 @@
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
 import {
+  assemblePreparedTaskListRead,
+  prepareTaskListBounds,
+  type TaskListPreparationError,
+} from "./task-list-preparation.ts";
+import {
   assembleParsedTaskCreate,
   finalizeExplicitTaskCreate,
   prepareConfiguredTaskCreate,
@@ -843,46 +848,7 @@ export const DEFAULT_TASK_LIST_FIELDS = [
   "assignee.name",
 ] as const;
 
-const TASK_LIST_SCAN_CAP_DEFAULT = 100;
-const TASK_LIST_RESULT_CAP_DEFAULT = 20;
 const EPOCH_COMPLETED_SINCE = "1970-01-01T00:00:00.000Z";
-
-const parseTaskListMax = (
-  input: string,
-): Result<number, Readonly<{ kind: "invalid_usage"; message: string }>> => {
-  if (!/^\d+$/.test(input)) {
-    return err({
-      kind: "invalid_usage",
-      message: "--max must be a positive safe integer",
-    });
-  }
-  const value = Number(input);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    return err({
-      kind: "invalid_usage",
-      message: "--max must be a positive safe integer",
-    });
-  }
-  return ok(value);
-};
-
-const withTaskListInternalFields = (
-  fields: readonly string[],
-  needsAssignee: boolean,
-): readonly string[] => {
-  const withCompleted = fields.includes("completed")
-    ? fields
-    : [...fields, "completed"];
-  if (!needsAssignee || withCompleted.includes("assignee.gid")) {
-    return withCompleted;
-  }
-  return [...withCompleted, "assignee.gid"];
-};
-
-type TaskListPreparationError = Readonly<{
-  kind: "invalid_usage";
-  message: string;
-}>;
 
 const prepareMySectionTaskListSource = (
   input: string,
@@ -985,36 +951,20 @@ export const prepareTaskListRead = (
   if (!assigneeFilter.ok) return assigneeFilter;
   const completed = prepareTaskListCompleted(options.completed);
   if (!completed.ok) return completed;
-
-  if (options.all && options.max === undefined) {
-    return err({ kind: "invalid_usage", message: "--all requires --max" });
-  }
-
-  const scanCap =
-    options.max === undefined
-      ? ok(TASK_LIST_SCAN_CAP_DEFAULT)
-      : parseTaskListMax(options.max);
-  if (!scanCap.ok) return scanCap;
-
+  const bounds = prepareTaskListBounds(options);
+  if (!bounds.ok) return bounds;
   const selectedFields = prepareSelectedFields(fieldsInput);
   if (!selectedFields.ok) return selectedFields;
   const outputFields = selectedFields.value ?? DEFAULT_TASK_LIST_FIELDS;
-  const requestFields = withTaskListInternalFields(
-    outputFields,
-    assigneeFilter.value !== undefined,
+  return ok(
+    assemblePreparedTaskListRead(
+      source.value,
+      assigneeFilter.value,
+      completed.value,
+      outputFields,
+      bounds.value,
+    ),
   );
-
-  return ok({
-    source: source.value,
-    ...(assigneeFilter.value === undefined
-      ? {}
-      : { assigneeFilter: assigneeFilter.value }),
-    completed: completed.value,
-    outputFields,
-    requestFields,
-    scanCap: scanCap.value,
-    ...(options.all ? {} : { resultCap: TASK_LIST_RESULT_CAP_DEFAULT }),
-  });
 };
 
 const projectTaskListFields = (task: Task, fields: readonly string[]): Task => {
