@@ -69,9 +69,7 @@ const renderUpdateAll = (
   return { stdout: `${lines.join("\n")}\n`, stderr: "", exitCode: 0 };
 };
 
-const runList = async (
-  registration: SkillCommandRegistration,
-): Promise<void> => {
+async function runList(registration: SkillCommandRegistration): Promise<void> {
   const invocation = registration.beginCommand();
   if (!invocation) return;
   const listed = await listSkillInstallations(invocation.context);
@@ -91,13 +89,13 @@ const runList = async (
     stderr: "",
     exitCode: 0,
   });
-};
+}
 
-const runInstall = async (
+async function runInstall(
   agent: string,
   options: Readonly<{ local?: boolean; force?: boolean }>,
   registration: SkillCommandRegistration,
-): Promise<void> => {
+): Promise<void> {
   const invocation = registration.beginCommand();
   if (!invocation) return;
   const installed = await installSkill(
@@ -111,13 +109,13 @@ const runInstall = async (
       ? renderMutation(installed.value, invocation.json)
       : renderSkillError(installed.error),
   );
-};
+}
 
-const runUpdate = async (
+async function runUpdate(
   agent: string,
   options: Readonly<{ local?: boolean }>,
   registration: SkillCommandRegistration,
-): Promise<void> => {
+): Promise<void> {
   const invocation = registration.beginCommand();
   if (!invocation) return;
   const scope = scopeFrom(options);
@@ -136,13 +134,13 @@ const runUpdate = async (
       ? renderMutation(updated.value, invocation.json)
       : renderSkillError(updated.error),
   );
-};
+}
 
-const runUninstall = async (
+async function runUninstall(
   agent: string,
   options: Readonly<{ local?: boolean }>,
   registration: SkillCommandRegistration,
-): Promise<void> => {
+): Promise<void> {
   const invocation = registration.beginCommand();
   if (!invocation) return;
   const removed = await uninstallSkill(
@@ -155,7 +153,7 @@ const runUninstall = async (
       ? renderMutation(removed.value, invocation.json)
       : renderSkillError(removed.error),
   );
-};
+}
 
 export const registerSkillCommands = (
   registration: SkillCommandRegistration,
