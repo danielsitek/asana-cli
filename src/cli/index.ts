@@ -45,6 +45,7 @@ import {
 import { registerConfigCommands } from "./config-commands.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import { registerSkillCommands } from "./skill-commands.ts";
 import { registerTaskCommands } from "./task-commands.ts";
 import { executeWorkspacesList } from "../workspaces/index.ts";
 
@@ -220,6 +221,28 @@ export const execute = async (
     requireToken: () => requireToken(dependencies),
     renderIdentityFailure,
     usageError,
+  });
+
+  registerSkillCommands({
+    program,
+    beginCommand: () => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+      const context = dependencies.configuration;
+      if (!context) {
+        result = {
+          stdout: "",
+          stderr: renderError({
+            code: "internal_error",
+            message: "Skill context is unavailable",
+          }),
+          exitCode: 6,
+        };
+        return undefined;
+      }
+      return { context, json };
+    },
+    complete: stopWith,
   });
 
   registerTaskCommands({

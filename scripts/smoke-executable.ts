@@ -1,6 +1,6 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -125,6 +125,31 @@ const checkConfigurationIsolation = async (binary: string): Promise<void> => {
   }
 };
 
+const checkBundledSkill = async (binary: string): Promise<void> => {
+  const project = await mkdtemp(`${tmpdir()}/asana-cli-skill-smoke-`);
+  try {
+    requireResult(
+      await runCommand(binary, ["skill", "install", "universal", "--local"], {
+        cwd: project,
+      }),
+      { exitCode: 0, stderr: "" },
+      "bundled skill",
+    );
+    const installed = await readFile(
+      join(project, ".agents", "skills", "asana-cli", "SKILL.md"),
+      "utf8",
+    );
+    const canonical = await Bun.file(
+      new URL("../skills/asana-cli/SKILL.md", import.meta.url),
+    ).text();
+    if (installed !== canonical) {
+      throw new Error("bundled skill smoke check failed");
+    }
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+};
+
 export const runExecutableSmoke = async (
   binaryInput: string,
 ): Promise<void> => {
@@ -135,6 +160,7 @@ export const runExecutableSmoke = async (
   }
 
   await checkCoreCommands(binary);
+  await checkBundledSkill(binary);
   await checkConfigurationIsolation(binary);
 };
 

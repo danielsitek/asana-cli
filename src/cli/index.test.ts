@@ -47,6 +47,7 @@ import {
   type TaskSectionMutationGateway,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { bundledSkillContents } from "../skill/index.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
 
 const taskReadErrorCases = <
@@ -636,7 +637,7 @@ describe("execute", () => {
       "'whoami') candidates='-v --version --json -h --help'",
     );
     expect(bash.stdout).toContain(
-      "'root') candidates='whoami config tasks projects workspaces completion capabilities",
+      "'root') candidates='whoami config skill tasks projects workspaces completion capabilities",
     );
     expect(zsh).toMatchObject({ exitCode: 0, stderr: "" });
     expect(zsh.stdout).toContain("#compdef asana-cli");
@@ -719,6 +720,11 @@ describe("execute", () => {
       "asana-cli projects get",
       "asana-cli projects list",
       "asana-cli projects sections",
+      "asana-cli skill",
+      "asana-cli skill install",
+      "asana-cli skill list",
+      "asana-cli skill uninstall",
+      "asana-cli skill update",
       "asana-cli tasks",
       "asana-cli tasks comment",
       "asana-cli tasks comments",
@@ -5172,5 +5178,119 @@ describe("tasks create --fields", () => {
 
     expect(result.exitCode).toBe(2);
     expect(creator.calls).toHaveLength(0);
+  });
+});
+
+describe("skill commands", () => {
+  const temporaryDirectories: string[] = [];
+  const identity = new InMemoryIdentity(ok({ gid: "123", name: "Ada" }));
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
+    );
+  });
+
+  const dependencies = async (): Promise<ExecuteDependencies> => {
+    const root = await mkdtemp(join(tmpdir(), "asana-cli-skill-command-"));
+    temporaryDirectories.push(root);
+    return {
+      environment: {},
+      identity,
+      configuration: {
+        cwd: join(root, "project"),
+        home: join(root, "home"),
+        environment: {},
+      },
+    };
+  };
+
+  test("lists every agent in the success envelope without authentication", async () => {
+    const result = await execute(
+      ["--json", "skill", "list"],
+      await dependencies(),
+    );
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    const envelope = JSON.parse(result.stdout) as {
+      data: Array<{
+        agent: string;
+        global: { status: string };
+        local: { status: string };
+      }>;
+      meta: Record<string, never>;
+    };
+    expect(envelope.meta).toEqual({});
+    expect(envelope.data.map(({ agent }) => agent)).toEqual([
+      "claude-code",
+      "codex",
+      "copilot",
+      "cursor",
+      "gemini",
+      "pi",
+      "universal",
+    ]);
+    expect(
+      envelope.data.every(
+        ({ global, local }) =>
+          global.status === "absent" && local.status === "absent",
+      ),
+    ).toBe(true);
+  });
+
+  test("installs the bundled bytes into the local project", async () => {
+    const commandDependencies = await dependencies();
+    const result = await execute(
+      ["skill", "install", "universal", "--local", "--json"],
+      commandDependencies,
+    );
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    const path = join(
+      commandDependencies.configuration?.cwd ?? "",
+      ".agents",
+      "skills",
+      "asana-cli",
+      "SKILL.md",
+    );
+    expect(await readFile(path, "utf8")).toBe(bundledSkillContents());
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      data: {
+        agent: "universal",
+        scope: "local",
+        path,
+        action: "installed",
+      },
+      meta: {},
+    });
+  });
+
+  test("reports state and agent errors as JSON on stderr", async () => {
+    const commandDependencies = await dependencies();
+    const installed = await execute(
+      ["skill", "install", "claude-code", "--local"],
+      commandDependencies,
+    );
+    expect(installed.exitCode).toBe(0);
+
+    const duplicate = await execute(
+      ["skill", "install", "claude-code", "--local"],
+      commandDependencies,
+    );
+    expect(duplicate).toMatchObject({ stdout: "", exitCode: 2 });
+    expect(JSON.parse(duplicate.stderr)).toMatchObject({
+      error: { code: "invalid_state" },
+    });
+
+    const unknown = await execute(
+      ["skill", "install", "other", "--local"],
+      commandDependencies,
+    );
+    expect(unknown).toMatchObject({ stdout: "", exitCode: 2 });
+    expect(JSON.parse(unknown.stderr)).toMatchObject({
+      error: { code: "invalid_usage" },
+    });
   });
 });
