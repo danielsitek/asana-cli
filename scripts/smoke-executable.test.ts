@@ -26,6 +26,7 @@ const createExecutable = async (failedCommand = "") => {
   directories.push(directory);
   const binary = join(directory, "cli");
   const log = join(directory, "commands");
+  const canonicalSkill = join(process.cwd(), "skills", "asana-cli", "SKILL.md");
   await writeFile(
     binary,
     `#!/bin/sh
@@ -45,6 +46,11 @@ case "$*" in
   'tasks get invalid') printf '{"message":"Invalid task identifier"}\\n' >&2; exit 2 ;;
   'completion zsh') printf '#compdef asana-cli\\n' ;;
   whoami) printf '{"message":"ASANA_CLI_TOKEN is required"}\\n' >&2; exit 3 ;;
+  'skill install universal --local')
+    mkdir -p .agents/skills/asana-cli
+    cp '${canonicalSkill}' .agents/skills/asana-cli/SKILL.md
+    printf 'installed universal skill\n'
+    ;;
   *) exit 98 ;;
 esac
 `,
@@ -67,6 +73,7 @@ test.each([
   ["--version", "version"],
   ["tasks get invalid", "invalid usage"],
   ["completion zsh", "shell completion"],
+  ["skill install universal --local", "bundled skill"],
 ])("rejects a failing core command: %s", async (command, label) => {
   const { binary, directory } = await createExecutable(command);
   await expect(runExecutableSmoke(binary)).rejects.toThrow(
@@ -101,7 +108,7 @@ test.each([false, true])(
         await result;
       }
       expect(await readFile(log, "utf8")).toBe(
-        "\n--version\ntasks get invalid\ncompletion zsh\nwhoami\n",
+        "\n--version\ntasks get invalid\ncompletion zsh\nskill install universal --local\nwhoami\n",
       );
       const isolation = await readFile(join(directory, "isolation"), "utf8");
       await expect(stat(isolation.trim())).rejects.toMatchObject({
