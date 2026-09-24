@@ -73,7 +73,35 @@ sudo rm /usr/local/bin/asana-cli                 # direct archive install
 ## AI agent skill
 
 This repository includes a ready-to-use skill that teaches AI agents how to
-configure and operate `asana-cli` safely. Install it with skills.sh:
+configure and operate `asana-cli` safely. The CLI bundles the matching version
+and can manage it without authentication or network access:
+
+```sh
+asana-cli skill list
+asana-cli skill install universal
+asana-cli skill install claude-code --local
+asana-cli skill update all
+asana-cli skill uninstall universal
+```
+
+Installation is global by default; `--local` targets the current project.
+`install` protects an existing file unless `--force` is supplied. `update all`
+updates installed targets and skips absent ones. CLI upgrades never modify
+agent directories automatically.
+
+Supported targets append `asana-cli/SKILL.md` to these directories:
+
+| Agent         | Project directory | Global directory     |
+| ------------- | ----------------- | -------------------- |
+| `claude-code` | `.claude/skills`  | `~/.claude/skills`   |
+| `codex`       | `.agents/skills`  | `~/.agents/skills`   |
+| `copilot`     | `.github/skills`  | `~/.copilot/skills`  |
+| `cursor`      | `.cursor/skills`  | `~/.cursor/skills`   |
+| `gemini`      | `.gemini/skills`  | `~/.gemini/skills`   |
+| `pi`          | `.pi/skills`      | `~/.pi/agent/skills` |
+| `universal`   | `.agents/skills`  | `~/.agents/skills`   |
+
+Alternatively, install through the skills.sh ecosystem:
 
 ```sh
 npx skills@latest add danielsitek/asana-cli
