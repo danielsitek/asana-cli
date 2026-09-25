@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.8.0
+
+- Add native `skill list`, `install`, `update`, and `uninstall` commands for
+  managing the bundled agent skill across supported agents and scopes.
+- Include the skill in compiled executables and verify its packaged behavior
+  in executable smoke tests.
+- Document native skill management, overwrite protection, and target paths.
+
 ## 0.7.0
 
 - Add `capabilities --json` for versioned, machine-readable command and option
