@@ -6,6 +6,7 @@ import {
   renderSkillError,
   type SkillCommandContext,
 } from "./skill-command-context.ts";
+import { renderSkillList } from "./skill-list-output.ts";
 
 const runSkillList = async (
   context: SkillCommandContext,
@@ -17,12 +18,7 @@ const runSkillList = async (
   return {
     stdout: invocation.json
       ? renderJson(listed.value)
-      : `${listed.value
-          .map(
-            ({ agent, global, local }) =>
-              `${agent}\n  global: ${global.status} (${global.path})\n  local: ${local.status} (${local.path})`,
-          )
-          .join("\n")}\n`,
+      : renderSkillList(listed.value, invocation.colorsEnabled),
     stderr: "",
     exitCode: 0,
   };

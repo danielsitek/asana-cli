@@ -14,6 +14,7 @@ const updateChecksEnabled =
   process.env.ASANA_CLI_DISABLE_UPDATE_CHECK !== "1";
 const result = await execute(Bun.argv.slice(2), {
   environment: process.env,
+  stdoutIsTTY: process.stdout.isTTY === true,
   identity: client,
   taskReader: client,
   taskCreator: client,

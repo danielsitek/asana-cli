@@ -34,6 +34,7 @@ export type Execution = Readonly<{
 
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
+  stdoutIsTTY?: boolean;
   identity: IdentityGateway;
   taskReader?: TaskGateway;
   taskCreator?: TaskCreationGateway;

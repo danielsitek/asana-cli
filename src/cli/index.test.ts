@@ -47,7 +47,7 @@ import {
   type TaskSectionMutationGateway,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
-import { bundledSkillContents } from "../skill/index.ts";
+import { bundledSkillContents, SKILL_AGENTS } from "../skill/index.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
 
 const taskReadErrorCases = <
@@ -5207,37 +5207,62 @@ describe("skill commands", () => {
     };
   };
 
-  test("lists every agent in the success envelope without authentication", async () => {
-    const result = await execute(
-      ["--json", "skill", "list"],
-      await dependencies(),
-    );
+  test("keeps the complete diagnostic JSON payload unstyled", async () => {
+    const commandDependencies = await dependencies();
+    const result = await execute(["--json", "skill", "list"], {
+      ...commandDependencies,
+      stdoutIsTTY: true,
+    });
 
     expect(result).toMatchObject({ exitCode: 0, stderr: "" });
     const envelope = JSON.parse(result.stdout) as {
-      data: Array<{
-        agent: string;
-        global: { status: string };
-        local: { status: string };
-      }>;
+      data: unknown;
       meta: Record<string, never>;
     };
     expect(envelope.meta).toEqual({});
-    expect(envelope.data.map(({ agent }) => agent)).toEqual([
-      "claude-code",
-      "codex",
-      "copilot",
-      "cursor",
-      "gemini",
-      "pi",
-      "universal",
-    ]);
-    expect(
-      envelope.data.every(
-        ({ global, local }) =>
-          global.status === "absent" && local.status === "absent",
-      ),
-    ).toBe(true);
+    expect(envelope.data).toEqual(
+      SKILL_AGENTS.map((agent) => ({
+        agent: agent.name,
+        global: {
+          path: join(
+            commandDependencies.configuration?.home ?? "",
+            agent.globalDirectory,
+            "asana-cli",
+            "SKILL.md",
+          ),
+          status: "absent",
+        },
+        local: {
+          path: join(
+            commandDependencies.configuration?.cwd ?? "",
+            agent.localDirectory,
+            "asana-cli",
+            "SKILL.md",
+          ),
+          status: "absent",
+        },
+      })),
+    );
+    expect(result.stdout).not.toContain("\u001B[");
+  });
+
+  test("renders the visual list with terminal colors and no diagnostics", async () => {
+    const result = await execute(["skill", "list"], {
+      ...(await dependencies()),
+      stdoutIsTTY: true,
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result.stdout).toStartWith(
+      "\u001B[1mAvailable agents:\u001B[22m\n\n",
+    );
+    expect(result.stdout).toContain(
+      "  claude-code\n" +
+        "    \u001B[2mClaude Code skill for Asana CLI\u001B[22m\n" +
+        "    \u001B[2m[not installed]\u001B[22m",
+    );
+    expect(result.stdout).not.toMatch(/\/(home|project)\//);
+    expect(result.stdout).not.toMatch(/\b(absent|current|outdated)\b/);
   });
 
   test("installs the bundled bytes into the local project", async () => {
