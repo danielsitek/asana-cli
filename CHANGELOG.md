@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.9.0
+
+- Improve the human-readable `skill list` output with agent descriptions,
+  concise installation badges, and terminal colors.
+- Preserve the complete unstyled diagnostic payload for `skill list --json`.
+
 ## 0.8.0
 
 - Add native `skill list`, `install`, `update`, and `uninstall` commands for
