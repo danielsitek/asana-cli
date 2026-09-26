@@ -1,18 +1,16 @@
 import type { Command } from "commander";
 
-import type { SkillContext } from "../skill/index.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import type { Execution } from "./contracts.ts";
 import { registerSkillInstallCommand } from "./skill-install-command.ts";
 import { registerSkillListCommand } from "./skill-list-command.ts";
+import type { SkillInvocation } from "./skill-command-context.ts";
 import { registerSkillUninstallCommand } from "./skill-uninstall-command.ts";
 import { registerSkillUpdateCommand } from "./skill-update-command.ts";
 
 type SkillCommandRegistration = Readonly<{
   program: Command;
-  beginCommand: () =>
-    | Readonly<{ context: SkillContext; json: boolean }>
-    | undefined;
+  beginCommand: () => SkillInvocation | undefined;
   complete: (execution: Execution) => void;
 }>;
 

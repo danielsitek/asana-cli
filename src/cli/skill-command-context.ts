@@ -13,6 +13,7 @@ import type { Execution } from "./contracts.ts";
 export type SkillInvocation = Readonly<{
   context: SkillContext;
   json: boolean;
+  colorsEnabled: boolean;
 }>;
 
 export type SkillCommandContext = Readonly<{

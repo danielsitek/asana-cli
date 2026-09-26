@@ -46,6 +46,7 @@ import { registerConfigCommands } from "./config-commands.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, Execution } from "./contracts.ts";
 import { registerSkillCommands } from "./skill-commands.ts";
+import { terminalColorsEnabled } from "./skill-list-output.ts";
 import { registerTaskCommands } from "./task-commands.ts";
 import { executeWorkspacesList } from "../workspaces/index.ts";
 
@@ -240,7 +241,14 @@ export const execute = async (
         };
         return undefined;
       }
-      return { context, json };
+      return {
+        context,
+        json,
+        colorsEnabled: terminalColorsEnabled(
+          dependencies.stdoutIsTTY === true,
+          dependencies.environment,
+        ),
+      };
     },
     complete: stopWith,
   });
