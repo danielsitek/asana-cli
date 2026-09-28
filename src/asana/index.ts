@@ -330,6 +330,69 @@ const projectsPageSchema = z.object({
     .optional(),
 });
 
+type ProjectMetadataPageRequest = Readonly<{
+  token: string;
+  projectGid: string;
+  limit: number;
+  offset?: string;
+  fields: readonly string[];
+}>;
+
+type ProjectMetadataCollection = Readonly<{
+  path: string;
+  pageName: string;
+}>;
+
+const prepareProjectMetadataPageRequest = (
+  request: ProjectMetadataPageRequest,
+  collection: ProjectMetadataCollection,
+): Result<
+  Readonly<{
+    token: string;
+    path: string;
+    options: HttpRequestOptions;
+  }>,
+  ProjectReadError
+> => {
+  if (!isDigitOnlyGid(request.projectGid)) {
+    return err({
+      kind: "invalid_response",
+      message: "Project GID must contain digits only",
+    });
+  }
+  if (
+    !Number.isSafeInteger(request.limit) ||
+    request.limit < 1 ||
+    request.limit > 100
+  ) {
+    return err({
+      kind: "invalid_response",
+      message: `${collection.pageName} page limit must be between 1 and 100`,
+    });
+  }
+  return ok({
+    token: request.token,
+    path: `projects/${request.projectGid}/${collection.path}`,
+    options: {
+      method: "GET",
+      searchParams: {
+        limit: String(request.limit),
+        opt_fields: request.fields.join(","),
+        ...(request.offset === undefined ? {} : { offset: request.offset }),
+      },
+    },
+  });
+};
+
+const projectMetadataNextOffset = (
+  page: Readonly<{
+    next_page?: Readonly<{ offset: string }> | null | undefined;
+  }>,
+): Readonly<{ nextOffset?: string }> =>
+  page.next_page?.offset === undefined
+    ? {}
+    : { nextOffset: page.next_page.offset };
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
@@ -502,47 +565,23 @@ export class AsanaHttpClient
   }
 
   async listProjectSections(
-    request: Readonly<{
-      token: string;
-      projectGid: string;
-      limit: number;
-      offset?: string;
-      fields: readonly string[];
-    }>,
+    request: ProjectMetadataPageRequest,
   ): Promise<
     Result<
       Readonly<{ sections: readonly ProjectSection[]; nextOffset?: string }>,
       ProjectReadError
     >
   > {
-    if (!isDigitOnlyGid(request.projectGid)) {
-      return err({
-        kind: "invalid_response",
-        message: "Project GID must contain digits only",
-      });
-    }
-    if (
-      !Number.isSafeInteger(request.limit) ||
-      request.limit < 1 ||
-      request.limit > 100
-    ) {
-      return err({
-        kind: "invalid_response",
-        message: "Project section page limit must be between 1 and 100",
-      });
-    }
+    const prepared = prepareProjectMetadataPageRequest(request, {
+      path: "sections",
+      pageName: "Project section",
+    });
+    if (!prepared.ok) return prepared;
 
     const result = await this.#request(
-      request.token,
-      `projects/${request.projectGid}/sections`,
-      {
-        method: "GET",
-        searchParams: {
-          limit: String(request.limit),
-          opt_fields: request.fields.join(","),
-          ...(request.offset === undefined ? {} : { offset: request.offset }),
-        },
-      },
+      prepared.value.token,
+      prepared.value.path,
+      prepared.value.options,
       z.object({
         data: z.array(buildProjectSectionSchema(request.fields)),
         next_page: z
@@ -557,20 +596,12 @@ export class AsanaHttpClient
     }
     return ok({
       sections: result.value.data,
-      ...(result.value.next_page?.offset === undefined
-        ? {}
-        : { nextOffset: result.value.next_page.offset }),
+      ...projectMetadataNextOffset(result.value),
     });
   }
 
   async listProjectCustomFieldSettings(
-    request: Readonly<{
-      token: string;
-      projectGid: string;
-      limit: number;
-      offset?: string;
-      fields: readonly string[];
-    }>,
+    request: ProjectMetadataPageRequest,
   ): Promise<
     Result<
       Readonly<{
@@ -580,32 +611,16 @@ export class AsanaHttpClient
       ProjectReadError
     >
   > {
-    if (!isDigitOnlyGid(request.projectGid))
-      return err({
-        kind: "invalid_response",
-        message: "Project GID must contain digits only",
-      });
-    if (
-      !Number.isSafeInteger(request.limit) ||
-      request.limit < 1 ||
-      request.limit > 100
-    )
-      return err({
-        kind: "invalid_response",
-        message:
-          "Project custom field setting page limit must be between 1 and 100",
-      });
+    const prepared = prepareProjectMetadataPageRequest(request, {
+      path: "custom_field_settings",
+      pageName: "Project custom field setting",
+    });
+    if (!prepared.ok) return prepared;
+
     const result = await this.#request(
-      request.token,
-      `projects/${request.projectGid}/custom_field_settings`,
-      {
-        method: "GET",
-        searchParams: {
-          limit: String(request.limit),
-          opt_fields: request.fields.join(","),
-          ...(request.offset === undefined ? {} : { offset: request.offset }),
-        },
-      },
+      prepared.value.token,
+      prepared.value.path,
+      prepared.value.options,
       z.object({
         data: z.array(buildProjectCustomFieldSettingSchema(request.fields)),
         next_page: z
@@ -619,9 +634,7 @@ export class AsanaHttpClient
       return err(mapTaskReadError(result.error, "Project not found"));
     return ok({
       settings: result.value.data,
-      ...(result.value.next_page?.offset === undefined
-        ? {}
-        : { nextOffset: result.value.next_page.offset }),
+      ...projectMetadataNextOffset(result.value),
     });
   }
 
