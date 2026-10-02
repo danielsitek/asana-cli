@@ -374,7 +374,9 @@ command fails with exit 2.
 - `tasks create`/`tasks update` always include `gid` in the response, even if `--fields` omits it.
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
-- Errors are compact JSON on stderr — `{"error":{"code":"...","message":"..."}}` — regardless of `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
+- A command group without a subcommand prints that group's help to stdout and exits 0.
+- Without `--json`, command-line syntax errors print an actionable error followed by the relevant command help to stderr and exit 2.
+- With `--json`, errors are one compact JSON line on stderr: `{"error":{"code":"...","message":"..."}}`. Other command errors use the same envelope without `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
 
 ## Machine-readable capabilities
 
