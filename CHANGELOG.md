@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.9.1
+
+- Show contextual help for command groups, missing arguments, and unknown
+  subcommands while keeping `--json` usage errors machine-readable.
+- Improve internal project command and project metadata maintainability.
+
 ## 0.9.0
 
 - Improve the human-readable `skill list` output with agent descriptions,
