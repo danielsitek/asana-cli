@@ -89,6 +89,7 @@ export const execute = async (
   const invokedState = { value: false };
   let result: Execution | undefined;
   let parserStdout = "";
+  let parserStderr = "";
   let skipUpdateCheck = false;
 
   const stopWith = (execution: Execution): void => {
@@ -99,7 +100,9 @@ export const execute = async (
     writeOut: (text: string) => {
       parserStdout += text;
     },
-    writeErr: () => undefined,
+    writeErr: (text: string) => {
+      parserStderr += text;
+    },
   };
 
   program.option("--json", "output JSON");
@@ -342,10 +345,14 @@ export const execute = async (
   capabilities.exitOverride();
   capabilities.configureOutput(captureOutput);
 
-  program.exitOverride();
-  program.configureOutput(captureOutput);
-  whoami.exitOverride();
-  whoami.configureOutput(captureOutput);
+  const configureParser = (command: Command): void => {
+    command.exitOverride();
+    command.configureOutput(captureOutput);
+    command.showHelpAfterError();
+    for (const child of command.commands) configureParser(child);
+  };
+  configureParser(program);
+
   try {
     const effectiveArgv = argv.length === 0 ? ["--help"] : argv;
     await program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
@@ -359,8 +366,14 @@ export const execute = async (
       ) {
         return { stdout: parserStdout, stderr: "", exitCode: 0 };
       }
+      if (error.code === "commander.help") {
+        return { stdout: parserStderr, stderr: "", exitCode: 0 };
+      }
       if (error.code === "commander.fieldsNotSupported") {
         return usageError(error.message);
+      }
+      if (!argv.includes("--json") && parserStderr !== "") {
+        return { stdout: "", stderr: parserStderr, exitCode: 2 };
       }
       return usageError("Invalid command usage");
     }

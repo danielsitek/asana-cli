@@ -602,6 +602,65 @@ describe("execute", () => {
     expect(emptyInvocation.stdout).toContain("Usage: asana-cli");
   });
 
+  test.each([
+    ["config", "manage layered configuration"],
+    ["skill", "manage the bundled asana-cli agent skill"],
+    ["tasks", "manage tasks"],
+    ["projects", "inspect projects"],
+    ["workspaces", "inspect workspaces"],
+  ])(
+    "renders %s group help as a successful command",
+    async (group, description) => {
+      const result = await execute([group], { environment: {}, identity });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(`Usage: asana-cli ${group}`);
+      expect(result.stdout).toContain(description);
+      expect(result.stdout).toContain("Commands:");
+    },
+  );
+
+  test("renders actionable operation help for a missing argument", async () => {
+    const result = await execute(["projects", "get"], {
+      environment: {},
+      identity,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: missing required argument 'id'");
+    expect(result.stderr).toContain("Usage: asana-cli projects get");
+    expect(result.stderr).toContain("project GID");
+  });
+
+  test("renders parent help for an unknown subcommand", async () => {
+    const result = await execute(["projects", "unknown"], {
+      environment: {},
+      identity,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: unknown command 'unknown'");
+    expect(result.stderr).toContain("Usage: asana-cli projects");
+    expect(result.stderr).toContain("Commands:");
+  });
+
+  test.each([
+    ["missing argument", ["projects", "get", "--json"]],
+    ["unknown subcommand", ["projects", "unknown", "--json"]],
+  ])("keeps %s errors machine-readable with --json", async (_case, argv) => {
+    const result = await execute(argv, { environment: {}, identity });
+
+    expect(result).toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"invalid_usage","message":"Invalid command usage"}}\n',
+      exitCode: 2,
+    });
+  });
+
   test("generates completion scripts without authentication or configuration", async () => {
     const dependencies: ExecuteDependencies = {
       environment: new Proxy(
@@ -888,7 +947,9 @@ describe("execute", () => {
   });
 
   test("normalizes unknown commands as JSON usage errors", async () => {
-    expect(await execute(["unknown"], { environment: {}, identity })).toEqual({
+    expect(
+      await execute(["unknown", "--json"], { environment: {}, identity }),
+    ).toEqual({
       stdout: "",
       stderr:
         '{"error":{"code":"invalid_usage","message":"Invalid command usage"}}\n',
