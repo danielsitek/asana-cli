@@ -90,7 +90,7 @@ implicitly.
 
 With `--json`, successful reads and writes print a single compact, minified `{"data":...,"meta":...}` line to stdout. Diagnostics never go to stdout on success.
 
-Errors are always compact, minified JSON on stderr, regardless of `--json`: `{"error":{"code":"...","message":"..."}}`. One exception: a partial multi-stage write (exit 1 below) prints its compact `{"completed":...,"failed":...,"message":...}` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
+A command group without a subcommand prints its help to stdout and exits 0. Without `--json`, command-line syntax errors print an actionable error plus relevant help to stderr and exit 2. With `--json`, errors are one compact, minified JSON line on stderr: `{"error":{"code":"...","message":"..."}}`; other command errors use the same envelope without `--json`. One exception: a partial multi-stage write (exit 1 below) prints its compact `{"completed":...,"failed":...,"message":...}` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
 
 | Code | Meaning                                                                                       |
 | ---- | --------------------------------------------------------------------------------------------- |
