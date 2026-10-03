@@ -393,6 +393,113 @@ const projectMetadataNextOffset = (
     ? {}
     : { nextOffset: page.next_page.offset };
 
+const userTaskListDiscoverySchema = z
+  .object({
+    data: z
+      .object({
+        gid: z.string(),
+        workspace: z.object({ gid: z.string() }).passthrough(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const sectionsDiscoverySchema = z
+  .object({
+    data: z.array(
+      z.object({ gid: z.string(), name: z.string() }).passthrough(),
+    ),
+    next_page: z.nullable(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const enumOptionDiscoverySchema = z
+  .object({
+    gid: z.custom<string>(isDigitOnlyGid),
+    name: z.string(),
+    enabled: z.boolean(),
+  })
+  .passthrough();
+
+const customFieldsDiscoverySchema = z
+  .object({
+    data: z.array(
+      z
+        .object({
+          custom_field: z
+            .object({
+              gid: z.string(),
+              name: z.string(),
+              resource_subtype: z.string(),
+              is_value_read_only: z.boolean(),
+              enum_options: z.array(enumOptionDiscoverySchema).optional(),
+            })
+            .passthrough(),
+        })
+        .passthrough(),
+    ),
+    next_page: z.nullable(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const discoveredUserTaskListGid = (
+  data: z.infer<typeof userTaskListDiscoverySchema>["data"],
+  workspaceGid: string,
+): Result<string, DiscoveryError> =>
+  data.workspace.gid === workspaceGid
+    ? ok(data.gid)
+    : err({
+        kind: "invalid_response",
+        message: `Returned user task list workspace GID ${data.workspace.gid} does not match requested workspace GID ${workspaceGid}`,
+      });
+
+const discoveredSections = (
+  data: z.infer<typeof sectionsDiscoverySchema>["data"],
+): DiscoveredMyTaskSections["sections"] =>
+  data.map(({ gid, name }) => ({ gid, name }));
+
+const discoveredCustomFields = (
+  data: z.infer<typeof customFieldsDiscoverySchema>["data"],
+): Result<DiscoveredMyTasks["customFields"], DiscoveryError> => {
+  const customFields: DiscoveredMyTasks["customFields"][number][] = [];
+  for (const setting of data) {
+    const field = setting.custom_field;
+    const base = {
+      gid: field.gid,
+      name: field.name,
+      isReadOnly: field.is_value_read_only,
+    };
+    if (field.resource_subtype === "number") {
+      customFields.push({ ...base, resourceSubtype: "number" });
+      continue;
+    }
+    if (field.resource_subtype === "enum") {
+      if (field.enum_options === undefined) {
+        return err({
+          kind: "invalid_response",
+          message: `Asana returned enum custom field ${field.gid} without enum_options`,
+        });
+      }
+      customFields.push({
+        ...base,
+        resourceSubtype: "enum",
+        enumOptions: field.enum_options.map(({ gid, name, enabled }) => ({
+          gid,
+          name,
+          enabled,
+        })),
+      });
+      continue;
+    }
+    customFields.push({
+      ...base,
+      resourceSubtype: "unsupported",
+      originalResourceSubtype: field.resource_subtype,
+    });
+  }
+  return ok(customFields);
+};
+
 export class AsanaHttpClient
   implements
     IdentityGateway,
@@ -642,17 +749,6 @@ export class AsanaHttpClient
     token: string,
     workspaceGid: string,
   ): Promise<Result<DiscoveredMyTaskSections, DiscoveryError>> {
-    const utlSchema = z
-      .object({
-        data: z
-          .object({
-            gid: z.string(),
-            workspace: z.object({ gid: z.string() }).passthrough(),
-          })
-          .passthrough(),
-      })
-      .passthrough();
-
     const utlResult = await this.#request(
       token,
       "users/me/user_task_list",
@@ -663,42 +759,23 @@ export class AsanaHttpClient
           opt_fields: "gid,workspace.gid",
         },
       },
-      utlSchema,
+      userTaskListDiscoverySchema,
     );
     if (!utlResult.ok) return utlResult;
-
-    const returnedWorkspaceGid = utlResult.value.data.workspace.gid;
-    if (returnedWorkspaceGid !== workspaceGid) {
-      return err({
-        kind: "invalid_response",
-        message: `Returned user task list workspace GID ${returnedWorkspaceGid} does not match requested workspace GID ${workspaceGid}`,
-      });
-    }
-
-    const utlGid = utlResult.value.data.gid;
-
-    const sectionsSchema = z
-      .object({
-        data: z.array(
-          z
-            .object({
-              gid: z.string(),
-              name: z.string(),
-            })
-            .passthrough(),
-        ),
-        next_page: z.nullable(z.unknown()).optional(),
-      })
-      .passthrough();
+    const utlGid = discoveredUserTaskListGid(
+      utlResult.value.data,
+      workspaceGid,
+    );
+    if (!utlGid.ok) return utlGid;
 
     const sectionsResult = await this.#request(
       token,
-      `projects/${utlGid}/sections`,
+      `projects/${utlGid.value}/sections`,
       {
         method: "GET",
         searchParams: { limit: "100", opt_fields: "gid,name" },
       },
-      sectionsSchema,
+      sectionsDiscoverySchema,
     );
     if (!sectionsResult.ok) return sectionsResult;
     if (
@@ -712,11 +789,8 @@ export class AsanaHttpClient
     }
 
     return ok({
-      userTaskListGid: utlGid,
-      sections: sectionsResult.value.data.map((section) => ({
-        gid: section.gid,
-        name: section.name,
-      })),
+      userTaskListGid: utlGid.value,
+      sections: discoveredSections(sectionsResult.value.data),
     });
   }
 
@@ -727,35 +801,6 @@ export class AsanaHttpClient
     const sections = await this.discoverMyTaskSections(token, workspaceGid);
     if (!sections.ok) return sections;
     const utlGid = sections.value.userTaskListGid;
-
-    const enumOptionSchema = z
-      .object({
-        gid: z.custom<string>(isDigitOnlyGid),
-        name: z.string(),
-        enabled: z.boolean(),
-      })
-      .passthrough();
-
-    const customFieldsSchema = z
-      .object({
-        data: z.array(
-          z
-            .object({
-              custom_field: z
-                .object({
-                  gid: z.string(),
-                  name: z.string(),
-                  resource_subtype: z.string(),
-                  is_value_read_only: z.boolean(),
-                  enum_options: z.array(enumOptionSchema).optional(),
-                })
-                .passthrough(),
-            })
-            .passthrough(),
-        ),
-        next_page: z.nullable(z.unknown()).optional(),
-      })
-      .passthrough();
 
     const customFieldsResult = await this.#request(
       token,
@@ -768,7 +813,7 @@ export class AsanaHttpClient
             "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.is_value_read_only,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled",
         },
       },
-      customFieldsSchema,
+      customFieldsDiscoverySchema,
     );
     if (!customFieldsResult.ok) return customFieldsResult;
     if (
@@ -781,47 +826,13 @@ export class AsanaHttpClient
           "Asana returned more than 100 custom field settings; next_page is present",
       });
     }
-    const customFields: DiscoveredMyTasks["customFields"][number][] = [];
-    for (const setting of customFieldsResult.value.data) {
-      const field = setting.custom_field;
-      const base = {
-        gid: field.gid,
-        name: field.name,
-        isReadOnly: field.is_value_read_only,
-      };
-      if (field.resource_subtype === "number") {
-        customFields.push({ ...base, resourceSubtype: "number" });
-        continue;
-      }
-      if (field.resource_subtype === "enum") {
-        if (field.enum_options === undefined) {
-          return err({
-            kind: "invalid_response",
-            message: `Asana returned enum custom field ${field.gid} without enum_options`,
-          });
-        }
-        customFields.push({
-          ...base,
-          resourceSubtype: "enum",
-          enumOptions: field.enum_options.map((option) => ({
-            gid: option.gid,
-            name: option.name,
-            enabled: option.enabled,
-          })),
-        });
-        continue;
-      }
-      customFields.push({
-        ...base,
-        resourceSubtype: "unsupported",
-        originalResourceSubtype: field.resource_subtype,
-      });
-    }
+    const customFields = discoveredCustomFields(customFieldsResult.value.data);
+    if (!customFields.ok) return customFields;
 
     return ok({
       userTaskListGid: utlGid,
       sections: sections.value.sections,
-      customFields,
+      customFields: customFields.value,
     });
   }
 

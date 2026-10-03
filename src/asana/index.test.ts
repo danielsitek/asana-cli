@@ -295,6 +295,14 @@ describe("AsanaHttpClient", () => {
                 ],
               },
             },
+            {
+              custom_field: {
+                gid: "1213894072991504",
+                name: "Reference",
+                resource_subtype: "text",
+                is_value_read_only: true,
+              },
+            },
           ],
         });
       }
@@ -331,6 +339,13 @@ describe("AsanaHttpClient", () => {
             { gid: "1213894072991601", name: "Low", enabled: true },
             { gid: "1213894072991602", name: "High", enabled: false },
           ],
+        },
+        {
+          gid: "1213894072991504",
+          name: "Reference",
+          resourceSubtype: "unsupported",
+          originalResourceSubtype: "text",
+          isReadOnly: true,
         },
       ]);
     }
