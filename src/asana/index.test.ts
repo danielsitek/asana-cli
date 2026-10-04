@@ -1802,6 +1802,72 @@ describe("AsanaHttpClient", () => {
     expect(calls).toBe(2);
   });
 
+  test("rejects every malformed creation target before any request", async () => {
+    let calls = 0;
+    const baseUrl = serverFor(() => {
+      calls += 1;
+      return Response.json({ data: { gid: "789" } });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const targets = [
+      { kind: "subtask", parentId: "bad" },
+      { kind: "workspace", workspaceGid: "bad" },
+      { kind: "project", projectGid: "bad" },
+      { kind: "section", sectionGid: "bad" },
+    ] as const;
+
+    for (const target of targets) {
+      await expect(
+        client.createTask("token", target, { name: "Task" }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          kind: "invalid_response",
+          message: "Task creation target GID is not digit-only",
+        },
+      });
+    }
+    expect(calls).toBe(0);
+  });
+
+  test.each([
+    [
+      "missing section",
+      new Response(null, { status: 404 }),
+      {
+        kind: "not_found",
+        status: 404,
+        message: "Section not found",
+      },
+    ],
+    [
+      "malformed project",
+      Response.json({ data: { project: { gid: "bad" } } }),
+      {
+        kind: "invalid_response",
+        message: "Asana returned an invalid response",
+      },
+    ],
+  ] as const)(
+    "does not create a task after %s lookup",
+    async (_case, sectionResponse, error) => {
+      let calls = 0;
+      const baseUrl = serverFor(() => {
+        calls += 1;
+        return sectionResponse;
+      });
+
+      const result = await new AsanaHttpClient({ baseUrl }).createTask(
+        "token",
+        { kind: "section", sectionGid: "456" },
+        { name: "Section task" },
+      );
+
+      expect(result).toEqual({ ok: false, error });
+      expect(calls).toBe(1);
+    },
+  );
+
   test("retries only explicit POST rate limits and honors Retry-After", async () => {
     let attempts = 0;
     const waits: number[] = [];

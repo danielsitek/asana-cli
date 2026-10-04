@@ -192,6 +192,73 @@ const mutationFieldSelection = (
   };
 };
 
+type ResolvedTaskCreationTarget =
+  | Exclude<TaskCreationTarget, { kind: "section" }>
+  | Readonly<{ kind: "section"; sectionGid: string; projectGid: string }>;
+
+const validateTaskCreationTargetGid = (
+  target: TaskCreationTarget,
+): Result<TaskCreationTarget, TaskReadError> => {
+  const gid =
+    target.kind === "subtask"
+      ? target.parentId
+      : target.kind === "workspace"
+        ? target.workspaceGid
+        : target.kind === "project"
+          ? target.projectGid
+          : target.sectionGid;
+  return /^\d+$/.test(gid)
+    ? ok(target)
+    : err({
+        kind: "invalid_response",
+        message: "Task creation target GID is not digit-only",
+      });
+};
+
+const planTaskCreationWrite = (
+  target: ResolvedTaskCreationTarget,
+  mutation: TaskMutation,
+  fields: readonly string[] | undefined,
+): Readonly<{
+  path: string;
+  options: HttpRequestOptions;
+  schema: z.ZodType<{ data: Task & Readonly<{ gid: string }> }>;
+}> => {
+  const data =
+    target.kind === "workspace"
+      ? { ...mutation, workspace: target.workspaceGid }
+      : target.kind === "project"
+        ? { ...mutation, projects: [target.projectGid] }
+        : target.kind === "section"
+          ? {
+              ...mutation,
+              projects: [target.projectGid],
+              memberships: [
+                { project: target.projectGid, section: target.sectionGid },
+              ],
+            }
+          : mutation;
+  const selection = mutationFieldSelection(fields);
+  return {
+    path:
+      target.kind === "subtask" ? `tasks/${target.parentId}/subtasks` : "tasks",
+    options: {
+      method: "POST",
+      ...(selection.searchParams === undefined
+        ? {}
+        : { searchParams: selection.searchParams }),
+      body: { data },
+    },
+    schema: z.object({ data: buildCreatedTaskSchema(selection.fields) }),
+  };
+};
+
+const sectionProjectSchema = z.object({
+  data: z.object({
+    project: z.object({ gid: z.string().regex(/^\d+$/) }),
+  }),
+});
+
 const mapTaskReadError = (
   error: IdentityError,
   message: string,
@@ -1021,78 +1088,46 @@ export class AsanaHttpClient
     mutation: TaskMutation,
     fields?: readonly string[],
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
-    const targetGid =
-      target.kind === "subtask"
-        ? target.parentId
-        : target.kind === "workspace"
-          ? target.workspaceGid
-          : target.kind === "project"
-            ? target.projectGid
-            : target.sectionGid;
-    if (!/^\d+$/.test(targetGid)) {
-      return err({
-        kind: "invalid_response",
-        message: "Task creation target GID is not digit-only",
-      });
-    }
+    const validated = validateTaskCreationTargetGid(target);
+    if (!validated.ok) return validated;
 
-    const path =
-      target.kind === "subtask" ? `tasks/${target.parentId}/subtasks` : "tasks";
-    let sectionProjectGid: string | undefined;
+    let resolvedTarget: ResolvedTaskCreationTarget;
     if (target.kind === "section") {
-      const section = await this.#request(
+      const sectionProject = await this.#sectionProjectGid(
         token,
-        `sections/${target.sectionGid}`,
-        {
-          method: "GET",
-          searchParams: { opt_fields: "project.gid" },
-        },
-        z.object({
-          data: z.object({
-            project: z.object({ gid: z.string().regex(/^\d+$/) }),
-          }),
-        }),
+        target.sectionGid,
       );
-      if (!section.ok) {
-        return err(mapTaskReadError(section.error, "Section not found"));
-      }
-      sectionProjectGid = section.value.data.project.gid;
+      if (!sectionProject.ok) return sectionProject;
+      resolvedTarget = { ...target, projectGid: sectionProject.value };
+    } else {
+      resolvedTarget = target;
     }
-    const data =
-      target.kind === "workspace"
-        ? { ...mutation, workspace: target.workspaceGid }
-        : target.kind === "project"
-          ? { ...mutation, projects: [target.projectGid] }
-          : target.kind === "section"
-            ? {
-                ...mutation,
-                projects: [sectionProjectGid],
-                memberships: [
-                  {
-                    project: sectionProjectGid,
-                    section: target.sectionGid,
-                  },
-                ],
-              }
-            : mutation;
-    const selection = mutationFieldSelection(fields);
-    const schema = z.object({ data: buildCreatedTaskSchema(selection.fields) });
+    const planned = planTaskCreationWrite(resolvedTarget, mutation, fields);
     const result = await this.#request(
       token,
-      path,
-      {
-        method: "POST",
-        ...(selection.searchParams === undefined
-          ? {}
-          : { searchParams: selection.searchParams }),
-        body: { data },
-      },
-      schema,
+      planned.path,
+      planned.options,
+      planned.schema,
     );
     if (!result.ok) {
       return err(mapTaskReadError(result.error, "Task not found"));
     }
     return ok(result.value.data);
+  }
+
+  async #sectionProjectGid(
+    token: string,
+    sectionGid: string,
+  ): Promise<Result<string, TaskReadError>> {
+    const section = await this.#request(
+      token,
+      `sections/${sectionGid}`,
+      { method: "GET", searchParams: { opt_fields: "project.gid" } },
+      sectionProjectSchema,
+    );
+    return section.ok
+      ? ok(section.value.data.project.gid)
+      : err(mapTaskReadError(section.error, "Section not found"));
   }
 
   async getTaskStories(
