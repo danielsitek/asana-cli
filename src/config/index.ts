@@ -453,6 +453,15 @@ const selectValidConfigMutation = (
   );
 };
 
+const configWriteLayer = (
+  segments: readonly string[],
+  requestedLayer?: ConfigLayer,
+): ConfigLayer =>
+  requestedLayer ??
+  (segments[0] === "myTasks" || segments[0] === "defaultAssignee"
+    ? "local"
+    : "shared");
+
 export const setConfigValue = async (
   context: ConfigContext,
   key: string,
@@ -461,11 +470,7 @@ export const setConfigValue = async (
 ): Promise<Result<ConfigSource, ConfigError>> => {
   const segments = pathSegments(key);
   if (!segments.ok) return segments;
-  const layer =
-    requestedLayer ??
-    (segments.value[0] === "myTasks" || segments.value[0] === "defaultAssignee"
-      ? "local"
-      : "shared");
+  const layer = configWriteLayer(segments.value, requestedLayer);
   const resolvedConfig = await resolveConfig(context);
   if (!resolvedConfig.ok) return resolvedConfig;
   const path = targetPath(resolvedConfig.value, layer);

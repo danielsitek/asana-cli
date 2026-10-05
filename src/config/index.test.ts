@@ -350,22 +350,35 @@ describe("configuration writes", () => {
       "dist/\n/.asana-cli.local.json\n",
     );
 
-    expect(
-      (await setConfigValue(context(root, home), "workspace.gid", "100")).ok,
-    ).toBe(true);
-    expect(
-      (await setConfigValue(context(root, home), "team.gid", "200", "global"))
-        .ok,
-    ).toBe(true);
-    expect(
-      (
-        await setConfigValue(
-          context(root, home),
-          "myTasks.sections.review",
-          "300",
-        )
-      ).ok,
-    ).toBe(true);
+    const shared = await setConfigValue(
+      context(root, home),
+      "workspace.gid",
+      "100",
+    );
+    const global = await setConfigValue(
+      context(root, home),
+      "team.gid",
+      "200",
+      "global",
+    );
+    const local = await setConfigValue(
+      context(root, home),
+      "myTasks.sections.review",
+      "300",
+    );
+
+    expect(shared).toEqual(
+      ok({ layer: "shared", path: join(root, ".asana-cli.json") }),
+    );
+    expect(global).toEqual(
+      ok({
+        layer: "global",
+        path: join(home, ".config", "asana-cli", "config.json"),
+      }),
+    );
+    expect(local).toEqual(
+      ok({ layer: "local", path: join(root, ".asana-cli.local.json") }),
+    );
 
     expect(
       JSON.parse(await readFile(join(root, ".asana-cli.json"), "utf8")),
