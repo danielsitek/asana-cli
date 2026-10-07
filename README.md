@@ -249,9 +249,15 @@ asana-cli tasks create \
 
 ## Command reference
 
-A task `<id>` (positional, and `--parent`) accepts a digit-only GID or a URL
-of the exact form `https://app.asana.com/0/<project>/<task>[/f]`; other URL
-shapes fail with exit 2. `--section` and `--project` accept only digit-only
+A task `<id>` (positional, and `--parent`) accepts a digit-only GID or one of
+these Asana task URLs:
+
+- `https://app.asana.com/0/<project>/<task>[/f]`
+- `https://app.asana.com/1/<workspace>/project/<project>/task/<task>`
+- `https://app.asana.com/1/<workspace>/task/<task>`
+
+The `/1` forms also accept trailing path segments and query parameters. Other
+URL shapes fail with exit 2. `--section` and `--project` accept only digit-only
 GIDs. `--my-section` accepts a digit-only GID or `@<alias>` on `tasks create`
 and `tasks update`; on `tasks list` it accepts only `@<alias>`.
 
