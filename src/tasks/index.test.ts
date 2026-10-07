@@ -262,6 +262,16 @@ describe("parseTaskId", () => {
     });
   });
 
+  test.each([
+    ["https://app.asana.com/1/111/project/222/task/333", "333"],
+    ["https://app.asana.com/1/111/task/333", "333"],
+    ["https://app.asana.com/1/111/project/222/task/333?focus=true", "333"],
+    ["https://app.asana.com/1/111/task/333/f", "333"],
+    ["https://app.asana.com/1/111/task/333/f?focus=true", "333"],
+  ])("accepts current Asana task URL %s", (input, taskGid) => {
+    expect(parseTaskId(input)).toEqual({ ok: true, value: taskGid });
+  });
+
   test("rejects invalid or ambiguous URLs and non-digit GIDs", () => {
     for (const input of [
       "https://app.asana.com/0/1201947864389005/1215978111726134/",
@@ -270,6 +280,10 @@ describe("parseTaskId", () => {
       "123a456",
       "https://app.asana.com/0/1201947864389005/1215978111726134/other",
       "https://app.asana.com/0/1201947864389005/list",
+      "https://app.asana.com/1/111/project/222",
+      "https://app.asana.com/1/111/task/",
+      "https://app.asana.com/1/111/project/222/task/nope",
+      "https://app.asana.com/1/111/not-task/333",
     ]) {
       expect(parseTaskId(input)).toEqual({
         ok: false,

@@ -1932,20 +1932,16 @@ describe("tasks get command", () => {
     expect(result.stderr).not.toContain("top-secret-token");
   });
 
-  test("records and asserts token, parsed task GID, and exact fields (URL extraction, defaults)", async () => {
+  test.each([
+    "https://app.asana.com/0/1201947864389005/1215978111726134",
+    "https://app.asana.com/1/111/project/1201947864389005/task/1215978111726134",
+  ])("extracts task GID and retains defaults for URL %s", async (url) => {
     const reader = new InMemoryTaskReader(ok(dummyTask));
-    const result = await execute(
-      [
-        "tasks",
-        "get",
-        "https://app.asana.com/0/1201947864389005/1215978111726134",
-      ],
-      {
-        environment: { ASANA_CLI_TOKEN: "custom-token-123" },
-        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
-        taskReader: reader,
-      },
-    );
+    const result = await execute(["tasks", "get", url], {
+      environment: { ASANA_CLI_TOKEN: "custom-token-123" },
+      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+      taskReader: reader,
+    });
 
     expect(result.exitCode).toBe(0);
     expect(reader.lastToken).toBe("custom-token-123");

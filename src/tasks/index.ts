@@ -722,6 +722,12 @@ export const parseTaskId = (input: string): Result<string, string> => {
   if (match && typeof match[2] === "string") {
     return ok(match[2]);
   }
+  const currentMatch = input.match(
+    /^https:\/\/app\.asana\.com\/1\/\d+\/(?:project\/\d+\/)?task\/(\d+)(?:\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/,
+  );
+  if (currentMatch && typeof currentMatch[1] === "string") {
+    return ok(currentMatch[1]);
+  }
   return err("Invalid task identifier");
 };
 
