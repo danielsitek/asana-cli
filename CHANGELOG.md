@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.0
+
+- Accept current Asana task URLs, including URLs with project context, wherever
+  task identifiers are supported.
+- Improve internal task discovery, task creation, configuration writes, and
+  comment workflow maintainability.
+
 ## 0.9.1
 
 - Show contextual help for command groups, missing arguments, and unknown
