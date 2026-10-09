@@ -22,6 +22,8 @@ Treat initialization as incomplete if `defaultAssignee` was not set and verified
 
 Before `tasks update` or `tasks comment`, read the target first with `asana-cli tasks get <id> --json`. Before creating a subtask, read its `--parent` the same way. Before creating a task in a project, read the destination with `asana-cli projects get <gid> --json` and confirm its `gid`, `name`, and `archived` state. A standalone My Tasks or section create has no task to pre-read; confirm its explicit `--my-section` or `--section` destination instead. Decide the exact fields before issuing one write — don't narrow the change mid-write.
 
+Before `tasks update <id> --section=<gid>`, verify the section belongs to the intended project with `asana-cli projects sections <project-gid> --all --max=<scan-cap> --json` (raise the cap if the scan is truncated). Adding a task to a section also associates it with that section's project; memberships in other projects are preserved. For example, adding a task already in project A and its section to a section in project B leaves its project A and original section memberships in place and adds project B.
+
 ## Preserve literal dollar amounts
 
 For comment or update-notes text containing `$` followed by digits, write the exact text to a file and use `--file=<path>` or `--notes-file=<path>`. A double-quoted shell argument expands forms such as `$2` before `asana-cli` receives it; file input preserves the intended bytes.
