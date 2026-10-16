@@ -648,18 +648,38 @@ describe("execute", () => {
   });
 
   test.each([
-    ["missing argument", ["projects", "get", "--json"]],
-    ["unknown subcommand", ["projects", "unknown", "--json"]],
-  ])("keeps %s errors machine-readable with --json", async (_case, argv) => {
-    const result = await execute(argv, { environment: {}, identity });
+    [
+      "missing argument",
+      ["projects", "get", "--json"],
+      "missing required argument 'id'",
+    ],
+    [
+      "unknown subcommand",
+      ["projects", "unknown", "--json"],
+      "unknown command 'unknown'",
+    ],
+    [
+      "unknown option",
+      ["tasks", "create", "--file=notes.txt", "--json"],
+      "unknown option '--file=notes.txt'",
+    ],
+    [
+      "misspelled option",
+      ["tasks", "create", "--notes-fil", "--json"],
+      "unknown option '--notes-fil'\n(Did you mean --notes-file?)",
+    ],
+  ])(
+    "keeps %s errors machine-readable with --json",
+    async (_case, argv, message) => {
+      const result = await execute(argv, { environment: {}, identity });
 
-    expect(result).toEqual({
-      stdout: "",
-      stderr:
-        '{"error":{"code":"invalid_usage","message":"Invalid command usage"}}\n',
-      exitCode: 2,
-    });
-  });
+      expect(result).toEqual({
+        stdout: "",
+        stderr: `${JSON.stringify({ error: { code: "invalid_usage", message } })}\n`,
+        exitCode: 2,
+      });
+    },
+  );
 
   test("generates completion scripts without authentication or configuration", async () => {
     const dependencies: ExecuteDependencies = {
@@ -952,7 +972,7 @@ describe("execute", () => {
     ).toEqual({
       stdout: "",
       stderr:
-        '{"error":{"code":"invalid_usage","message":"Invalid command usage"}}\n',
+        '{"error":{"code":"invalid_usage","message":"unknown command \'unknown\'"}}\n',
       exitCode: 2,
     });
   });
