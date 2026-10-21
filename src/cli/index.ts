@@ -349,6 +349,7 @@ export const execute = async (
     command.exitOverride();
     command.configureOutput(captureOutput);
     command.showHelpAfterError();
+    command.showSuggestionAfterError();
     for (const child of command.commands) configureParser(child);
   };
   configureParser(program);
@@ -375,7 +376,7 @@ export const execute = async (
       if (!argv.includes("--json") && parserStderr !== "") {
         return { stdout: "", stderr: parserStderr, exitCode: 2 };
       }
-      return usageError("Invalid command usage");
+      return usageError(error.message.replace(/^error: /, ""));
     }
     return {
       stdout: "",
