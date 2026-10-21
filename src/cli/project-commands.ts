@@ -305,8 +305,13 @@ const registerProjectSections = (
     .command("sections")
     .argument(PROJECT_ID_ARGUMENT, "project GID")
     .description("list a project's sections")
-    .addOption(new Option("--max <n>", "cap sections scanned"))
-    .option("--all", "return all sections within the scan cap")
+    .addOption(
+      new Option(
+        "--max <n>",
+        "cap sections scanned; alone does not return all",
+      ),
+    )
+    .option("--all", "return all sections within the scan cap; requires --max")
     .action(async (idArg: string, options: BoundedOptions) => {
       registration.complete(
         await runProjectSections(idArg, options, registration),
@@ -328,8 +333,16 @@ const registerProjectCustomFields = (
     .command("custom-fields")
     .argument(PROJECT_ID_ARGUMENT, "project GID")
     .description("list a project's custom-field settings")
-    .addOption(new Option("--max <n>", "cap custom-field settings scanned"))
-    .option("--all", "return all custom-field settings within the scan cap")
+    .addOption(
+      new Option(
+        "--max <n>",
+        "cap custom-field settings scanned; alone does not return all",
+      ),
+    )
+    .option(
+      "--all",
+      "return all custom-field settings within the scan cap; requires --max",
+    )
     .addHelpText(
       "after",
       "\nGlobal options:\n  --json             output JSON\n  --fields <fields>  select explicit Asana fields",
@@ -355,8 +368,13 @@ const registerProjectList = (
     .command("list")
     .description("list projects visible in a workspace")
     .addOption(new Option("--workspace <gid>", "workspace GID"))
-    .addOption(new Option("--max <n>", "cap projects scanned"))
-    .option("--all", "return all projects within the scan cap")
+    .addOption(
+      new Option(
+        "--max <n>",
+        "cap projects scanned; alone does not return all",
+      ),
+    )
+    .option("--all", "return all projects within the scan cap; requires --max")
     .action(async (options: ProjectListOptions) => {
       registration.complete(await runProjectList(options, registration));
     });

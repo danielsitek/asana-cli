@@ -55,7 +55,10 @@ export const prepareTaskListBounds = (
   options: Pick<TaskListOptions, "all" | "max">,
 ): Result<TaskListBounds, TaskListPreparationError> => {
   if (options.all && options.max === undefined) {
-    return err({ kind: "invalid_usage", message: "--all requires --max" });
+    return err({
+      kind: "invalid_usage",
+      message: "--all requires --max (e.g. --all --max 200)",
+    });
   }
   const scanCap =
     options.max === undefined

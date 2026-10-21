@@ -161,7 +161,7 @@ describe("prepareTaskCommentsRead", () => {
       {
         taskId: "123",
         options: { latest: "abc" },
-        message: "--latest requires --max",
+        message: "--latest requires --max (e.g. --latest 10 --max 200)",
       },
       {
         taskId: "123",
@@ -183,7 +183,9 @@ describe("prepareTaskCommentsRead", () => {
     const prepared = prepareTaskCommentsRead("123", { all: true });
     expect(prepared.ok).toBe(false);
     if (prepared.ok) return;
-    expect(prepared.error.message).toBe("--all requires --max");
+    expect(prepared.error.message).toBe(
+      "--all requires --max (e.g. --all --max 200)",
+    );
   });
 
   test("--all with --max removes the result cap", () => {
@@ -231,7 +233,9 @@ describe("prepareTaskCommentsRead", () => {
     const prepared = prepareTaskCommentsRead("123", { latest: "3" });
     expect(prepared.ok).toBe(false);
     if (prepared.ok) return;
-    expect(prepared.error.message).toBe("--latest requires --max");
+    expect(prepared.error.message).toBe(
+      "--latest requires --max (e.g. --latest 10 --max 200)",
+    );
   });
 
   test("--latest and --all are mutually exclusive", () => {
