@@ -92,8 +92,8 @@ export const registerTaskListCommand = (context: TaskCommandContext): void => {
     .option("--parent <id>", "list a task's direct subtasks by GID or URL")
     .option("--assignee <value>", "filter by me or a user GID")
     .option("--completed <boolean>", "filter by completed true or false")
-    .option("--max <n>", "cap tasks scanned")
-    .option("--all", "return all tasks within the scan cap")
+    .option("--max <n>", "cap tasks scanned; alone does not return all")
+    .option("--all", "return all tasks within the scan cap; requires --max")
     .action(async (options: TaskListOptions) => {
       context.complete(await runTaskList(context, options));
     });

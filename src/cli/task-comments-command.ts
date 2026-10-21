@@ -80,12 +80,12 @@ export const registerTaskCommentsCommand = (
   const command = context.tasks
     .command("comments <id>")
     .description("read task comments")
-    .option("--max <n>", "cap stories scanned")
+    .option("--max <n>", "cap stories scanned; alone does not return all")
     .option("--offset <token>", "start from an Asana offset")
-    .option("--all", "return all comments within the scan cap")
+    .option("--all", "return all comments within the scan cap; requires --max")
     .option(
       "--latest <n>",
-      "return the newest N comments after exhausting the source within --max",
+      "return the newest N comments after exhausting the source; requires --max",
     )
     .action(async (idArg: string, options: TaskCommentsOptions) => {
       context.complete(await runTaskComments(context, idArg, options));

@@ -164,7 +164,10 @@ const prepareBoundedList = (
   Readonly<{ kind: "invalid_usage"; message: string }>
 > => {
   if (options.all && options.max === undefined) {
-    return err({ kind: "invalid_usage", message: "--all requires --max" });
+    return err({
+      kind: "invalid_usage",
+      message: "--all requires --max (e.g. --all --max 200)",
+    });
   }
   const scanCap =
     options.max === undefined ? ok(DEFAULT_SCAN_CAP) : parseMax(options.max);

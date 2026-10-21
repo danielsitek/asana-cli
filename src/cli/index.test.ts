@@ -621,6 +621,51 @@ describe("execute", () => {
     },
   );
 
+  test.each([
+    ["tasks comments", ["tasks", "comments", "123"], "--all", undefined],
+    ["tasks comments latest", ["tasks", "comments", "123"], "--latest", "10"],
+    ["tasks list", ["tasks", "list", "--project", "100"], "--all", undefined],
+    ["projects sections", ["projects", "sections", "100"], "--all", undefined],
+    [
+      "projects custom-fields",
+      ["projects", "custom-fields", "100"],
+      "--all",
+      undefined,
+    ],
+    [
+      "projects list",
+      ["projects", "list", "--workspace", "100"],
+      "--all",
+      undefined,
+    ],
+  ])(
+    "makes %s bounded reads discoverable and actionable",
+    async (_case, command, option, value) => {
+      const help = await execute([...command, "--help"], {
+        environment: {},
+        identity,
+      });
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).toMatch(/requires\s+--max/);
+      expect(help.stdout).toContain("alone does not return all");
+
+      const result = await execute(
+        [...command, option, ...(value === undefined ? [] : [value]), "--json"],
+        { environment: {}, identity },
+      );
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr)).toEqual({
+        error: {
+          code: "invalid_usage",
+          message:
+            option === "--latest"
+              ? "--latest requires --max (e.g. --latest 10 --max 200)"
+              : "--all requires --max (e.g. --all --max 200)",
+        },
+      });
+    },
+  );
+
   test("renders actionable operation help for a missing argument", async () => {
     const result = await execute(["projects", "get"], {
       environment: {},

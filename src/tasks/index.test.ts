@@ -1697,7 +1697,7 @@ describe("prepareTaskListRead", () => {
       "required max before fields",
       { section: "1", all: true },
       ",",
-      "--all requires --max",
+      "--all requires --max (e.g. --all --max 200)",
     ],
     [
       "invalid max before fields",

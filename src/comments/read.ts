@@ -135,7 +135,7 @@ const prepareLatestCommentsReadMode = (
   if (options.max === undefined) {
     return err({
       kind: "invalid_usage",
-      message: "--latest requires --max",
+      message: "--latest requires --max (e.g. --latest 10 --max 200)",
     });
   }
 
@@ -155,7 +155,10 @@ const prepareAllCommentsReadMode = (
   options: TaskCommentsReadOptions,
 ): Result<PreparedTaskCommentsReadMode, CommentPreparationError> => {
   if (options.max === undefined) {
-    return err({ kind: "invalid_usage", message: "--all requires --max" });
+    return err({
+      kind: "invalid_usage",
+      message: "--all requires --max (e.g. --all --max 200)",
+    });
   }
 
   const scanCap = resolvedCommentsScanCap(options.max);
