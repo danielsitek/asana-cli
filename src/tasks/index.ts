@@ -712,23 +712,25 @@ export const DEFAULT_FIELDS = [
   "assignee.name",
 ] as const;
 
+const DIGIT_ONLY_TASK_GID = /^\d+$/;
+const LEGACY_TASK_URL = /^https:\/\/app\.asana\.com\/0\/(\d+)\/(\d+)(?:\/f)?$/;
+const CURRENT_TASK_URL =
+  /^https:\/\/app\.asana\.com\/1\/\d+\/(?:project\/\d+\/)?task\/(\d+)(?:\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/;
+
+const parseLegacyTaskUrl = (input: string): string | undefined =>
+  LEGACY_TASK_URL.exec(input)?.[2];
+
+const parseCurrentTaskUrl = (input: string): string | undefined =>
+  CURRENT_TASK_URL.exec(input)?.[1];
+
 export const parseTaskId = (input: string): Result<string, string> => {
-  if (/^\d+$/.test(input)) {
+  if (DIGIT_ONLY_TASK_GID.test(input)) {
     return ok(input);
   }
-  const match = input.match(
-    /^https:\/\/app\.asana\.com\/0\/(\d+)\/(\d+)(?:\/f)?$/,
-  );
-  if (match && typeof match[2] === "string") {
-    return ok(match[2]);
-  }
-  const currentMatch = input.match(
-    /^https:\/\/app\.asana\.com\/1\/\d+\/(?:project\/\d+\/)?task\/(\d+)(?:\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/,
-  );
-  if (currentMatch && typeof currentMatch[1] === "string") {
-    return ok(currentMatch[1]);
-  }
-  return err("Invalid task identifier");
+  const urlTaskId = parseLegacyTaskUrl(input) ?? parseCurrentTaskUrl(input);
+  return urlTaskId === undefined
+    ? err("Invalid task identifier")
+    : ok(urlTaskId);
 };
 
 export const validateFieldList = (

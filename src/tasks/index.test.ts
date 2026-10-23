@@ -268,6 +268,12 @@ describe("parseTaskId", () => {
     ["https://app.asana.com/1/111/project/222/task/333?focus=true", "333"],
     ["https://app.asana.com/1/111/task/333/f", "333"],
     ["https://app.asana.com/1/111/task/333/f?focus=true", "333"],
+    ["https://app.asana.com/1/111/task/333#comment", "333"],
+    [
+      "https://app.asana.com/1/111/project/222/task/333/f?focus=true#comment",
+      "333",
+    ],
+    ["https://app.asana.com/1/111/task/333/extra/path", "333"],
   ])("accepts current Asana task URL %s", (input, taskGid) => {
     expect(parseTaskId(input)).toEqual({ ok: true, value: taskGid });
   });
@@ -279,6 +285,8 @@ describe("parseTaskId", () => {
       "abc",
       "123a456",
       "https://app.asana.com/0/1201947864389005/1215978111726134/other",
+      "https://app.asana.com/0/1201947864389005/1215978111726134?focus=true",
+      "https://app.asana.com/0/1201947864389005/1215978111726134#comment",
       "https://app.asana.com/0/1201947864389005/list",
       "https://app.asana.com/1/111/project/222",
       "https://app.asana.com/1/111/task/",
