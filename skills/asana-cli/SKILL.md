@@ -1,7 +1,7 @@
 ---
 name: asana-cli
 description: Asana CLI (asana-cli) command reference and safety workflow — use when reading Asana workspaces, projects, tasks, or comments; writing tasks or comments; resolving configuration/aliases; or triaging an asana-cli failure.
-allowed-tools: Bash(asana-cli *) Bash(gh issue list *) Bash(gh issue create *)
+allowed-tools: Bash(asana-cli *) Bash(gh issue list *) Bash(gh issue create *) Bash(gh label list *) Bash(gh issue view *)
 ---
 
 `asana-cli` is already installed; invoke it directly. Every Asana operation goes through it — never call the Asana REST API, an SDK, a MCP, or curl to route around a missing command; that risks handling `ASANA_CLI_TOKEN` outside its one sanctioned path (the CLI never accepts the token as an argument). If a workflow needs something the CLI doesn't expose, stop and use the closest supported primitive, or follow "Filing a CLI issue" below with the `enhancement` label instead of working around it.
