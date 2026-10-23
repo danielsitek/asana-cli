@@ -1,5 +1,30 @@
 ---
 engines:
+  duplication:
+    # Keep full paths in sync with test files; wildcards do not work for duplication.
+    exclude_paths:
+      - "scripts/build.test.ts"
+      - "scripts/codacy-config.test.ts"
+      - "scripts/install.test.ts"
+      - "scripts/notify-homebrew-tap.test.ts"
+      - "scripts/package-release.test.ts"
+      - "scripts/smoke-executable.test.ts"
+      - "scripts/verify-release-tag.test.ts"
+      - "src/asana/index.test.ts"
+      - "src/cli/index.test.ts"
+      - "src/cli/skill-list-output.test.ts"
+      - "src/comments/index.test.ts"
+      - "src/completion/index.test.ts"
+      - "src/config/index.test.ts"
+      - "src/my-tasks/index.test.ts"
+      - "src/output/index.test.ts"
+      - "src/projects/index.test.ts"
+      - "src/skill/index.test.ts"
+      - "src/tasks/index.test.ts"
+      - "src/update/index.test.ts"
+      - "src/utils/project-fields.test.ts"
+      - "src/workspaces/index.test.ts"
+      - "test/smoke.test.ts"
   lizard:
     exclude_paths:
       - "**/*.test.ts"
