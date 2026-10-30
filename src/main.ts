@@ -8,7 +8,7 @@ import { checkForUpdate } from "./update/index.ts";
 declare const __APP_VERSION__: string | undefined;
 
 const version =
-  typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.10.0";
+  typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.10.1";
 const client = new AsanaHttpClient();
 const updateChecksEnabled =
   process.stderr.isTTY === true &&

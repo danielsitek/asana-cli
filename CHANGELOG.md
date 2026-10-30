@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.1
+
+- Show contextual help for a bare `tasks list` command and explain bounded
+  list flags directly in CLI help.
+- Preserve specific CLI parser failures in `--json` output instead of
+  collapsing them into generic usage errors.
+- Improve task URL parser clarity, bundled skill guidance, and Codacy
+  duplication analysis.
+
 ## 0.10.0
 
 - Accept current Asana task URLs, including URLs with project context, wherever
