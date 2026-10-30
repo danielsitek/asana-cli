@@ -355,7 +355,12 @@ export const execute = async (
   configureParser(program);
 
   try {
-    const effectiveArgv = argv.length === 0 ? ["--help"] : argv;
+    const effectiveArgv =
+      argv.length === 0
+        ? ["--help"]
+        : argv.length === 2 && argv[0] === "tasks" && argv[1] === "list"
+          ? [...argv, "--help"]
+          : argv;
     await program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
       from: "node",
     });

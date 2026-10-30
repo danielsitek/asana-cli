@@ -4199,6 +4199,31 @@ class InMemoryTaskListReader implements TaskListGateway {
 describe("tasks list command", () => {
   const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
 
+  test("renders command help when invoked without options", async () => {
+    const dependencies: ExecuteDependencies = {
+      environment: new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("authentication must not be read");
+          },
+        },
+      ),
+      identity,
+    };
+    const bare = await execute(["tasks", "list"], dependencies);
+    const explicitHelp = await execute(
+      ["tasks", "list", "--help"],
+      dependencies,
+    );
+
+    expect(bare).toEqual(explicitHelp);
+    expect(bare.exitCode).toBe(0);
+    expect(bare.stderr).toBe("");
+    expect(bare.stdout).toContain("Usage: asana-cli tasks list");
+    expect(bare.stdout).toContain("--project <gid>");
+  });
+
   test("lists tasks from a section and outputs a human-readable table", async () => {
     const reader = new InMemoryTaskListReader(
       ok({
@@ -4360,9 +4385,9 @@ describe("tasks list command", () => {
     );
   });
 
-  test("rejects a missing or multiple source before any token read", async () => {
+  test("rejects a missing source with options or multiple sources before any token read", async () => {
     const reader = new InMemoryTaskListReader();
-    const noSource = await execute(["tasks", "list"], {
+    const noSource = await execute(["tasks", "list", "--json"], {
       environment: new Proxy(
         {},
         {
@@ -4376,7 +4401,12 @@ describe("tasks list command", () => {
       ),
       taskListReader: reader,
     });
-    expect(noSource.exitCode).toBe(2);
+    expect(noSource).toEqual({
+      stdout: "",
+      stderr:
+        '{"error":{"code":"invalid_usage","message":"Exactly one of --my-section, --section, --project, or --parent is required"}}\n',
+      exitCode: 2,
+    });
 
     const multipleSources = await execute(
       ["tasks", "list", "--section", "1", "--project", "2"],
