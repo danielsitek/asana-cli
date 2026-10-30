@@ -77,6 +77,29 @@ const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
   };
 };
 
+const appendUpdateNotice = async (
+  execution: Execution,
+  dependencies: ExecuteDependencies,
+  skipUpdateCheck: boolean,
+): Promise<Execution> => {
+  if (
+    execution.exitCode !== 0 ||
+    skipUpdateCheck ||
+    !dependencies.checkForUpdate
+  ) {
+    return execution;
+  }
+
+  try {
+    const notice = await dependencies.checkForUpdate();
+    return notice
+      ? { ...execution, stderr: execution.stderr + renderUpdateNotice(notice) }
+      : execution;
+  } catch {
+    return execution;
+  }
+};
+
 export const execute = async (
   argv: readonly string[],
   dependencies: ExecuteDependencies,
@@ -370,10 +393,18 @@ export const execute = async (
         error.code === "commander.helpDisplayed" ||
         error.code === "commander.version"
       ) {
-        return { stdout: parserStdout, stderr: "", exitCode: 0 };
+        return appendUpdateNotice(
+          { stdout: parserStdout, stderr: "", exitCode: 0 },
+          dependencies,
+          skipUpdateCheck,
+        );
       }
       if (error.code === "commander.help") {
-        return { stdout: parserStderr, stderr: "", exitCode: 0 };
+        return appendUpdateNotice(
+          { stdout: parserStderr, stderr: "", exitCode: 0 },
+          dependencies,
+          skipUpdateCheck,
+        );
       }
       if (error.code === "commander.fieldsNotSupported") {
         return usageError(error.message);
@@ -397,20 +428,5 @@ export const execute = async (
     (invokedState.value
       ? usageError("Command did not complete")
       : usageError("A command is required"));
-  if (
-    execution.exitCode !== 0 ||
-    skipUpdateCheck ||
-    !dependencies.checkForUpdate
-  ) {
-    return execution;
-  }
-
-  try {
-    const notice = await dependencies.checkForUpdate();
-    return notice
-      ? { ...execution, stderr: execution.stderr + renderUpdateNotice(notice) }
-      : execution;
-  } catch {
-    return execution;
-  }
+  return appendUpdateNotice(execution, dependencies, skipUpdateCheck);
 };
