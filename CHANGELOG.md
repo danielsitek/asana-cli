@@ -3,6 +3,10 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.2
+
+- Show update notices after successful help and version output.
+
 ## 0.10.1
 
 - Show contextual help for a bare `tasks list` command and explain bounded
