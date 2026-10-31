@@ -238,13 +238,27 @@ export const installSkill = async (
     : written;
 };
 
-const requireInstalledTarget = async (
+type InstalledSkillTarget = Readonly<{ agent: SkillAgent; path: string }>;
+
+const mutationFor = (
+  target: InstalledSkillTarget,
+  scope: SkillScope,
+  action: SkillMutation["action"],
+): SkillMutation => ({
+  agent: target.agent,
+  scope,
+  path: target.path,
+  action,
+});
+
+const withInstalledTarget = async (
   context: SkillContext,
   agent: string,
   scope: SkillScope,
-): Promise<
-  Result<Readonly<{ agent: SkillAgent; path: string }>, SkillError>
-> => {
+  mutate: (
+    target: InstalledSkillTarget,
+  ) => Promise<Result<SkillMutation, SkillError>>,
+): Promise<Result<SkillMutation, SkillError>> => {
   const entry = requireAgent(agent);
   if (!entry.ok) return entry;
   const path = targetPath(context, entry.value, scope);
@@ -256,26 +270,18 @@ const requireInstalledTarget = async (
       message: `The asana-cli skill is not installed for ${entry.value.name} (${scope})`,
     });
   }
-  return ok({ agent: entry.value.name, path });
+  return mutate({ agent: entry.value.name, path });
 };
 
 export const updateSkill = async (
   context: SkillContext,
   agent: string,
   scope: SkillScope,
-): Promise<Result<SkillMutation, SkillError>> => {
-  const target = await requireInstalledTarget(context, agent, scope);
-  if (!target.ok) return target;
-  const written = await replaceFile(target.value.path, bundledSkill);
-  return written.ok
-    ? ok({
-        agent: target.value.agent,
-        scope,
-        path: target.value.path,
-        action: "updated",
-      })
-    : written;
-};
+): Promise<Result<SkillMutation, SkillError>> =>
+  withInstalledTarget(context, agent, scope, async (target) => {
+    const written = await replaceFile(target.path, bundledSkill);
+    return written.ok ? ok(mutationFor(target, scope, "updated")) : written;
+  });
 
 export const updateAllSkills = async (
   context: SkillContext,
@@ -316,28 +322,22 @@ export const uninstallSkill = async (
   context: SkillContext,
   agent: string,
   scope: SkillScope,
-): Promise<Result<SkillMutation, SkillError>> => {
-  const target = await requireInstalledTarget(context, agent, scope);
-  if (!target.ok) return target;
-  try {
-    await rm(target.value.path);
-    await rmdir(dirname(target.value.path)).catch((error: unknown) => {
-      if (
-        typeof error !== "object" ||
-        error === null ||
-        !("code" in error) ||
-        (error.code !== "ENOTEMPTY" && error.code !== "ENOENT")
-      ) {
-        throw error;
-      }
-    });
-    return ok({
-      agent: target.value.agent,
-      scope,
-      path: target.value.path,
-      action: "uninstalled",
-    });
-  } catch {
-    return err(filesystemError("uninstall"));
-  }
-};
+): Promise<Result<SkillMutation, SkillError>> =>
+  withInstalledTarget(context, agent, scope, async (target) => {
+    try {
+      await rm(target.path);
+      await rmdir(dirname(target.path)).catch((error: unknown) => {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          (error.code !== "ENOTEMPTY" && error.code !== "ENOENT")
+        ) {
+          throw error;
+        }
+      });
+      return ok(mutationFor(target, scope, "uninstalled"));
+    } catch {
+      return err(filesystemError("uninstall"));
+    }
+  });
