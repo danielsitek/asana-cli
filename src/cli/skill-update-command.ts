@@ -1,12 +1,14 @@
 import { updateAllSkills, updateSkill } from "../skill/index.ts";
-import { withCommandCapabilities } from "./capabilities.ts";
 import {
-  renderMutation,
   renderSkillError,
   renderUpdateAll,
   scopeFrom,
   type SkillCommandContext,
 } from "./skill-command-context.ts";
+import {
+  completeSkillMutation,
+  configureSkillMutationCommand,
+} from "./skill-mutation-command.ts";
 
 export const registerSkillUpdateCommand = (
   context: SkillCommandContext,
@@ -30,16 +32,7 @@ export const registerSkillUpdateCommand = (
         return;
       }
       const updated = await updateSkill(invocation.context, agent, scope);
-      context.complete(
-        updated.ok
-          ? renderMutation(updated.value, invocation.json)
-          : renderSkillError(updated.error),
-      );
+      completeSkillMutation(context, updated, invocation.json);
     });
-  withCommandCapabilities(command, {
-    operation: "write",
-    requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2, 6],
-  });
-  command.exitOverride();
+  configureSkillMutationCommand(command);
 };
