@@ -5468,6 +5468,48 @@ describe("skill commands", () => {
     });
   });
 
+  test("updates and uninstalls one skill with human and JSON output", async () => {
+    const commandDependencies = await dependencies();
+    const path = join(
+      commandDependencies.configuration?.cwd ?? "",
+      ".agents",
+      "skills",
+      "asana-cli",
+      "SKILL.md",
+    );
+    const installed = await execute(
+      ["skill", "install", "universal", "--local"],
+      commandDependencies,
+    );
+    expect(installed).toEqual({
+      stdout: `installed universal skill (local): ${path}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    await writeFile(path, "outdated skill\n");
+    const updated = await execute(
+      ["skill", "update", "universal", "--local", "--json"],
+      commandDependencies,
+    );
+    expect(updated).toEqual({
+      stdout: `${JSON.stringify({ data: { agent: "universal", scope: "local", path, action: "updated" }, meta: {} })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(await readFile(path, "utf8")).toBe(bundledSkillContents());
+
+    const removed = await execute(
+      ["skill", "uninstall", "universal", "--local"],
+      commandDependencies,
+    );
+    expect(removed).toEqual({
+      stdout: `uninstalled universal skill (local): ${path}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
   test("reports state and agent errors as JSON on stderr", async () => {
     const commandDependencies = await dependencies();
     const installed = await execute(

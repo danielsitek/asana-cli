@@ -1,11 +1,12 @@
 import { installSkill } from "../skill/index.ts";
-import { withCommandCapabilities } from "./capabilities.ts";
 import {
-  renderMutation,
-  renderSkillError,
   scopeFrom,
   type SkillCommandContext,
 } from "./skill-command-context.ts";
+import {
+  completeSkillMutation,
+  configureSkillMutationCommand,
+} from "./skill-mutation-command.ts";
 
 type InstallOptions = Readonly<{ local?: boolean; force?: boolean }>;
 
@@ -27,16 +28,7 @@ export const registerSkillInstallCommand = (
         scopeFrom(options.local),
         options.force ?? false,
       );
-      context.complete(
-        installed.ok
-          ? renderMutation(installed.value, invocation.json)
-          : renderSkillError(installed.error),
-      );
+      completeSkillMutation(context, installed, invocation.json);
     });
-  withCommandCapabilities(command, {
-    operation: "write",
-    requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2, 6],
-  });
-  command.exitOverride();
+  configureSkillMutationCommand(command);
 };

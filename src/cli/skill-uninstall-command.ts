@@ -1,11 +1,12 @@
 import { uninstallSkill } from "../skill/index.ts";
-import { withCommandCapabilities } from "./capabilities.ts";
 import {
-  renderMutation,
-  renderSkillError,
   scopeFrom,
   type SkillCommandContext,
 } from "./skill-command-context.ts";
+import {
+  completeSkillMutation,
+  configureSkillMutationCommand,
+} from "./skill-mutation-command.ts";
 
 export const registerSkillUninstallCommand = (
   context: SkillCommandContext,
@@ -23,16 +24,7 @@ export const registerSkillUninstallCommand = (
         agent,
         scopeFrom(options.local),
       );
-      context.complete(
-        removed.ok
-          ? renderMutation(removed.value, invocation.json)
-          : renderSkillError(removed.error),
-      );
+      completeSkillMutation(context, removed, invocation.json);
     });
-  withCommandCapabilities(command, {
-    operation: "write",
-    requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2, 6],
-  });
-  command.exitOverride();
+  configureSkillMutationCommand(command);
 };

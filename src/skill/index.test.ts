@@ -188,6 +188,23 @@ describe("bundled skill mutations", () => {
     });
   });
 
+  test("preserves target errors for update and uninstall", async () => {
+    const context = await createContext();
+    for (const operation of [updateSkill, uninstallSkill]) {
+      expect(await operation(context, "cursor", "global")).toEqual({
+        ok: false,
+        error: {
+          kind: "not_installed",
+          message: "The asana-cli skill is not installed for cursor (global)",
+        },
+      });
+      expect(await operation(context, "unknown", "local")).toMatchObject({
+        ok: false,
+        error: { kind: "unknown_agent" },
+      });
+    }
+  });
+
   test("updates installed targets and skips absent targets for all", async () => {
     const context = await createContext();
     const universalPath = localUniversalPath(context);
