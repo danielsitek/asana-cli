@@ -10,6 +10,19 @@ import {
   initializeLocalConfigWorkflow,
   type MyTasksDiscoveryGateway,
 } from "./local-initialization.ts";
+import {
+  effectiveConfigSchema,
+  globalConfigSchema,
+  isObject,
+  localConfigSchema,
+  sharedConfigSchema,
+  validationMessage,
+  type Config,
+  type ConfigError,
+  type JsonObject,
+} from "./schema.ts";
+
+export type { Config, ConfigError } from "./schema.ts";
 
 export type {
   DiscoveredCustomField,
@@ -24,47 +37,6 @@ export type {
   StageFailureError,
 } from "./local-initialization.ts";
 
-const gid = z.string().regex(/^\d+$/, "must be a digit-only GID");
-const gidMap = z.record(z.string().min(1), gid);
-const workspace = z.object({ gid }).strict();
-const project = z
-  .object({
-    gid: gid.optional(),
-    sections: gidMap.optional(),
-  })
-  .strict();
-const team = z.object({ gid }).strict();
-const network = z
-  .object({
-    concurrency: z.number().int().positive().optional(),
-    maxRetries: z.number().int().nonnegative().optional(),
-    requestTimeoutMs: z.number().int().positive().optional(),
-  })
-  .strict();
-const myTasks = z
-  .object({
-    userTaskListGid: gid.optional(),
-    sections: gidMap.optional(),
-    customFields: gidMap.optional(),
-  })
-  .strict();
-const assigneeDefault = z.union([z.literal("me"), gid]);
-
-const sharedConfigSchema = z
-  .object({
-    workspace: workspace.optional(),
-    project: project.optional(),
-    team: team.optional(),
-    network: network.optional(),
-  })
-  .strict();
-const localConfigSchema = sharedConfigSchema.extend({
-  myTasks: myTasks.optional(),
-  defaultAssignee: assigneeDefault.optional(),
-});
-const globalConfigSchema = sharedConfigSchema;
-const effectiveConfigSchema = localConfigSchema;
-
 const builtInConfig = {
   network: {
     concurrency: 4,
@@ -73,7 +45,6 @@ const builtInConfig = {
   },
 } satisfies Config;
 
-export type Config = z.infer<typeof effectiveConfigSchema>;
 export type ConfigLayer = "global" | "shared" | "local";
 export type ConfigSourceLayer = "built-in" | ConfigLayer;
 
@@ -102,16 +73,6 @@ export type ResolvedConfig = Readonly<{
     gitRoot?: string;
   }>;
 }>;
-
-export type ConfigError = Readonly<{
-  kind: "configuration";
-  message: string;
-}>;
-
-type JsonObject = Record<string, unknown>;
-
-const isObject = (value: unknown): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const existsAsGitMarker = async (path: string): Promise<boolean> => {
   try {
@@ -144,49 +105,6 @@ const globalConfigPath = (context: ConfigContext): string =>
     "asana-cli",
     "config.json",
   );
-
-const hasSecretShapedKey = (
-  value: unknown,
-  path: readonly string[] = [],
-): string | undefined => {
-  if (!isObject(value)) return undefined;
-  for (const [key, child] of Object.entries(value)) {
-    const childPath = [...path, key];
-    if (/token/i.test(key) || /^pat$/i.test(key)) return childPath.join(".");
-    const nested = hasSecretShapedKey(child, childPath);
-    if (nested) return nested;
-  }
-  return undefined;
-};
-
-const issuePath = (issue: z.core.$ZodIssue): string =>
-  issue.path.length === 0 ? "<root>" : issue.path.join(".");
-
-const validationMessage = (
-  path: string,
-  value: unknown,
-  schema: z.ZodType,
-): Result<JsonObject, ConfigError> => {
-  const secretPath = hasSecretShapedKey(value);
-  if (secretPath) {
-    return err({
-      kind: "configuration",
-      message: `${path}: ${secretPath} is forbidden; authentication secrets cannot be stored in config`,
-    });
-  }
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const detail = issue
-      ? `${issuePath(issue)}: ${issue.message}`
-      : "invalid configuration";
-    return err({
-      kind: "configuration",
-      message: `${path}: ${detail}`,
-    });
-  }
-  return ok(parsed.data as JsonObject);
-};
 
 const readLayer = async (
   path: string,
