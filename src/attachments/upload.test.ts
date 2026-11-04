@@ -123,4 +123,67 @@ describe("attachment upload", () => {
       },
     });
   });
+
+  test("appends an inline image after reading the existing description", async () => {
+    const image = await fixture("capture.png");
+    const prepared = await prepareAttachmentUpload("42", {
+      file: image,
+      inline: true,
+      name: "New capture.png",
+    });
+    if (!prepared.ok) throw new Error("fixture failed");
+    const writes: string[] = [];
+    const reader: TaskGateway = {
+      getTask: async () => ok({ html_notes: "<body><p>Existing</p></body>" }),
+    };
+    const writer: AttachmentWriteGateway = {
+      uploadTaskAttachment: async (_token, _id, file) => {
+        expect(file.name).toBe("New capture.png");
+        return ok({
+          gid: "7",
+          name: file.name,
+          size: file.bytes.byteLength,
+          content_type: file.contentType,
+        });
+      },
+      setTaskHtmlNotes: async (_token, _id, html) => {
+        writes.push(html);
+        return ok(undefined);
+      },
+    };
+    const result = await executeAttachmentUpload(
+      "token",
+      prepared.value,
+      reader,
+      writer,
+    );
+    expect(result.ok).toBe(true);
+    expect(writes).toEqual([
+      '<body><p>Existing</p><img data-asana-gid="7"></body>',
+    ]);
+  });
+
+  test("rejects malformed existing HTML before uploading", async () => {
+    const image = await fixture("capture.png");
+    const prepared = await prepareAttachmentUpload("42", {
+      file: image,
+      inline: true,
+    });
+    if (!prepared.ok) throw new Error("fixture failed");
+    const reader: TaskGateway = {
+      getTask: async () => ok({ html_notes: "no body wrapper" }),
+    };
+    const writer: AttachmentWriteGateway = {
+      uploadTaskAttachment: async () => {
+        throw new Error("upload called");
+      },
+      setTaskHtmlNotes: async () => {
+        throw new Error("write called");
+      },
+    };
+    expect(
+      (await executeAttachmentUpload("token", prepared.value, reader, writer))
+        .ok,
+    ).toBe(false);
+  });
 });
