@@ -5,6 +5,7 @@ import {
   type TaskReadError,
 } from "../tasks/index.ts";
 import { prepareTaskListBounds } from "../tasks/task-list-preparation.ts";
+import { projectFields } from "../utils/project-fields.ts";
 
 export const DEFAULT_ATTACHMENT_FIELDS = [
   "gid",
@@ -16,6 +17,30 @@ export const DEFAULT_ATTACHMENT_FIELDS = [
 ] as const;
 
 export type Attachment = Readonly<Record<string, unknown>>;
+
+export const selectAttachment = (
+  value: Attachment,
+  fields: readonly string[],
+): Attachment => {
+  const selected: Record<string, unknown> = {};
+  for (const field of fields) {
+    const projected = projectFields(value, [field]);
+    if (!projected.found) continue;
+    for (const [key, entry] of Object.entries(projected.value)) {
+      const existing = selected[key];
+      selected[key] =
+        existing !== null &&
+        entry !== null &&
+        typeof existing === "object" &&
+        typeof entry === "object" &&
+        !Array.isArray(existing) &&
+        !Array.isArray(entry)
+          ? { ...existing, ...entry }
+          : entry;
+    }
+  }
+  return selected;
+};
 
 export interface AttachmentGateway {
   listTaskAttachments(
@@ -109,7 +134,11 @@ export const executeAttachmentList = async (
       ...(offset === undefined ? {} : { offset }),
     });
     if (!page.ok) return page;
-    attachments.push(...page.value.attachments);
+    attachments.push(
+      ...page.value.attachments.map((attachment) =>
+        selectAttachment(attachment, prepared.fields),
+      ),
+    );
     scanned += page.value.attachments.length;
     nextOffset = page.value.nextOffset;
     if (nextOffset === undefined) break;

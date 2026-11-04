@@ -16,6 +16,7 @@ import {
 import type { Result } from "../shared/result.ts";
 import { renderUpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
+import { registerAttachmentCommands } from "./attachment-commands.ts";
 import {
   capabilitiesForProgram,
   withCommandCapabilities,
@@ -235,6 +236,20 @@ export const execute = async (
       json = program.opts<{ json?: boolean }>().json ?? false;
       const fields = program.opts<{ fields?: string }>().fields;
       return { json, ...(fields === undefined ? {} : { fields }) };
+    },
+    complete: stopWith,
+    requireToken: () => requireToken(dependencies),
+    usageError,
+    outputConfiguration: captureOutput,
+  });
+
+  registerAttachmentCommands({
+    program,
+    dependencies,
+    beginCommand: () => {
+      invokedState.value = true;
+      json = program.opts<{ json?: boolean }>().json ?? false;
+      return { json };
     },
     complete: stopWith,
     requireToken: () => requireToken(dependencies),

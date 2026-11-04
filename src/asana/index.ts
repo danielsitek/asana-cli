@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { Attachment, AttachmentGateway } from "../attachments/index.ts";
+import {
+  selectAttachment,
+  type Attachment,
+  type AttachmentGateway,
+} from "../attachments/index.ts";
 
 import type {
   Comment,
@@ -385,24 +389,6 @@ const attachmentPageSchema = z.object({
     .optional(),
 });
 
-const selectedAttachment = (
-  value: z.infer<typeof attachmentSchema>,
-  fields: readonly string[],
-): Attachment => {
-  const selected: Record<string, unknown> = {};
-  for (const field of fields) {
-    const projected = projectFields(value, [field]);
-    if (!projected.found) continue;
-    for (const [key, entry] of Object.entries(projected.value)) {
-      selected[key] =
-        isRecord(selected[key]) && isRecord(entry)
-          ? { ...selected[key], ...entry }
-          : entry;
-    }
-  }
-  return selected;
-};
-
 const workspaceSchema = z
   .custom<Workspace>(
     (value) =>
@@ -704,7 +690,7 @@ export class AsanaHttpClient
       return err(mapTaskReadError(result.error, "Task not found"));
     return ok({
       attachments: result.value.data.map((attachment) =>
-        selectedAttachment(attachment, options.fields),
+        selectAttachment(attachment, options.fields),
       ),
       ...(result.value.next_page?.offset === undefined
         ? {}

@@ -5,6 +5,7 @@ const FIELD_SELECTING_COMMANDS = new Set([
   "tasks/update",
   "tasks/create",
   "tasks/list",
+  "tasks/attachments",
   "projects/get",
   "projects/sections",
   "projects/custom-fields",
