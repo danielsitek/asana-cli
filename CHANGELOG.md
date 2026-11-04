@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.11.0
+
+- Add bounded task attachment listing and safe streamed downloads using fresh
+  signed URLs without exposing Asana credentials.
+- Add authenticated task attachment uploads, including inline image insertion
+  into rich task notes and explicit partial-write reporting.
+- Improve configuration and bundled skill mutation maintainability.
+
 ## 0.10.2
 
 - Show update notices after successful help and version output.
