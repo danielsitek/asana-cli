@@ -15,6 +15,65 @@ const serverFor = (
 };
 
 describe("AsanaHttpClient", () => {
+  test("lists task attachments and keeps signed URLs out of default output", async () => {
+    const baseUrl = serverFor((request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/1.0/attachments");
+      expect(url.searchParams.get("parent")).toBe("42");
+      expect(url.searchParams.get("limit")).toBe("20");
+      expect(request.headers.get("authorization")).toBe("Bearer token");
+      return Response.json({
+        data: [
+          {
+            gid: "7",
+            name: "image.png",
+            resource_subtype: "asana",
+            parent: { gid: "42" },
+            download_url: "https://example.com/signed",
+          },
+        ],
+        next_page: null,
+      });
+    });
+    const result = await new AsanaHttpClient({ baseUrl }).listTaskAttachments(
+      "token",
+      "42",
+      {
+        fields: ["gid", "name", "size", "parent.gid"],
+        limit: 20,
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        attachments: [{ gid: "7", name: "image.png", parent: { gid: "42" } }],
+      },
+    });
+  });
+
+  test("requests a fresh attachment download URL by GID", async () => {
+    const baseUrl = serverFor((request) => {
+      expect(new URL(request.url).pathname).toBe("/api/1.0/attachments/7");
+      return Response.json({
+        data: {
+          gid: "7",
+          name: "image.png",
+          resource_subtype: "asana",
+          download_url: "https://example.com/signed",
+        },
+      });
+    });
+    expect(
+      await new AsanaHttpClient({ baseUrl }).getAttachment("token", "7"),
+    ).toEqual({
+      ok: true,
+      value: {
+        gid: "7",
+        name: "image.png",
+        download_url: "https://example.com/signed",
+      },
+    });
+  });
   test("gets the authenticated user with Asana authorization", async () => {
     const baseUrl = serverFor((request) => {
       expect(request.headers.get("authorization")).toBe("Bearer top-secret");

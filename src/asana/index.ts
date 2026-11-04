@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Attachment, AttachmentGateway } from "../attachments/index.ts";
 
 import type {
   Comment,
@@ -359,6 +360,49 @@ const buildTaskListPageSchema = (fields: readonly string[]) =>
       .optional(),
   });
 
+const attachmentSchema = z
+  .object({
+    gid: z.string().regex(/^\d+$/),
+    name: z.string(),
+    resource_subtype: z.string(),
+    size: z.number().nonnegative().nullable().optional(),
+    created_at: z.string().optional(),
+    parent: z
+      .object({ gid: z.string().regex(/^\d+$/) })
+      .passthrough()
+      .nullable()
+      .optional(),
+    download_url: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const attachmentPageSchema = z.object({
+  data: z.array(attachmentSchema),
+  next_page: z
+    .object({ offset: z.string() })
+    .passthrough()
+    .nullable()
+    .optional(),
+});
+
+const selectedAttachment = (
+  value: z.infer<typeof attachmentSchema>,
+  fields: readonly string[],
+): Attachment => {
+  const selected: Record<string, unknown> = {};
+  for (const field of fields) {
+    const projected = projectFields(value, [field]);
+    if (!projected.found) continue;
+    for (const [key, entry] of Object.entries(projected.value)) {
+      selected[key] =
+        isRecord(selected[key]) && isRecord(entry)
+          ? { ...selected[key], ...entry }
+          : entry;
+    }
+  }
+  return selected;
+};
+
 const workspaceSchema = z
   .custom<Workspace>(
     (value) =>
@@ -569,6 +613,7 @@ const discoveredCustomFields = (
 
 export class AsanaHttpClient
   implements
+    AttachmentGateway,
     IdentityGateway,
     MyTasksDiscoveryGateway,
     MyTaskSectionsDiscoveryGateway,
@@ -612,6 +657,86 @@ export class AsanaHttpClient
     );
     if (!result.ok) return result;
     return ok({ gid: result.value.data.gid, name: result.value.data.name });
+  }
+
+  async listTaskAttachments(
+    token: string,
+    taskId: string,
+    options: Readonly<{
+      fields: readonly string[];
+      limit: number;
+      offset?: string;
+    }>,
+  ): Promise<
+    Result<
+      Readonly<{ attachments: readonly Attachment[]; nextOffset?: string }>,
+      TaskReadError
+    >
+  > {
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100
+    ) {
+      return err({
+        kind: "invalid_response",
+        message: "Attachment page limit must be between 1 and 100",
+      });
+    }
+    const fields = [
+      ...new Set(["gid", "name", "resource_subtype", ...options.fields]),
+    ];
+    const result = await this.#request(
+      token,
+      "attachments",
+      {
+        method: "GET",
+        searchParams: {
+          parent: taskId,
+          limit: String(options.limit),
+          opt_fields: fields.join(","),
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
+        },
+      },
+      attachmentPageSchema,
+    );
+    if (!result.ok)
+      return err(mapTaskReadError(result.error, "Task not found"));
+    return ok({
+      attachments: result.value.data.map((attachment) =>
+        selectedAttachment(attachment, options.fields),
+      ),
+      ...(result.value.next_page?.offset === undefined
+        ? {}
+        : { nextOffset: result.value.next_page.offset }),
+    });
+  }
+
+  async getAttachment(
+    token: string,
+    gid: string,
+  ): Promise<
+    Result<
+      Readonly<{ gid: string; name: string; download_url: string | null }>,
+      TaskReadError
+    >
+  > {
+    const result = await this.#request(
+      token,
+      `attachments/${gid}`,
+      {
+        method: "GET",
+        searchParams: { opt_fields: "gid,name,resource_subtype,download_url" },
+      },
+      z.object({ data: attachmentSchema }),
+    );
+    if (!result.ok)
+      return err(mapTaskReadError(result.error, "Attachment not found"));
+    return ok({
+      gid: result.value.data.gid,
+      name: result.value.data.name,
+      download_url: result.value.data.download_url ?? null,
+    });
   }
 
   async listWorkspaces(
