@@ -92,14 +92,14 @@ describe("attachment commands", () => {
         resource_subtype: "asana",
       },
     ]);
-    expect(
-      (
-        await execute(
-          ["tasks", "attachments", "42", "--fields=download_url", "--json"],
-          dependencies,
-        )
-      ).exitCode,
-    ).toBe(0);
+    const explicit = await execute(
+      ["tasks", "attachments", "42", "--fields=download_url", "--json"],
+      dependencies,
+    );
+    expect(explicit.exitCode).toBe(0);
+    expect(JSON.parse(explicit.stdout).data).toEqual([
+      { download_url: "https://example.com/signed" },
+    ]);
   });
 
   test("downloads through CLI with a JSON result and refuses overwrite", async () => {

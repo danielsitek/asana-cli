@@ -83,6 +83,29 @@ describe("attachment download", () => {
     expect(await readFile(out, "utf8")).toBe("new");
   });
 
+  test("writes every chunk of a streamed response", async () => {
+    const out = join(await directory(), "stream.bin");
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("first"));
+          controller.enqueue(new TextEncoder().encode("second"));
+          controller.close();
+        },
+      }),
+    );
+    const downloaded = await downloadAttachment(
+      "secret",
+      "7",
+      out,
+      false,
+      reader,
+      async () => response,
+    );
+    expect(downloaded.ok).toBe(true);
+    expect(await readFile(out, "utf8")).toBe("firstsecond");
+  });
+
   test("does not write when no download URL exists", async () => {
     const out = join(await directory(), "file.bin");
     const unavailable: AttachmentGateway = {
