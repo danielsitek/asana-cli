@@ -61,14 +61,14 @@ const inlineMode = (
             message: "--inline must be append or prepend",
           });
 
-export const prepareAttachmentUpload = async (
-  taskIdInput: string,
-  options: Readonly<{ file: string; name?: string; inline?: string | boolean }>,
-): Promise<Result<PreparedUpload, AttachmentUploadError>> => {
-  const task = parseTaskId(taskIdInput);
-  if (!task.ok) return err({ kind: "invalid_usage", message: task.error });
-  const inline = inlineMode(options.inline);
-  if (!inline.ok) return inline;
+const loadAttachmentFile = async (
+  options: Readonly<{ file: string; name?: string }>,
+): Promise<
+  Result<
+    Pick<PreparedUpload, "name" | "bytes" | "contentType">,
+    AttachmentUploadError
+  >
+> => {
   const name = options.name ?? basename(options.file);
   if (
     name.trim() === "" ||
@@ -105,7 +105,20 @@ export const prepareAttachmentUpload = async (
     });
   }
   const contentType = Bun.file(options.file).type;
-  if (inline.value && !contentType.startsWith("image/")) {
+  return ok({ name, bytes, contentType });
+};
+
+export const prepareAttachmentUpload = async (
+  taskIdInput: string,
+  options: Readonly<{ file: string; name?: string; inline?: string | boolean }>,
+): Promise<Result<PreparedUpload, AttachmentUploadError>> => {
+  const task = parseTaskId(taskIdInput);
+  if (!task.ok) return err({ kind: "invalid_usage", message: task.error });
+  const inline = inlineMode(options.inline);
+  if (!inline.ok) return inline;
+  const file = await loadAttachmentFile(options);
+  if (!file.ok) return file;
+  if (inline.value && !file.value.contentType.startsWith("image/")) {
     return err({
       kind: "invalid_usage",
       message: "--inline requires an image file",
@@ -113,9 +126,7 @@ export const prepareAttachmentUpload = async (
   }
   return ok({
     taskId: task.value,
-    name,
-    bytes,
-    contentType,
+    ...file.value,
     ...(inline.value ? { inline: inline.value } : {}),
   });
 };
@@ -139,40 +150,50 @@ export const insertInlineImage = (
   return ok(html.slice(0, insertion) + image + html.slice(insertion));
 };
 
+const readInlineNotes = async (
+  token: string,
+  prepared: PreparedUpload,
+  reader: TaskGateway | undefined,
+): Promise<Result<string | undefined, AttachmentUploadError>> => {
+  if (!prepared.inline) return ok(undefined);
+  if (!reader)
+    return err({
+      kind: "internal_error",
+      message: "Task reader is required for inline uploads",
+    });
+  const task = await reader.getTask(token, prepared.taskId, ["html_notes"]);
+  if (!task.ok) return task;
+  if (typeof task.value.html_notes !== "string") {
+    return err({
+      kind: "invalid_response",
+      message: "Task html_notes is missing",
+    });
+  }
+  const checked = insertInlineImage(
+    task.value.html_notes,
+    "1",
+    prepared.inline,
+  );
+  return checked.ok ? ok(task.value.html_notes) : checked;
+};
+
 export const executeAttachmentUpload = async (
   token: string,
   prepared: PreparedUpload,
   reader: TaskGateway | undefined,
   writer: AttachmentWriteGateway,
 ): Promise<Result<UploadedAttachment, AttachmentUploadError>> => {
-  let htmlNotes: string | undefined;
-  if (prepared.inline) {
-    if (!reader)
-      return err({
-        kind: "internal_error",
-        message: "Task reader is required for inline uploads",
-      });
-    const task = await reader.getTask(token, prepared.taskId, ["html_notes"]);
-    if (!task.ok) return task;
-    if (typeof task.value.html_notes !== "string") {
-      return err({
-        kind: "invalid_response",
-        message: "Task html_notes is missing",
-      });
-    }
-    htmlNotes = task.value.html_notes;
-    const checked = insertInlineImage(htmlNotes, "1", prepared.inline);
-    if (!checked.ok) return checked;
-  }
+  const notes = await readInlineNotes(token, prepared, reader);
+  if (!notes.ok) return notes;
   const uploaded = await writer.uploadTaskAttachment(
     token,
     prepared.taskId,
     prepared,
   );
   if (!uploaded.ok) return uploaded;
-  if (!prepared.inline || htmlNotes === undefined) return uploaded;
+  if (!prepared.inline || notes.value === undefined) return uploaded;
   const updated = insertInlineImage(
-    htmlNotes,
+    notes.value,
     uploaded.value.gid,
     prepared.inline,
   );
