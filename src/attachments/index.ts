@@ -18,6 +18,23 @@ export const DEFAULT_ATTACHMENT_FIELDS = [
 
 export type Attachment = Readonly<Record<string, unknown>>;
 
+export type PreparedAttachmentList = Readonly<{
+  taskId: string;
+  fields: readonly string[];
+  scanCap: number;
+  resultCap?: number;
+}>;
+
+export type AttachmentListResult = Readonly<{
+  attachments: readonly Attachment[];
+  meta: Readonly<{
+    scanned: number;
+    returned: number;
+    scan_truncated: boolean;
+    next_offset?: string;
+  }>;
+}>;
+
 export const selectAttachment = (
   value: Attachment,
   fields: readonly string[],
@@ -71,15 +88,7 @@ export interface AttachmentGateway {
 export const prepareAttachmentList = (
   id: string,
   options: Readonly<{ fields?: string; max?: string; all?: boolean }>,
-): Result<
-  Readonly<{
-    taskId: string;
-    fields: readonly string[];
-    scanCap: number;
-    resultCap?: number;
-  }>,
-  Readonly<{ message: string }>
-> => {
+): Result<PreparedAttachmentList, Readonly<{ message: string }>> => {
   const task = parseTaskId(id);
   if (!task.ok) return err({ message: task.error });
   const bounds = prepareTaskListBounds(options);
@@ -94,27 +103,9 @@ export const prepareAttachmentList = (
 
 export const executeAttachmentList = async (
   token: string,
-  prepared: Readonly<{
-    taskId: string;
-    fields: readonly string[];
-    scanCap: number;
-    resultCap?: number;
-  }>,
+  prepared: PreparedAttachmentList,
   reader: AttachmentGateway,
-): Promise<
-  Result<
-    Readonly<{
-      attachments: readonly Attachment[];
-      meta: Readonly<{
-        scanned: number;
-        returned: number;
-        scan_truncated: boolean;
-        next_offset?: string;
-      }>;
-    }>,
-    TaskReadError
-  >
-> => {
+): Promise<Result<AttachmentListResult, TaskReadError>> => {
   const attachments: Attachment[] = [];
   let scanned = 0;
   let offset: string | undefined;

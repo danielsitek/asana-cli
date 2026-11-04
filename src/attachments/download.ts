@@ -37,6 +37,127 @@ const safeName = (name: string): string => {
     : sanitized;
 };
 
+const downloadUrl = (
+  value: string | null,
+): Result<URL, AttachmentDownloadError> => {
+  if (value === null)
+    return err({
+      kind: "api",
+      message: "This attachment has no downloadable URL",
+    });
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      ? ok(url)
+      : err({
+          kind: "invalid_response",
+          message: "Asana returned a non-HTTPS download URL",
+        });
+  } catch {
+    return err({
+      kind: "invalid_response",
+      message: "Asana returned an invalid download URL",
+    });
+  }
+};
+
+const inspectPath = async (
+  path: string,
+): Promise<
+  Result<"missing" | "file" | "directory", AttachmentDownloadError>
+> => {
+  try {
+    return ok((await stat(path)).isDirectory() ? "directory" : "file");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? ok("missing")
+      : err({
+          kind: "invalid_usage",
+          message: "Unable to inspect output path",
+        });
+  }
+};
+
+const destinationFor = async (
+  out: string,
+  name: string,
+  force: boolean,
+): Promise<Result<string, AttachmentDownloadError>> => {
+  const requested = resolve(out);
+  const inspected = await inspectPath(requested);
+  if (!inspected.ok) return inspected;
+  const destination =
+    inspected.value === "directory"
+      ? join(requested, safeName(name))
+      : requested;
+  if (force) return ok(destination);
+  const existing = await inspectPath(destination);
+  if (!existing.ok) return existing;
+  return existing.value === "missing"
+    ? ok(destination)
+    : err({
+        kind: "invalid_usage",
+        message: "Output already exists; use --force to replace it",
+      });
+};
+
+const fetchDownload = async (
+  url: URL,
+  fetchBinary: FetchAttachment,
+): Promise<Result<Response, AttachmentDownloadError>> => {
+  try {
+    // Signed URLs authorize the download; never forward the Asana bearer token.
+    const response = await fetchBinary(url, { method: "GET" });
+    return response.ok && response.body
+      ? ok(response)
+      : err({
+          kind: "api",
+          status: response.status,
+          message: `Attachment download failed (${response.status})`,
+        });
+  } catch {
+    return err({ kind: "network", message: "Unable to download attachment" });
+  }
+};
+
+const saveDownload = async (
+  destination: string,
+  force: boolean,
+  body: ReadableStream<Uint8Array>,
+): Promise<Result<number, AttachmentDownloadError>> => {
+  const temporaryPath = join(
+    dirname(destination),
+    `.asana-cli-${randomUUID()}.tmp`,
+  );
+  let bytes = 0;
+  try {
+    const file = await open(temporaryPath, "wx", 0o600);
+    try {
+      for await (const chunk of body) {
+        await file.writeFile(chunk);
+        bytes += chunk.byteLength;
+      }
+    } finally {
+      await file.close();
+    }
+    if (force) await rename(temporaryPath, destination);
+    else {
+      await link(temporaryPath, destination);
+      await unlink(temporaryPath);
+    }
+    return ok(bytes);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    return err({
+      kind: "invalid_usage",
+      message:
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+          ? "Output already exists; use --force to replace it"
+          : "Unable to write attachment to output path",
+    });
+  }
+};
+
 export const downloadAttachment = async (
   token: string,
   gid: string,
@@ -51,109 +172,23 @@ export const downloadAttachment = async (
     return err({ kind: "invalid_usage", message: "--out cannot be empty" });
   const detail = await reader.getAttachment(token, gid);
   if (!detail.ok) return detail;
-  if (detail.value.download_url === null) {
-    return err({
-      kind: "api",
-      message: "This attachment has no downloadable URL",
-    });
-  }
-  let url: URL;
-  try {
-    url = new URL(detail.value.download_url);
-  } catch {
-    return err({
-      kind: "invalid_response",
-      message: "Asana returned an invalid download URL",
-    });
-  }
-  if (url.protocol !== "https:") {
-    return err({
-      kind: "invalid_response",
-      message: "Asana returned a non-HTTPS download URL",
-    });
-  }
-
-  const requestedPath = resolve(out);
-  let destination = requestedPath;
-  try {
-    if ((await stat(requestedPath)).isDirectory()) {
-      destination = join(requestedPath, safeName(detail.value.name));
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      return err({
-        kind: "invalid_usage",
-        message: "Unable to inspect output path",
-      });
-    }
-  }
-
-  if (!force) {
-    try {
-      await stat(destination);
-      return err({
-        kind: "invalid_usage",
-        message: "Output already exists; use --force to replace it",
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return err({
-          kind: "invalid_usage",
-          message: "Unable to inspect output path",
-        });
-      }
-    }
-  }
-
-  let response: Response;
-  try {
-    // Signed URLs authorize the download; never forward the Asana bearer token.
-    response = await fetchBinary(url, { method: "GET" });
-  } catch {
-    return err({ kind: "network", message: "Unable to download attachment" });
-  }
-  if (!response.ok || !response.body) {
-    return err({
-      kind: "api",
-      status: response.status,
-      message: `Attachment download failed (${response.status})`,
-    });
-  }
-
-  const temporaryPath = join(
-    dirname(destination),
-    `.asana-cli-${randomUUID()}.tmp`,
+  const url = downloadUrl(detail.value.download_url);
+  if (!url.ok) return url;
+  const destination = await destinationFor(out, detail.value.name, force);
+  if (!destination.ok) return destination;
+  const response = await fetchDownload(url.value, fetchBinary);
+  if (!response.ok) return response;
+  const saved = await saveDownload(
+    destination.value,
+    force,
+    response.value.body!,
   );
-  let bytes = 0;
-  try {
-    const file = await open(temporaryPath, "wx", 0o600);
-    try {
-      for await (const chunk of response.body) {
-        await file.writeFile(chunk);
-        bytes += chunk.byteLength;
-      }
-    } finally {
-      await file.close();
-    }
-    if (force) await rename(temporaryPath, destination);
-    else {
-      await link(temporaryPath, destination);
-      await unlink(temporaryPath);
-    }
-  } catch (error) {
-    await unlink(temporaryPath).catch(() => undefined);
-    return err({
-      kind: "invalid_usage",
-      message:
-        (error as NodeJS.ErrnoException).code === "EEXIST"
-          ? "Output already exists; use --force to replace it"
-          : "Unable to write attachment to output path",
-    });
-  }
-  return ok({
-    gid,
-    path: destination,
-    bytes,
-    content_type: response.headers.get("content-type"),
-  });
+  return saved.ok
+    ? ok({
+        gid,
+        path: destination.value,
+        bytes: saved.value,
+        content_type: response.value.headers.get("content-type"),
+      })
+    : saved;
 };
