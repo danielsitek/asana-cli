@@ -97,11 +97,20 @@ const requestInit = (
   headers:
     options.body === undefined
       ? { Authorization: `Bearer ${token}` }
-      : {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-  ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      : options.body instanceof FormData
+        ? { Authorization: `Bearer ${token}` }
+        : {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+  ...(options.body === undefined
+    ? {}
+    : {
+        body:
+          options.body instanceof FormData
+            ? options.body
+            : JSON.stringify(options.body),
+      }),
   signal,
 });
 
