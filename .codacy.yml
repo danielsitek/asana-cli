@@ -13,6 +13,7 @@ engines:
       - "src/asana/index.test.ts"
       - "src/attachments/download.test.ts"
       - "src/attachments/index.test.ts"
+      - "src/attachments/upload.test.ts"
       - "src/cli/index.test.ts"
       - "src/cli/skill-list-output.test.ts"
       - "src/comments/index.test.ts"
