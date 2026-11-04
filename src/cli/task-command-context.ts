@@ -21,6 +21,7 @@ export type TaskCommandDependencies = Pick<
   | "taskProjectWriter"
   | "taskSectionWriter"
   | "taskListReader"
+  | "attachmentReader"
   | "commentReader"
   | "commentWriter"
   | "readFile"

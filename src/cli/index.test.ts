@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AttachmentGateway } from "../attachments/index.ts";
 
 import {
   type MyTaskSectionsDiscoveryGateway,
@@ -49,6 +50,94 @@ import {
 import { err, ok, type Result } from "../shared/result.ts";
 import { bundledSkillContents, SKILL_AGENTS } from "../skill/index.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
+
+describe("attachment commands", () => {
+  const identity = new InMemoryIdentity(ok({ gid: "1", name: "Ada" }));
+  const attachmentReader: AttachmentGateway = {
+    listTaskAttachments: async () =>
+      ok({
+        attachments: [
+          {
+            gid: "7",
+            name: "image.png",
+            resource_subtype: "asana",
+            download_url: "https://example.com/signed",
+          },
+        ],
+      }),
+    getAttachment: async () =>
+      ok({
+        gid: "7",
+        name: "image.png",
+        download_url: "https://example.com/signed",
+      }),
+  };
+
+  test("lists task attachments with selected fields and no signed URL by default", async () => {
+    const dependencies: ExecuteDependencies = {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      attachmentReader,
+    };
+    const listed = await execute(
+      ["tasks", "attachments", "42", "--json"],
+      dependencies,
+    );
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).not.toContain("signed");
+    expect(JSON.parse(listed.stdout).data).toEqual([
+      {
+        gid: "7",
+        name: "image.png",
+        resource_subtype: "asana",
+      },
+    ]);
+    const explicit = await execute(
+      ["tasks", "attachments", "42", "--fields=download_url", "--json"],
+      dependencies,
+    );
+    expect(explicit.exitCode).toBe(0);
+    expect(JSON.parse(explicit.stdout).data).toEqual([
+      { download_url: "https://example.com/signed" },
+    ]);
+  });
+
+  test("downloads through CLI with a JSON result and refuses overwrite", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asana-cli-cli-download-"));
+    try {
+      const out = join(directory, "image.png");
+      const dependencies: ExecuteDependencies = {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        attachmentReader,
+        fetchAttachment: async () =>
+          new Response("binary", { headers: { "content-type": "image/png" } }),
+      };
+      const downloaded = await execute(
+        ["attachments", "download", "7", "--out", out, "--json"],
+        dependencies,
+      );
+      expect(downloaded.exitCode).toBe(0);
+      expect(JSON.parse(downloaded.stdout).data).toEqual({
+        gid: "7",
+        path: out,
+        bytes: 6,
+        content_type: "image/png",
+      });
+      expect(await readFile(out, "utf8")).toBe("binary");
+      expect(
+        (
+          await execute(
+            ["attachments", "download", "7", "--out", out, "--json"],
+            dependencies,
+          )
+        ).exitCode,
+      ).toBe(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 const taskReadErrorCases = <
   const Cases extends readonly (readonly [TaskReadError["kind"], number])[],
@@ -776,7 +865,7 @@ describe("execute", () => {
 
     expect(bash).toMatchObject({ exitCode: 0, stderr: "" });
     expect(bash.stdout).toContain(
-      "'tasks') candidates='get update create comments comment list",
+      "'tasks') candidates='get update create comments comment list attachments",
     );
     expect(bash.stdout).toContain(
       "'tasks/get') candidates='-v --version --json --fields",
@@ -785,7 +874,7 @@ describe("execute", () => {
       "'whoami') candidates='-v --version --json -h --help'",
     );
     expect(bash.stdout).toContain(
-      "'root') candidates='whoami config skill tasks projects workspaces completion capabilities",
+      "'root') candidates='whoami config skill tasks attachments projects workspaces completion capabilities",
     );
     expect(zsh).toMatchObject({ exitCode: 0, stderr: "" });
     expect(zsh.stdout).toContain("#compdef asana-cli");
@@ -854,6 +943,8 @@ describe("execute", () => {
 
     const paths = envelope.data.commands.map((command) => command.path);
     expect(paths).toEqual([
+      "asana-cli attachments",
+      "asana-cli attachments download",
       "asana-cli capabilities",
       "asana-cli completion",
       "asana-cli config",
@@ -874,6 +965,7 @@ describe("execute", () => {
       "asana-cli skill uninstall",
       "asana-cli skill update",
       "asana-cli tasks",
+      "asana-cli tasks attachments",
       "asana-cli tasks comment",
       "asana-cli tasks comments",
       "asana-cli tasks create",

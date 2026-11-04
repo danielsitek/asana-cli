@@ -3,6 +3,8 @@ import type {
   MyTasksDiscoveryGateway,
   ConfigContext,
 } from "../config/index.ts";
+import type { AttachmentGateway } from "../attachments/index.ts";
+import type { FetchAttachment } from "../attachments/download.ts";
 import type {
   TaskCommentCreationGateway,
   TaskStoryGateway,
@@ -43,6 +45,8 @@ export type ExecuteDependencies = Readonly<{
   taskProjectWriter?: TaskProjectMutationGateway;
   taskSectionWriter?: TaskSectionMutationGateway;
   taskListReader?: TaskListGateway;
+  attachmentReader?: AttachmentGateway;
+  fetchAttachment?: FetchAttachment;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;
   workspaceReader?: WorkspaceGateway;

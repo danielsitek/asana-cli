@@ -203,6 +203,10 @@ workflows:
 # Read a task, including its description
 asana-cli tasks get 1215978111726134
 
+# List a task's attachments and download one to a directory
+asana-cli tasks attachments 1215978111726134 --json
+asana-cli attachments download 123456789 --out=./downloads --json
+
 # Read only the newest 3 comments, newest first, scanning up to 200 stories
 asana-cli tasks comments 1215978111726134 --max=200 --latest=3
 
@@ -336,6 +340,13 @@ command fails with exit 2.
   - `--completed=true|false` (default `false`)
 - Bounded like `tasks comments`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 - Default fields: `gid,name,completed,assignee.gid,assignee.name`.
+
+### Task attachments
+
+- `tasks attachments <id>` lists task files and inline images. It defaults to `gid,name,resource_subtype,size,created_at,parent.gid`; `size` may be absent. `--fields=download_url` explicitly selects a signed URL.
+- Reads are bounded: scan cap 100, result cap 20 by default. Use `--all --max=<n>` to return all attachments within the cap.
+- `attachments download <attachment-gid> --out=<path-or-directory>` obtains a fresh URL and saves the file. It refuses to replace an existing file unless `--force` is given. `--json` returns `gid`, absolute `path`, `bytes`, and `content_type`.
+- Attachments on comments are not included.
 
 ### `projects list`
 
