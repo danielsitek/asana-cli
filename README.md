@@ -207,6 +207,9 @@ asana-cli tasks get 1215978111726134
 asana-cli tasks attachments 1215978111726134 --json
 asana-cli attachments download 123456789 --out=./downloads --json
 
+# Upload a screenshot and show it inline at the end of the task description
+asana-cli tasks attach 1215978111726134 --file=./screenshot.png --inline --json
+
 # Read only the newest 3 comments, newest first, scanning up to 200 stories
 asana-cli tasks comments 1215978111726134 --max=200 --latest=3
 
@@ -347,6 +350,9 @@ command fails with exit 2.
 - Reads are bounded: scan cap 100, result cap 20 by default. Use `--all --max=<n>` to return all attachments within the cap.
 - `attachments download <attachment-gid> --out=<path-or-directory>` obtains a fresh URL and saves the file. It refuses to replace an existing file unless `--force` is given. `--json` returns `gid`, absolute `path`, `bytes`, and `content_type`.
 - Attachments on comments are not included.
+- `tasks attach <id> --file=<path> [--name=<name>]` uploads a readable file up to 100 MB. `--json` returns `gid`, `name`, `size`, and `content_type`.
+- Add `--inline` to append an image to the existing rich text description, or `--inline=prepend` to place it first. Inline accepts image MIME types only. The CLI reads the current `html_notes` and uploads before writing the updated description.
+- If upload succeeds but the description write fails, exit 1 prints the uploaded attachment GID under `completed.upload` and the failed stage under `failed`. Check that GID before retrying to avoid duplicate uploads.
 
 ### `projects list`
 

@@ -4,6 +4,7 @@ import type {
   ConfigContext,
 } from "../config/index.ts";
 import type { AttachmentGateway } from "../attachments/index.ts";
+import type { AttachmentWriteGateway } from "../attachments/upload.ts";
 import type { FetchAttachment } from "../attachments/download.ts";
 import type {
   TaskCommentCreationGateway,
@@ -46,6 +47,7 @@ export type ExecuteDependencies = Readonly<{
   taskSectionWriter?: TaskSectionMutationGateway;
   taskListReader?: TaskListGateway;
   attachmentReader?: AttachmentGateway;
+  attachmentWriter?: AttachmentWriteGateway;
   fetchAttachment?: FetchAttachment;
   commentReader?: TaskStoryGateway;
   commentWriter?: TaskCommentCreationGateway;

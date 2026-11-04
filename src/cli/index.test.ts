@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AttachmentGateway } from "../attachments/index.ts";
+import type { AttachmentWriteGateway } from "../attachments/upload.ts";
 
 import {
   type MyTaskSectionsDiscoveryGateway,
@@ -133,6 +134,135 @@ describe("attachment commands", () => {
           )
         ).exitCode,
       ).toBe(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("uploads an image inline and reports partial failure with its attachment GID", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asana-cli-cli-attach-"));
+    try {
+      const file = join(directory, "capture.png");
+      await writeFile(file, "image bytes");
+      let htmlWritten = "";
+      const writer: AttachmentWriteGateway = {
+        uploadTaskAttachment: async () =>
+          ok({
+            gid: "7",
+            name: "capture.png",
+            size: 11,
+            content_type: "image/png",
+          }),
+        setTaskHtmlNotes: async (_token, _taskId, html) => {
+          htmlWritten = html;
+          return err({ kind: "api", message: "private server detail" });
+        },
+      };
+      const dependencies: ExecuteDependencies = {
+        environment: { ASANA_CLI_TOKEN: "secret" },
+        identity,
+        taskReader: {
+          getTask: async () =>
+            ok({ html_notes: "<body><p>Existing</p></body>" }),
+        },
+        attachmentWriter: writer,
+      };
+      const result = await execute(
+        ["tasks", "attach", "42", "--file", file, "--inline=prepend", "--json"],
+        dependencies,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).not.toContain("private server detail");
+      expect(JSON.parse(result.stdout)).toEqual({
+        completed: {
+          upload: {
+            gid: "7",
+            name: "capture.png",
+            size: 11,
+            content_type: "image/png",
+          },
+        },
+        failed: {
+          stage: "inline",
+          code: "api",
+          message: "Failed to update task html_notes",
+        },
+      });
+      expect(htmlWritten).toBe(
+        '<body><img data-asana-gid="7"><p>Existing</p></body>',
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a non-image inline upload before invoking a writer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asana-cli-cli-attach-"));
+    try {
+      const file = join(directory, "notes.txt");
+      await writeFile(file, "notes");
+      const result = await execute(
+        ["tasks", "attach", "42", "--file", file, "--inline", "--json"],
+        {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          taskReader: {
+            getTask: async () => {
+              throw new Error("read called");
+            },
+          },
+          attachmentWriter: {
+            uploadTaskAttachment: async () => {
+              throw new Error("upload called");
+            },
+            setTaskHtmlNotes: async () => {
+              throw new Error("write called");
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr).error.code).toBe("invalid_usage");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("uploads a plain file without reading task notes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asana-cli-cli-attach-"));
+    try {
+      const file = join(directory, "spec.pdf");
+      await writeFile(file, "PDF bytes");
+      const result = await execute(
+        ["tasks", "attach", "42", "--file", file, "--json"],
+        {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          attachmentWriter: {
+            uploadTaskAttachment: async (_token, taskId, payload) => {
+              expect(taskId).toBe("42");
+              expect(payload.contentType).toBe("application/pdf");
+              return ok({
+                gid: "8",
+                name: payload.name,
+                size: payload.bytes.byteLength,
+                content_type: payload.contentType,
+              });
+            },
+            setTaskHtmlNotes: async () => {
+              throw new Error("unexpected notes write");
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout).data).toEqual({
+        gid: "8",
+        name: "spec.pdf",
+        size: 9,
+        content_type: "application/pdf",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -865,7 +995,7 @@ describe("execute", () => {
 
     expect(bash).toMatchObject({ exitCode: 0, stderr: "" });
     expect(bash.stdout).toContain(
-      "'tasks') candidates='get update create comments comment list attachments",
+      "'tasks') candidates='get update create comments comment list attachments attach",
     );
     expect(bash.stdout).toContain(
       "'tasks/get') candidates='-v --version --json --fields",
@@ -965,6 +1095,7 @@ describe("execute", () => {
       "asana-cli skill uninstall",
       "asana-cli skill update",
       "asana-cli tasks",
+      "asana-cli tasks attach",
       "asana-cli tasks attachments",
       "asana-cli tasks comment",
       "asana-cli tasks comments",

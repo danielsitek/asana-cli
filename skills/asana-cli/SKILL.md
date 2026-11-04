@@ -61,6 +61,8 @@ credentials, configuration, files, stdin, or the Asana API.
 | Read a task                                        | `asana-cli tasks get <id> --json [--fields=...]`                                                                                                                                                                                                       |
 | List task attachments, including inline images     | `asana-cli tasks attachments <id> [--max=<n>] [--all] --json [--fields=...]`                                                                                                                                                                           |
 | Download an attachment                             | `asana-cli attachments download <attachment-gid> --out=<path-or-dir> [--force] --json`                                                                                                                                                                 |
+| Upload a file to a task                            | `asana-cli tasks attach <id> --file=<path> [--name=<name>] --json`                                                                                                                                                                                     |
+| Insert a local image into task notes               | `asana-cli tasks attach <id> --file=<path> --inline[=append\|prepend] --json`                                                                                                                                                                          |
 | Read comments (bounded)                            | `asana-cli tasks comments <id> [--max=<n>] [--all] --json`                                                                                                                                                                                             |
 | Read only the newest N comments (bounded, exact)   | `asana-cli tasks comments <id> --max=<scan-cap> --latest=<n> --json`                                                                                                                                                                                   |
 | List tasks (bounded, one source)                   | `asana-cli tasks list --my-section=@alias\|--section=<gid>\|--project=<gid>\|--parent=<id> [--assignee=me\|<gid>] [--completed=true\|false] [--max=<n>] [--all] --json`                                                                                |
@@ -88,6 +90,8 @@ implicitly.
 
 `tasks attachments <id>` includes files and inline images attached to the task. It uses the default scan cap 100 and result cap 20; `--all` requires `--max`. Default fields are `gid,name,resource_subtype,size,created_at,parent.gid`; Asana may omit `size`. The signed `download_url` appears only with `--fields=download_url`. Use the attachment GID with `attachments download`; `--out` accepts a file path or existing directory, and an existing file requires `--force`. The CLI obtains a fresh download URL and saves the bytes without exposing the Asana token to the download host. Comment attachments are not included.
 
+`tasks attach <id> --file=<path>` uploads a readable file of at most 100 MB and returns its `gid,name,size,content_type`. `--inline` accepts an image file only; it reads the current `html_notes` before upload and inserts the image by attachment GID, preserving the existing rich text. Bare `--inline` appends; `--inline=prepend` inserts at the start. If the upload succeeds but the notes update fails, exit 1 prints `completed.upload` (including the new GID) and `failed` on stdout. Inspect that GID before retrying, since another upload would create another attachment.
+
 ## Personal default assignee (`tasks create` only)
 
 `asana-cli config set defaultAssignee me|<gid>` stores a personal default in the gitignored local config. `tasks create` applies it only when `--assignee` is omitted; an explicit `--assignee`, including `--assignee=null`, always overrides it and skips the config lookup entirely. `tasks update` never reads or applies this default. Invalid values (anything other than `me` or a digit-only GID) are rejected with no file written; `--shared`/`--global` reject the key the same way.
@@ -96,17 +100,17 @@ implicitly.
 
 With `--json`, successful reads and writes print a single compact, minified `{"data":...,"meta":...}` line to stdout. Diagnostics never go to stdout on success.
 
-A command group without a subcommand prints its help to stdout and exits 0. Without `--json`, command-line syntax errors print an actionable error plus relevant help to stderr and exit 2. With `--json`, errors are one compact, minified JSON line on stderr: `{"error":{"code":"...","message":"..."}}`; other command errors use the same envelope without `--json`. One exception: a partial multi-stage write (exit 1 below) prints its compact `{"completed":...,"failed":...,"message":...}` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
+A command group without a subcommand prints its help to stdout and exits 0. Without `--json`, command-line syntax errors print an actionable error plus relevant help to stderr and exit 2. With `--json`, errors are one compact, minified JSON line on stderr: `{"error":{"code":"...","message":"..."}}`; other command errors use the same envelope without `--json`. One exception: a partial multi-stage write (exit 1 below) prints its compact `{"completed":...,"failed":...}` detail to **stdout**, not stderr — check exit code, not which stream has content, to detect a partial write.
 
-| Code | Meaning                                                                                       |
-| ---- | --------------------------------------------------------------------------------------------- |
-| 0    | success                                                                                       |
-| 1    | partial write — only from `tasks create`, `config init --local`, or `config resolve my-tasks` |
-| 2    | invalid usage or configuration                                                                |
-| 3    | authentication/authorization failure                                                          |
-| 4    | Asana API, not-found, or network error                                                        |
-| 5    | rate-limit, retry exhaustion, or `tasks comments --latest` scan limit                         |
-| 6    | unexpected internal CLI error                                                                 |
+| Code | Meaning                                                                                                           |
+| ---- | ----------------------------------------------------------------------------------------------------------------- |
+| 0    | success                                                                                                           |
+| 1    | partial write — from `tasks attach --inline`, `tasks create`, `config init --local`, or `config resolve my-tasks` |
+| 2    | invalid usage or configuration                                                                                    |
+| 3    | authentication/authorization failure                                                                              |
+| 4    | Asana API, not-found, or network error                                                                            |
+| 5    | rate-limit, retry exhaustion, or `tasks comments --latest` scan limit                                             |
+| 6    | unexpected internal CLI error                                                                                     |
 
 ## Filing a CLI issue
 

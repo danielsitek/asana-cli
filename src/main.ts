@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { AsanaHttpClient } from "./asana/index.ts";
+import { AsanaAttachmentWriter } from "./asana/attachment-writes.ts";
 import { execute } from "./cli/index.ts";
 import { checkForUpdate } from "./update/index.ts";
 
@@ -10,6 +11,7 @@ declare const __APP_VERSION__: string | undefined;
 const version =
   typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.10.2";
 const client = new AsanaHttpClient();
+const attachmentWriter = new AsanaAttachmentWriter();
 const updateChecksEnabled =
   process.stderr.isTTY === true &&
   process.env.ASANA_CLI_DISABLE_UPDATE_CHECK !== "1";
@@ -25,6 +27,7 @@ const result = await execute(Bun.argv.slice(2), {
   taskSectionWriter: client,
   taskListReader: client,
   attachmentReader: client,
+  attachmentWriter,
   commentReader: client,
   commentWriter: client,
   workspaceReader: client,
