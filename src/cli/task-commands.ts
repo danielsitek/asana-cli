@@ -1,5 +1,6 @@
 import { registerTaskCommentCommand } from "./task-comment-command.ts";
 import { registerTaskAttachmentsCommand } from "./task-attachments-command.ts";
+import { registerTaskAttachCommand } from "./task-attach-command.ts";
 import { registerTaskCommentsCommand } from "./task-comments-command.ts";
 import type {
   TaskCommandContext,
@@ -35,4 +36,5 @@ export const registerTaskCommands = ({
   registerTaskCommentCommand(context);
   registerTaskListCommand(context);
   registerTaskAttachmentsCommand(context);
+  registerTaskAttachCommand(context);
 };

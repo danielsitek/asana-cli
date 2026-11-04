@@ -32,7 +32,7 @@ export interface AttachmentWriteGateway {
 
 export type AttachmentUploadError =
   | TaskReadError
-  | Readonly<{ kind: "invalid_usage"; message: string }>
+  | Readonly<{ kind: "invalid_usage" | "internal_error"; message: string }>
   | Readonly<{
       kind: "partial";
       uploaded: UploadedAttachment;
@@ -142,11 +142,16 @@ export const insertInlineImage = (
 export const executeAttachmentUpload = async (
   token: string,
   prepared: PreparedUpload,
-  reader: TaskGateway,
+  reader: TaskGateway | undefined,
   writer: AttachmentWriteGateway,
 ): Promise<Result<UploadedAttachment, AttachmentUploadError>> => {
   let htmlNotes: string | undefined;
   if (prepared.inline) {
+    if (!reader)
+      return err({
+        kind: "internal_error",
+        message: "Task reader is required for inline uploads",
+      });
     const task = await reader.getTask(token, prepared.taskId, ["html_notes"]);
     if (!task.ok) return task;
     if (typeof task.value.html_notes !== "string") {
