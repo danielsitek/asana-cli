@@ -1,0 +1,29 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": ["src/attachments/upload.ts"],
+        "createdAt": "2026-11-04T08:02:44.717Z",
+        "reason": "Asana rich-text API requires img data-asana-gid for inline attachments; documented at developers.asana.com/docs/rich-text"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": ["src/attachments/upload.test.ts"],
+        "createdAt": "2026-11-04T08:03:47.079Z",
+        "reason": "Asana rich-text API fixture requires img data-asana-gid, which resolves the attachment without src"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": ["src/asana/attachment-writes.test.ts"],
+        "createdAt": "2026-11-04T08:03:47.092Z",
+        "reason": "Asana rich-text API fixture requires img data-asana-gid, which resolves the attachment without src"
+      }
+    ]
+  }
+}
