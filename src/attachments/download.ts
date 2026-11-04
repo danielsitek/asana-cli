@@ -26,10 +26,12 @@ export type FetchAttachment = (
 ) => Promise<Response>;
 
 const safeName = (name: string): string => {
-  const sanitized = basename(name.replaceAll("\\", "/")).replace(
-    /[\x00-\x1f\x7f]/g,
-    "_",
-  );
+  const sanitized = [...basename(name.replaceAll("\\", "/"))]
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127 ? "_" : character;
+    })
+    .join("");
   return sanitized === "." || sanitized === ".." || sanitized === ""
     ? "attachment"
     : sanitized;
