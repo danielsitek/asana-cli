@@ -299,12 +299,13 @@ Both commands accept the same mutation flags:
 - `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
   [Custom fields](#custom-fields---custom-field) below
 
-`--my-section` or `--custom-field` requires the final assignee to be the
-authenticated user, checked after all other flags are applied: on `tasks
+`--my-section` and My Tasks custom fields require the final assignee to be
+the authenticated user, checked after all other flags are applied: on `tasks
 create` this is an explicit `--assignee=me|<gid>` or a configured
 `defaultAssignee` (see [Configuration](#configuration)); on `tasks update`
 without `--assignee`, it's the task's existing assignee. Otherwise the
-command fails with exit 2.
+command fails with exit 2. Updating a project custom field by GID on an
+existing task does not require this assignee check.
 
 ### `tasks create`
 
@@ -390,6 +391,15 @@ command fails with exit 2.
 - Enum values resolve by GID first, then by case-sensitive exact name; invalid or ambiguous names list the valid options.
 - `null` clears either type.
 - Field definitions and options are live-validated before writing.
+- On `tasks update`, a field GID enabled on one of the task's projects is
+  resolved from that project's live custom-field settings. It needs no My Tasks
+  configuration and works for tasks assigned to another user. The task must
+  already belong to the project. Aliases still refer to My Tasks fields.
+
+```sh
+asana-cli tasks update 1219742046666668 \
+  --custom-field=1217538274384158:"To release" --json
+```
 
 ### Output (`--json` / `--fields`)
 

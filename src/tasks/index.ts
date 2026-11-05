@@ -158,6 +158,7 @@ export type TaskUpdateDependencies = TaskMaterializationDependencies &
     writer: TaskMutationGateway;
     sectionWriter?: TaskSectionMutationGateway;
     projectWriter?: TaskProjectMutationGateway;
+    projectCustomFieldResolver?: ProjectCustomFieldResolver;
   }>;
 
 export type TaskUpdateError =
@@ -251,6 +252,22 @@ export interface MyTasksMutationResolver {
   resolve(
     request: MyTasksMutationRequest,
   ): Promise<Result<MyTasksMutationResult, MyTasksMutationError>>;
+}
+
+export interface ProjectCustomFieldResolver {
+  resolve(
+    token: string,
+    taskId: string,
+    fields: readonly PreparedCustomField[],
+  ): Promise<
+    Result<
+      Readonly<{
+        resolved: Readonly<Record<string, number | string | null>>;
+        remaining: readonly PreparedCustomField[];
+      }>,
+      TaskUpdateError
+    >
+  >;
 }
 
 const parseResourceSelector = (

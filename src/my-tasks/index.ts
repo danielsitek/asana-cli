@@ -153,7 +153,7 @@ const resolveEnumValue = (
   );
 };
 
-const resolveCustomFieldValues = (
+export const resolveCustomFieldValues = (
   discoveredFields: readonly DiscoveredCustomField[],
   rawCustomFields: Readonly<Record<string, string | null>>,
 ): Result<Record<string, number | string | null>, MyTasksMutationError> => {

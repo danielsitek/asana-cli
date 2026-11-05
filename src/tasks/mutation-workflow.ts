@@ -17,11 +17,13 @@ import type {
   TaskUpdateDependencies,
   TaskUpdateError,
   TaskUpdateResult,
+  MyTasksMutationResult,
 } from "./index.ts";
 
 type TaskMaterializationDependencies = Pick<
   TaskUpdateDependencies,
   | "myTasksMutationResolver"
+  | "projectCustomFieldResolver"
   | "resolveAuthenticatedUserGid"
   | "readFile"
   | "readStdin"
@@ -78,6 +80,101 @@ const materializeAssignee = async (
     : identity;
 };
 
+const resolveProjectFields = async (
+  token: string,
+  prepared: PreparedTaskMaterialization,
+  dependencies: TaskMaterializationDependencies,
+): Promise<
+  Result<
+    Readonly<{
+      resolved: Readonly<Record<string, number | string | null>>;
+      remaining: readonly PreparedCustomField[];
+    }>,
+    TaskUpdateError
+  >
+> =>
+  prepared.workflow === "update" &&
+  prepared.taskId !== undefined &&
+  dependencies.projectCustomFieldResolver !== undefined &&
+  prepared.customFields.some((field) => field.field.kind === "gid")
+    ? await dependencies.projectCustomFieldResolver.resolve(
+        token,
+        prepared.taskId,
+        prepared.customFields,
+      )
+    : ok({ resolved: {}, remaining: prepared.customFields });
+
+const mergeResolvedCustomFields = (
+  project: Readonly<Record<string, number | string | null>>,
+  myTasks: MyTasksMutationResult,
+): Result<MyTasksMutationResult, TaskUpdateError> => {
+  const duplicate = Object.keys(project).find((gid) =>
+    Object.hasOwn(myTasks.custom_fields ?? {}, gid),
+  );
+  if (duplicate) {
+    return err({
+      kind: "invalid_usage",
+      message: "--custom-field cannot update the same field more than once",
+    });
+  }
+  return ok(
+    Object.keys(project).length > 0
+      ? { ...myTasks, custom_fields: { ...myTasks.custom_fields, ...project } }
+      : myTasks,
+  );
+};
+
+const resolveCustomFields = async (
+  token: string,
+  prepared: PreparedTaskMaterialization,
+  dependencies: TaskMaterializationDependencies,
+  mutation: TaskMutation,
+  authenticatedUserGid: string | undefined,
+): Promise<Result<MyTasksMutationResult, TaskUpdateError>> => {
+  const projectFields = await resolveProjectFields(
+    token,
+    prepared,
+    dependencies,
+  );
+  if (!projectFields.ok) return projectFields;
+
+  const hasMyTasksMutation =
+    prepared.mySection !== undefined ||
+    projectFields.value.remaining.length > 0;
+  if (!hasMyTasksMutation) {
+    return ok(
+      Object.keys(projectFields.value.resolved).length > 0
+        ? { custom_fields: projectFields.value.resolved }
+        : {},
+    );
+  }
+  const resolver = dependencies.myTasksMutationResolver;
+  if (!resolver) {
+    return err({
+      kind: "internal_error",
+      message: `My Tasks ${prepared.workflow} dependencies are unavailable`,
+    });
+  }
+
+  const resolved = await resolver.resolve({
+    token,
+    ...(prepared.taskId === undefined ? {} : { taskId: prepared.taskId }),
+    ...(mutation.assignee === undefined
+      ? {}
+      : { finalAssignee: mutation.assignee }),
+    ...(authenticatedUserGid === undefined ? {} : { authenticatedUserGid }),
+    ...(prepared.mySection === undefined
+      ? {}
+      : { mySection: prepared.mySection }),
+    customFields: projectFields.value.remaining,
+  });
+  if (!resolved.ok) return resolved;
+  return mergeResolvedCustomFields(
+    projectFields.value.resolved,
+    resolved.value,
+  );
+};
+
 const materializeTaskMutation = async (
   token: string,
   prepared: PreparedTaskMaterialization,
@@ -94,33 +191,14 @@ const materializeTaskMutation = async (
       ? {}
       : { assignee: assignee.value.assignee }),
   };
-
-  const hasMyTasksMutation =
-    prepared.mySection !== undefined || prepared.customFields.length > 0;
-  if (!hasMyTasksMutation) return ok(mutation);
-  const resolver = dependencies.myTasksMutationResolver;
-  if (!resolver) {
-    return err({
-      kind: "internal_error",
-      message: `My Tasks ${prepared.workflow} dependencies are unavailable`,
-    });
-  }
-
-  const resolved = await resolver.resolve({
+  const fields = await resolveCustomFields(
     token,
-    ...(prepared.taskId === undefined ? {} : { taskId: prepared.taskId }),
-    ...(mutation.assignee === undefined
-      ? {}
-      : { finalAssignee: mutation.assignee }),
-    ...(assignee.value.authenticatedUserGid === undefined
-      ? {}
-      : { authenticatedUserGid: assignee.value.authenticatedUserGid }),
-    ...(prepared.mySection === undefined
-      ? {}
-      : { mySection: prepared.mySection }),
-    customFields: prepared.customFields,
-  });
-  return resolved.ok ? ok({ ...mutation, ...resolved.value }) : resolved;
+    prepared,
+    dependencies,
+    mutation,
+    assignee.value.authenticatedUserGid,
+  );
+  return fields.ok ? ok({ ...mutation, ...fields.value }) : fields;
 };
 
 const orderMutation = (mutation: TaskMutation): TaskMutation => ({

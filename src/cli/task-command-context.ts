@@ -30,6 +30,7 @@ export type TaskCommandDependencies = Pick<
   | "discovery"
   | "myTaskSectionsDiscovery"
   | "configuration"
+  | "projectCustomFieldSettingReader"
 >;
 
 export type TaskInvocation = Readonly<{
