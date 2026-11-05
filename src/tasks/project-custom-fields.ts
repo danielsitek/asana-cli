@@ -5,6 +5,7 @@ import type {
   ProjectCustomFieldSettingGateway,
 } from "../projects/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { z } from "zod";
 import type {
   PreparedCustomField,
   ProjectCustomFieldResolver,
@@ -30,6 +31,22 @@ const invalidResponse = (message: string): TaskUpdateError => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const fieldSchema = z.object({
+  gid: z.string().regex(/^\d+$/),
+  name: z.string(),
+  resource_subtype: z.string(),
+  is_value_read_only: z.boolean(),
+  enum_options: z
+    .array(
+      z.object({
+        gid: z.string().regex(/^\d+$/),
+        name: z.string(),
+        enabled: z.boolean(),
+      }),
+    )
+    .optional(),
+});
+
 const taskProjects = (
   value: unknown,
 ): Result<readonly string[], TaskUpdateError> => {
@@ -50,19 +67,13 @@ const taskProjects = (
 const discoveredField = (
   setting: ProjectCustomFieldSetting,
 ): Result<DiscoveredCustomField, TaskUpdateError> => {
-  const field = setting.custom_field;
-  if (
-    !isRecord(field) ||
-    typeof field.gid !== "string" ||
-    !/^\d+$/.test(field.gid) ||
-    typeof field.name !== "string" ||
-    typeof field.resource_subtype !== "string" ||
-    typeof field.is_value_read_only !== "boolean"
-  ) {
+  const parsed = fieldSchema.safeParse(setting.custom_field);
+  if (!parsed.success) {
     return err(
       invalidResponse("Asana returned an invalid project custom field"),
     );
   }
+  const field = parsed.data;
   const base = {
     gid: field.gid,
     name: field.name,
@@ -78,18 +89,7 @@ const discoveredField = (
       originalResourceSubtype: field.resource_subtype,
     });
   }
-  const options = field.enum_options;
-  if (
-    !Array.isArray(options) ||
-    !options.every(
-      (option) =>
-        isRecord(option) &&
-        typeof option.gid === "string" &&
-        /^\d+$/.test(option.gid) &&
-        typeof option.name === "string" &&
-        typeof option.enabled === "boolean",
-    )
-  ) {
+  if (field.enum_options === undefined) {
     return err(
       invalidResponse(
         `Asana returned enum custom field ${field.gid} without valid options`,
@@ -99,10 +99,10 @@ const discoveredField = (
   return ok({
     ...base,
     resourceSubtype: "enum",
-    enumOptions: options.map((option) => ({
-      gid: option.gid as string,
-      name: option.name as string,
-      enabled: option.enabled as boolean,
+    enumOptions: field.enum_options.map(({ gid, name, enabled }) => ({
+      gid,
+      name,
+      enabled,
     })),
   });
 };
