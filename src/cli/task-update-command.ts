@@ -21,6 +21,7 @@ import {
 } from "./task-command-context.ts";
 import { withTaskMutationOptions } from "./task-mutation-options.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
+import { createProjectCustomFieldResolver } from "../tasks/project-custom-fields.ts";
 
 const renderUpdatedTask = (
   json: boolean,
@@ -61,6 +62,7 @@ const runTaskParentUpdate = async (
 const taskUpdateDependencies = (
   context: TaskCommandContext,
   needsMyTasks: boolean,
+  needsProjectFields: boolean,
 ) => {
   const dependencies = context.dependencies;
   const myTasksMutationResolver = myTasksMutationResolverFor(
@@ -76,6 +78,16 @@ const taskUpdateDependencies = (
       ? { projectWriter: dependencies.taskProjectWriter }
       : {}),
     ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
+    ...(needsProjectFields &&
+    dependencies.taskReader &&
+    dependencies.projectCustomFieldSettingReader
+      ? {
+          projectCustomFieldResolver: createProjectCustomFieldResolver(
+            dependencies.taskReader,
+            dependencies.projectCustomFieldSettingReader,
+          ),
+        }
+      : {}),
     resolveAuthenticatedUserGid: (token: string) =>
       resolveAuthenticatedUserGid(context, token),
     readFile: taskFileReader(context),
@@ -104,10 +116,13 @@ const runTaskUpdate = async (
   const needsMyTasks =
     prepared.value.mySection !== undefined ||
     prepared.value.customFields.length > 0;
+  const needsProjectFields = prepared.value.customFields.some(
+    (field) => field.field.kind === "gid",
+  );
   const updated = await executeTaskUpdate(
     token.value,
     prepared.value,
-    taskUpdateDependencies(context, needsMyTasks),
+    taskUpdateDependencies(context, needsMyTasks, needsProjectFields),
   );
   return updated.ok
     ? renderUpdatedTask(

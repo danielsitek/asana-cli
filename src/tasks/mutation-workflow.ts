@@ -22,6 +22,7 @@ import type {
 type TaskMaterializationDependencies = Pick<
   TaskUpdateDependencies,
   | "myTasksMutationResolver"
+  | "projectCustomFieldResolver"
   | "resolveAuthenticatedUserGid"
   | "readFile"
   | "readStdin"
@@ -95,9 +96,30 @@ const materializeTaskMutation = async (
       : { assignee: assignee.value.assignee }),
   };
 
+  const projectFields =
+    prepared.workflow === "update" &&
+    prepared.taskId !== undefined &&
+    dependencies.projectCustomFieldResolver !== undefined &&
+    prepared.customFields.some((field) => field.field.kind === "gid")
+      ? await dependencies.projectCustomFieldResolver.resolve(
+          token,
+          prepared.taskId,
+          prepared.customFields,
+        )
+      : ok({ resolved: {}, remaining: prepared.customFields });
+  if (!projectFields.ok) return projectFields;
+
   const hasMyTasksMutation =
-    prepared.mySection !== undefined || prepared.customFields.length > 0;
-  if (!hasMyTasksMutation) return ok(mutation);
+    prepared.mySection !== undefined ||
+    projectFields.value.remaining.length > 0;
+  if (!hasMyTasksMutation) {
+    return ok({
+      ...mutation,
+      ...(Object.keys(projectFields.value.resolved).length > 0
+        ? { custom_fields: projectFields.value.resolved }
+        : {}),
+    });
+  }
   const resolver = dependencies.myTasksMutationResolver;
   if (!resolver) {
     return err({
@@ -118,9 +140,30 @@ const materializeTaskMutation = async (
     ...(prepared.mySection === undefined
       ? {}
       : { mySection: prepared.mySection }),
-    customFields: prepared.customFields,
+    customFields: projectFields.value.remaining,
   });
-  return resolved.ok ? ok({ ...mutation, ...resolved.value }) : resolved;
+  if (!resolved.ok) return resolved;
+  const duplicate = Object.keys(projectFields.value.resolved).find((gid) =>
+    Object.hasOwn(resolved.value.custom_fields ?? {}, gid),
+  );
+  if (duplicate) {
+    return err({
+      kind: "invalid_usage",
+      message: "--custom-field cannot update the same field more than once",
+    });
+  }
+  return ok({
+    ...mutation,
+    ...resolved.value,
+    ...(Object.keys(projectFields.value.resolved).length > 0
+      ? {
+          custom_fields: {
+            ...resolved.value.custom_fields,
+            ...projectFields.value.resolved,
+          },
+        }
+      : {}),
+  });
 };
 
 const orderMutation = (mutation: TaskMutation): TaskMutation => ({

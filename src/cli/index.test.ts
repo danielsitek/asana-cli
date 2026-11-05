@@ -3186,6 +3186,84 @@ describe("tasks update command", () => {
     ]);
   });
 
+  test("updates a project enum field by GID without My Tasks configuration", async () => {
+    const writer = new InMemoryTaskWriter(ok(updatedTask));
+    const taskReader = new InMemoryTaskReader(
+      ok({ gid: "123", projects: [{ gid: "700" }] }),
+    );
+    const requestedPages: Array<string | undefined> = [];
+    const settingsReader: ProjectCustomFieldSettingGateway = {
+      listProjectCustomFieldSettings: async ({
+        projectGid,
+        offset,
+        fields,
+      }) => {
+        expect(projectGid).toBe("700");
+        expect(fields).toContain("custom_field.enum_options.enabled");
+        requestedPages.push(offset);
+        return ok({
+          settings:
+            offset === undefined
+              ? [
+                  {
+                    custom_field: {
+                      gid: "799",
+                      name: "Other",
+                      resource_subtype: "number",
+                      is_value_read_only: false,
+                    },
+                  },
+                ]
+              : [
+                  {
+                    custom_field: {
+                      gid: "800",
+                      name: "Task Progress",
+                      resource_subtype: "enum",
+                      is_value_read_only: false,
+                      enum_options: [
+                        { gid: "801", name: "Testing Dev", enabled: true },
+                        { gid: "802", name: "To release", enabled: true },
+                        { gid: "803", name: "Archived", enabled: false },
+                      ],
+                    },
+                  },
+                ],
+          ...(offset === undefined ? { nextOffset: "next" } : {}),
+        });
+      },
+    };
+    const dependencies: ExecuteDependencies = {
+      environment: { ASANA_CLI_TOKEN: "secret" },
+      identity,
+      taskReader,
+      taskWriter: writer,
+      projectCustomFieldSettingReader: settingsReader,
+    };
+
+    const result = await execute(
+      ["--json", "tasks", "update", "123", "--custom-field", "800:To release"],
+      dependencies,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).meta.applied).toEqual({
+      custom_fields: { "800": "802" },
+    });
+    expect(taskReader.lastFields).toEqual(["projects.gid"]);
+    expect(requestedPages).toEqual([undefined, "next"]);
+    expect(writer.calls[0]?.mutation).toEqual({
+      custom_fields: { "800": "802" },
+    });
+
+    const disabled = await execute(
+      ["tasks", "update", "123", "--custom-field", "800:803"],
+      dependencies,
+    );
+    expect(disabled.exitCode).toBe(2);
+    expect(disabled.stderr).toContain("is disabled");
+    expect(writer.calls).toHaveLength(1);
+  });
+
   test("rejects malformed numeric, unknown, ambiguous, and disabled enum values without writing", async () => {
     for (const value of ["1e3", "1,5", "NaN"]) {
       const dependencies = await myTasksDependencies();
