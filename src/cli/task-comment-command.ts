@@ -8,7 +8,7 @@ import { withCommandCapabilities } from "./capabilities.ts";
 import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
   internalError,
-  renderTaskReadFailure,
+  renderTaskWriteFailure,
   taskFileReader,
   taskStdinReader,
   type TaskCommandContext,
@@ -51,7 +51,7 @@ const runTaskComment = async (
   if (!created.ok) {
     return created.error.kind === "invalid_usage"
       ? context.usageError(created.error.message)
-      : renderTaskReadFailure(created.error.kind);
+      : renderTaskWriteFailure(created.error);
   }
   return {
     stdout: invocation.json

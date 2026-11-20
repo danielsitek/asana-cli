@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "../shared/result.ts";
-import type { TaskReadError } from "../tasks/index.ts";
+import type { TaskReadError, TaskWriteError } from "../tasks/index.ts";
 import {
   prepareCommentTarget,
   projectCommentFields,
@@ -34,12 +34,12 @@ export interface TaskCommentCreationGateway {
     text: string,
     fields: readonly string[],
     parentCommentGid?: string,
-  ): Promise<Result<Comment, TaskReadError>>;
+  ): Promise<Result<Comment, TaskWriteError>>;
 }
 
 export type TaskCommentCreateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
-  | TaskReadError;
+  | TaskWriteError;
 
 export const prepareTaskCommentCreate = (
   taskIdInput: string,

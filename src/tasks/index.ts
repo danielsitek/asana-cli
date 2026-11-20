@@ -38,6 +38,14 @@ export type Task = Readonly<{
   [key: string]: unknown;
 }>;
 
+export type WriteOutcomeUnknown = Readonly<{
+  kind: "outcome_unknown";
+  message: string;
+  retryable: false;
+  hint: string;
+  status?: number;
+}>;
+
 export type TaskReadError = Readonly<{
   kind:
     | "authentication"
@@ -49,6 +57,8 @@ export type TaskReadError = Readonly<{
   message: string;
   status?: number;
 }>;
+
+export type TaskWriteError = TaskReadError | WriteOutcomeUnknown;
 
 export interface TaskGateway {
   getTask(
@@ -96,7 +106,7 @@ export interface TaskCreationGateway {
     target: TaskCreationTarget,
     mutation: TaskMutation,
     fields?: readonly string[],
-  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>>;
+  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskWriteError>>;
 }
 
 export interface TaskParentMutationGateway {
@@ -105,7 +115,7 @@ export interface TaskParentMutationGateway {
     taskId: string,
     parentId: string | null,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>>;
+  ): Promise<Result<Task, TaskWriteError>>;
 }
 
 export interface TaskSectionMutationGateway {
@@ -114,7 +124,7 @@ export interface TaskSectionMutationGateway {
     taskId: string,
     sectionGid: string,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>>;
+  ): Promise<Result<Task, TaskWriteError>>;
 }
 
 export interface TaskProjectMutationGateway {
@@ -123,7 +133,7 @@ export interface TaskProjectMutationGateway {
     taskId: string,
     projectGid: string,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>>;
+  ): Promise<Result<Task, TaskWriteError>>;
 }
 
 export type TaskParentUpdateOptions = Readonly<{ parent: string }>;
@@ -171,7 +181,7 @@ export type TaskUpdateError =
   | Readonly<{ kind: "invalid_usage"; message: string }>
   | Readonly<{ kind: "internal_error"; message: string }>
   | Readonly<{ kind: "configuration"; message: string }>
-  | TaskReadError;
+  | TaskWriteError;
 
 export type MyTasksMutationError = TaskUpdateError;
 

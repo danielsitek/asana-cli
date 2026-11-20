@@ -2,12 +2,21 @@ import { z } from "zod";
 
 import type { IdentityError } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import type { WriteOutcomeUnknown } from "../tasks/index.ts";
 
-export type HttpRequestOptions = Readonly<{
-  method: "GET" | "POST" | "PUT";
+type RequestData = Readonly<{
   searchParams?: Readonly<Record<string, string>>;
   body?: unknown;
 }>;
+
+export type HttpRequestOptions = RequestData &
+  Readonly<{ method: "GET" | "PUT" }>;
+
+export type PostRequestOptions = RequestData &
+  Readonly<{ method: "POST"; outcomeUnknownHint: string }>;
+
+type RequestOptions = HttpRequestOptions | PostRequestOptions;
+type RequestError = IdentityError | WriteOutcomeUnknown;
 
 export type HttpTransportOptions = Readonly<{
   baseUrl?: string;
@@ -25,7 +34,7 @@ type RetryOutcome = Readonly<{
 }>;
 
 type AttemptOutcome<T> =
-  | Readonly<{ kind: "complete"; result: Result<T, IdentityError> }>
+  | Readonly<{ kind: "complete"; result: Result<T, RequestError> }>
   | RetryOutcome;
 
 const wait = (milliseconds: number): Promise<void> =>
@@ -42,6 +51,17 @@ const invalidResponse = (): IdentityError => ({
 const networkError = (): IdentityError => ({
   kind: "network",
   message: "Unable to reach Asana",
+});
+
+const unknownWriteOutcome = (
+  options: PostRequestOptions,
+  status?: number,
+): WriteOutcomeUnknown => ({
+  kind: "outcome_unknown",
+  message: "Asana may have applied the write",
+  retryable: false,
+  hint: options.outcomeUnknownHint,
+  ...(status === undefined ? {} : { status }),
 });
 
 const responseError = (status: number, retryable: boolean): IdentityError => {
@@ -90,7 +110,7 @@ const requestUrl = (
 
 const requestInit = (
   token: string,
-  options: HttpRequestOptions,
+  options: RequestOptions,
   signal: AbortSignal,
 ): RequestInit => ({
   method: options.method,
@@ -115,16 +135,22 @@ const requestInit = (
 });
 
 const responseIsRetryable = (
-  method: HttpRequestOptions["method"],
+  method: RequestOptions["method"],
   status: number,
 ): boolean =>
   method === "POST" ? status === 429 : [429, 502, 503, 504].includes(status);
 
 const failedResponseOutcome = (
-  method: HttpRequestOptions["method"],
+  options: RequestOptions,
   response: Response,
 ): AttemptOutcome<never> => {
-  const retryable = responseIsRetryable(method, response.status);
+  if (options.method === "POST" && response.status >= 500) {
+    return {
+      kind: "complete",
+      result: err(unknownWriteOutcome(options, response.status)),
+    };
+  }
+  const retryable = responseIsRetryable(options.method, response.status);
   const error = responseError(response.status, retryable);
   return retryable
     ? {
@@ -136,22 +162,25 @@ const failedResponseOutcome = (
 };
 
 const networkFailureOutcome = (
-  method: HttpRequestOptions["method"],
+  options: RequestOptions,
 ): AttemptOutcome<never> => {
-  const error = networkError();
-  return method === "POST"
-    ? { kind: "complete", result: err(error) }
-    : { kind: "retry", error, retryAfter: null };
+  return options.method === "POST"
+    ? { kind: "complete", result: err(unknownWriteOutcome(options)) }
+    : { kind: "retry", error: networkError(), retryAfter: null };
 };
 
 const parseResponse = async <T>(
   response: Response,
   schema: z.ZodType<T>,
-): Promise<Result<T, IdentityError>> => {
+  options: RequestOptions,
+): Promise<Result<T, RequestError>> => {
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (error) {
+    if (options.method === "POST" && !(error instanceof SyntaxError)) {
+      return err(unknownWriteOutcome(options));
+    }
     return err(invalidResponse());
   }
   const parsed = schema.safeParse(body);
@@ -175,12 +204,24 @@ export class AsanaHttpTransport {
     this.#now = defaultTo(options.now, Date.now);
   }
 
-  async request<T>(
+  request<T>(
     token: string,
     path: string,
     options: HttpRequestOptions,
     schema: z.ZodType<T>,
-  ): Promise<Result<T, IdentityError>> {
+  ): Promise<Result<T, IdentityError>>;
+  request<T>(
+    token: string,
+    path: string,
+    options: PostRequestOptions,
+    schema: z.ZodType<T>,
+  ): Promise<Result<T, RequestError>>;
+  async request<T>(
+    token: string,
+    path: string,
+    options: RequestOptions,
+    schema: z.ZodType<T>,
+  ): Promise<Result<T, RequestError>> {
     const url = requestUrl(this.#baseUrl, path, options.searchParams);
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
       const outcome = await this.executeAttempt(token, url, options, schema);
@@ -194,24 +235,25 @@ export class AsanaHttpTransport {
   private async executeAttempt<T>(
     token: string,
     url: URL,
-    options: HttpRequestOptions,
+    options: RequestOptions,
     schema: z.ZodType<T>,
   ): Promise<AttemptOutcome<T>> {
     const controller = new AbortController();
+    const init = requestInit(token, options, controller.signal);
     const timeout = setTimeout(
       () => controller.abort(),
       this.#requestTimeoutMs,
     );
     try {
-      const response = await fetch(
-        url,
-        requestInit(token, options, controller.signal),
-      );
+      const response = await fetch(url, init);
       return response.ok
-        ? { kind: "complete", result: await parseResponse(response, schema) }
-        : failedResponseOutcome(options.method, response);
+        ? {
+            kind: "complete",
+            result: await parseResponse(response, schema, options),
+          }
+        : failedResponseOutcome(options, response);
     } catch {
-      return networkFailureOutcome(options.method);
+      return networkFailureOutcome(options);
     } finally {
       clearTimeout(timeout);
     }

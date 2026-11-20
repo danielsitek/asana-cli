@@ -46,6 +46,8 @@ import {
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
+  type TaskWriteError,
+  type WriteOutcomeUnknown,
 } from "../tasks/index.ts";
 import type {
   Workspace,
@@ -58,6 +60,7 @@ import {
   AsanaHttpTransport,
   type HttpRequestOptions,
   type HttpTransportOptions,
+  type PostRequestOptions,
 } from "./http-transport.ts";
 import {
   hasOwn,
@@ -228,7 +231,7 @@ const planTaskCreationWrite = (
   fields: readonly string[] | undefined,
 ): Readonly<{
   path: string;
-  options: HttpRequestOptions;
+  options: PostRequestOptions;
   schema: z.ZodType<{ data: Task & Readonly<{ gid: string }> }>;
 }> => {
   const data =
@@ -251,6 +254,10 @@ const planTaskCreationWrite = (
       target.kind === "subtask" ? `tasks/${target.parentId}/subtasks` : "tasks",
     options: {
       method: "POST",
+      outcomeUnknownHint:
+        target.kind === "workspace"
+          ? "Search the workspace in Asana for the new task before retrying."
+          : "List tasks in the destination and look for the new task before retrying.",
       ...(selection.searchParams === undefined
         ? {}
         : { searchParams: selection.searchParams }),
@@ -266,10 +273,10 @@ const sectionProjectSchema = z.object({
   }),
 });
 
-const mapTaskReadError = (
-  error: IdentityError,
+const mapTaskReadError = <E extends IdentityError | WriteOutcomeUnknown>(
+  error: E,
   message: string,
-): TaskReadError =>
+): E | Readonly<{ kind: "not_found"; status: 404; message: string }> =>
   error.kind === "api" && error.status === 404
     ? { kind: "not_found", status: 404, message }
     : error;
@@ -1081,7 +1088,7 @@ export class AsanaHttpClient
     taskId: string,
     parentId: string | null,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>> {
+  ): Promise<Result<Task, TaskWriteError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
         kind: "invalid_response",
@@ -1097,11 +1104,13 @@ export class AsanaHttpClient
 
     const selection = mutationFieldSelection(fields);
     const schema = z.object({ data: buildMutatedTaskSchema(selection.fields) });
-    const result = await this.#request(
+    const result = await this.#transport.request(
       token,
       `tasks/${taskId}/setParent`,
       {
         method: "POST",
+        outcomeUnknownHint:
+          "Read the task's parent with tasks get --fields=parent.gid before retrying.",
         ...(selection.searchParams === undefined
           ? {}
           : { searchParams: selection.searchParams }),
@@ -1120,7 +1129,7 @@ export class AsanaHttpClient
     taskId: string,
     sectionGid: string,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>> {
+  ): Promise<Result<Task, TaskWriteError>> {
     if (!/^\d+$/.test(taskId) || !/^\d+$/.test(sectionGid)) {
       return err({
         kind: "invalid_response",
@@ -1144,10 +1153,15 @@ export class AsanaHttpClient
       return err(mapTaskReadError(read.error, "Task not found"));
     }
 
-    const moved = await this.#request(
+    const moved = await this.#transport.request(
       token,
       `sections/${sectionGid}/addTask`,
-      { method: "POST", body: { data: { task: taskId } } },
+      {
+        method: "POST",
+        outcomeUnknownHint:
+          "List tasks in the destination section and look for the task before retrying.",
+        body: { data: { task: taskId } },
+      },
       z.object({ data: z.object({}).passthrough() }),
     );
     return moved.ok
@@ -1160,7 +1174,7 @@ export class AsanaHttpClient
     taskId: string,
     projectGid: string,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>> {
+  ): Promise<Result<Task, TaskWriteError>> {
     if (!/^\d+$/.test(taskId) || !/^\d+$/.test(projectGid)) {
       return err({
         kind: "invalid_response",
@@ -1184,10 +1198,15 @@ export class AsanaHttpClient
       return err(mapTaskReadError(read.error, "Task not found"));
     }
 
-    const added = await this.#request(
+    const added = await this.#transport.request(
       token,
       `tasks/${taskId}/addProject`,
-      { method: "POST", body: { data: { project: projectGid } } },
+      {
+        method: "POST",
+        outcomeUnknownHint:
+          "Read the task's projects with tasks get --fields=projects.gid before retrying.",
+        body: { data: { project: projectGid } },
+      },
       z.object({ data: z.object({}).passthrough() }),
     );
     return added.ok
@@ -1200,7 +1219,7 @@ export class AsanaHttpClient
     target: TaskCreationTarget,
     mutation: TaskMutation,
     fields?: readonly string[],
-  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskReadError>> {
+  ): Promise<Result<Task & Readonly<{ gid: string }>, TaskWriteError>> {
     const validated = validateTaskCreationTargetGid(target);
     if (!validated.ok) return validated;
 
@@ -1216,7 +1235,7 @@ export class AsanaHttpClient
       resolvedTarget = target;
     }
     const planned = planTaskCreationWrite(resolvedTarget, mutation, fields);
-    const result = await this.#request(
+    const result = await this.#transport.request(
       token,
       planned.path,
       planned.options,
@@ -1423,7 +1442,7 @@ export class AsanaHttpClient
     text: string,
     fields: readonly string[],
     parentCommentGid?: string,
-  ): Promise<Result<Comment, TaskReadError>> {
+  ): Promise<Result<Comment, TaskWriteError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
         kind: "invalid_response",
@@ -1431,11 +1450,13 @@ export class AsanaHttpClient
       });
     }
 
-    const result = await this.#request(
+    const result = await this.#transport.request(
       token,
       `tasks/${taskId}/stories`,
       {
         method: "POST",
+        outcomeUnknownHint:
+          "Check the task's comments with tasks comments before retrying.",
         searchParams: { opt_fields: fields.join(",") },
         body: {
           data: {

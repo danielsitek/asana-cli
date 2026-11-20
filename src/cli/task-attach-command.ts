@@ -7,7 +7,7 @@ import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
-  renderTaskReadFailure,
+  renderTaskWriteFailure,
   type TaskCommandContext,
 } from "./task-command-context.ts";
 
@@ -46,7 +46,7 @@ const runTaskAttach = async (
     if (attached.error.kind === "internal_error")
       return internalError(attached.error.message);
     if (attached.error.kind !== "partial")
-      return renderTaskReadFailure(attached.error.kind);
+      return renderTaskWriteFailure(attached.error);
     return {
       stdout: `${JSON.stringify({
         completed: { upload: attached.error.uploaded },
