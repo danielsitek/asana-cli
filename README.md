@@ -408,8 +408,9 @@ asana-cli tasks update 1219742046666668 \
 - `--json` and `--fields` may appear before or after the subcommand.
 - On success, `--json` prints one compact, minified line: `{"data":...,"meta":...}`.
 - A command group without a subcommand prints that group's help to stdout and exits 0.
-- Without `--json`, command-line syntax errors print an actionable error followed by the relevant command help to stderr and exit 2.
-- With `--json`, errors are one compact JSON line on stderr: `{"error":{"code":"...","message":"..."}}`. Other command errors use the same envelope without `--json`. Exception: a failed multi-step `tasks create` (exit 1) prints its `{"completed":...,"failed":...,"message":...}` partial-result detail to **stdout** — see [Safety and mutation contract](#safety-and-mutation-contract).
+- Without `--json`, errors print a human-readable `error: …` message to stderr. Syntax errors and `invalid_usage` errors also print the relevant command help and exit 2.
+- With `--json`, errors print one compact `{"error":{"code":"...","message":"..."}}` line to stderr and leave stdout empty.
+- Partial writes (exit 1) report their results on **stdout** in both modes. See [Safety and mutation contract](#safety-and-mutation-contract).
 
 ## Machine-readable capabilities
 
