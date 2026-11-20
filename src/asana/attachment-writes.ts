@@ -4,7 +4,7 @@ import type {
   AttachmentWriteGateway,
   UploadedAttachment,
 } from "../attachments/upload.ts";
-import type { TaskReadError } from "../tasks/index.ts";
+import type { TaskReadError, TaskWriteError } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import {
   AsanaHttpTransport,
@@ -17,7 +17,9 @@ const uploadResponseSchema = z.object({
     .passthrough(),
 });
 
-const mapWriteError = (error: TaskReadError): TaskReadError =>
+const mapWriteError = <E extends TaskWriteError>(
+  error: E,
+): E | TaskReadError =>
   error.kind === "api" && error.status === 404
     ? { kind: "not_found", status: 404, message: "Task not found" }
     : error;
@@ -36,7 +38,7 @@ export class AsanaAttachmentWriter implements AttachmentWriteGateway {
     token: string,
     taskId: string,
     file: Readonly<{ name: string; bytes: Uint8Array; contentType: string }>,
-  ): Promise<Result<UploadedAttachment, TaskReadError>> {
+  ): Promise<Result<UploadedAttachment, TaskWriteError>> {
     const form = new FormData();
     form.set("parent", taskId);
     const filename = /[^\x20-\x7e]/.test(file.name)
@@ -52,6 +54,8 @@ export class AsanaAttachmentWriter implements AttachmentWriteGateway {
       "attachments",
       {
         method: "POST",
+        outcomeUnknownHint:
+          "Check the task's attachments with tasks attachments before retrying.",
         searchParams: { opt_fields: "gid,name,size" },
         body: form,
       },

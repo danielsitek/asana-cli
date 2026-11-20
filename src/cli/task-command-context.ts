@@ -6,7 +6,11 @@ import {
   createMyTasksMutationResolver,
 } from "../my-tasks/index.ts";
 import type { Result } from "../shared/result.ts";
-import type { TaskReadError, TaskUpdateError } from "../tasks/index.ts";
+import type {
+  TaskReadError,
+  TaskUpdateError,
+  TaskWriteError,
+} from "../tasks/index.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
 
@@ -94,13 +98,22 @@ export const renderTaskReadFailure = (
   };
 };
 
+export const renderTaskWriteFailure = (
+  error: TaskWriteError,
+): CommandResult => {
+  if (error.kind !== "outcome_unknown")
+    return renderTaskReadFailure(error.kind);
+  const { kind, message, retryable, hint } = error;
+  return { error: { code: kind, message, retryable, hint }, exitCode: 4 };
+};
+
 export const renderTaskWorkflowFailure = (
   error: TaskUpdateError,
   usageError: (message: string) => CommandResult,
 ): CommandResult => {
   if (error.kind === "invalid_usage") return usageError(error.message);
   if (error.kind === "configuration") return renderConfigFailure(error);
-  if (error.kind !== "internal_error") return renderTaskReadFailure(error.kind);
+  if (error.kind !== "internal_error") return renderTaskWriteFailure(error);
   return internalError(error.message);
 };
 

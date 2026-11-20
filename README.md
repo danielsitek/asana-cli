@@ -504,8 +504,10 @@ credentials, or the Asana API.
   exclusive with `--all` and `--offset`. If the cap is reached before the
   source is fully scanned, it fails and returns no data — rerun with a higher
   `--max`.
-- `POST` is never retried after an ambiguous timeout, network error, or 5xx —
-  this avoids duplicating a task, subtask, or comment.
+- An ambiguous `POST` timeout, network error, or 5xx returns exit 4 with
+  `outcome_unknown`. JSON errors include `retryable: false` and an
+  operation-specific `hint`. Check the resulting state in Asana before
+  retrying.
 - Multi-step writes (such as `tasks create` with My Tasks placement) validate
   every input before the first write, then report every completed and failed
   stage; a failure after the first write returns a partial result (exit 1) on

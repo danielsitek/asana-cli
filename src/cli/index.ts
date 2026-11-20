@@ -93,7 +93,12 @@ const formatCommandResult = (
     error.code === "invalid_usage"
       ? `\n${command.helpInformation({ error: true })}`
       : "";
-  return { stdout: "", stderr: `error: ${error.message}\n${help}`, exitCode };
+  const hint = error.hint === undefined ? "" : `hint: ${error.hint}\n`;
+  return {
+    stdout: "",
+    stderr: `error: ${error.message}\n${hint}${help}`,
+    exitCode,
+  };
 };
 
 const appendUpdateNotice = async (

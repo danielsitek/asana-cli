@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { execute } from "../cli/index.ts";
+import { AsanaAttachmentWriter } from "./attachment-writes.ts";
 import { AsanaHttpClient } from "./index.ts";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
@@ -13,6 +14,86 @@ const serverFor = (
   servers.push(server);
   return `http://127.0.0.1:${server.port}/api/1.0`;
 };
+
+describe("CLI reporting for ambiguous Asana writes", () => {
+  test.each([
+    {
+      args: ["create", "--parent=123", "--name=New task"],
+      check: "List tasks in the destination",
+    },
+    { args: ["comment", "123", "hello"], check: "Check the task's comments" },
+    {
+      args: ["attach", "123", `--file=${import.meta.path}`],
+      check: "Check the task's attachments",
+    },
+    {
+      args: ["update", "123", "--parent=456"],
+      check: "Read the task's parent",
+    },
+    {
+      args: ["update", "123", "--section=456"],
+      check: "List tasks in the destination section",
+    },
+    {
+      args: ["update", "123", "--project=456"],
+      check: "Read the task's projects",
+    },
+  ])("reports the uncertain outcome for $args", async ({ args, check }) => {
+    let posts = 0;
+    const baseUrl = serverFor((request) => {
+      if (request.method === "POST") {
+        posts += 1;
+        return new Response("private server details", { status: 503 });
+      }
+      return Response.json({ data: { gid: "123" } });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const dependencies = {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity: client,
+      taskCreator: client,
+      taskWriter: client,
+      taskParentWriter: client,
+      taskProjectWriter: client,
+      taskSectionWriter: client,
+      commentWriter: client,
+      attachmentWriter: new AsanaAttachmentWriter({ baseUrl }),
+    };
+
+    const result = await execute(["tasks", ...args, "--json"], dependencies);
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toEqual({
+      error: {
+        code: "outcome_unknown",
+        message: "Asana may have applied the write",
+        retryable: false,
+        hint: expect.stringContaining(check),
+      },
+    });
+    expect(posts).toBe(1);
+  });
+
+  test("prints verification guidance in human-readable mode", async () => {
+    const baseUrl = serverFor(() => new Response(null, { status: 500 }));
+    const client = new AsanaHttpClient({ baseUrl });
+
+    const result = await execute(["tasks", "comment", "123", "hello"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity: client,
+      commentWriter: client,
+    });
+
+    expect(result).toEqual({
+      exitCode: 4,
+      stdout: "",
+      stderr:
+        "error: Asana may have applied the write\n" +
+        "hint: Check the task's comments with tasks comments before retrying.\n",
+    });
+  });
+});
 
 describe("AsanaHttpClient", () => {
   test("lists task attachments and keeps signed URLs out of default output", async () => {
@@ -1471,7 +1552,7 @@ describe("AsanaHttpClient", () => {
     const result = await new AsanaHttpClient({
       baseUrl,
       maxRetries: 1,
-      requestTimeoutMs: 1,
+      requestTimeoutMs: 250,
       sleep: async () => undefined,
     }).updateTask("token", "123", { completed: true });
 
@@ -1643,9 +1724,11 @@ describe("AsanaHttpClient", () => {
       expect(result).toEqual({
         ok: false,
         error: {
-          kind: "api",
+          kind: "outcome_unknown",
           status,
-          message: `Asana API request failed (${status})`,
+          message: "Asana may have applied the write",
+          retryable: false,
+          hint: "Read the task's parent with tasks get --fields=parent.gid before retrying.",
         },
       });
       expect(calls).toBe(1);
@@ -1982,9 +2065,11 @@ describe("AsanaHttpClient", () => {
       expect(result).toEqual({
         ok: false,
         error: {
-          kind: "api",
+          kind: "outcome_unknown",
           status,
-          message: `Asana API request failed (${status})`,
+          message: "Asana may have applied the write",
+          retryable: false,
+          hint: "List tasks in the destination and look for the new task before retrying.",
         },
       });
       expect(attempts).toBe(1);
@@ -2001,7 +2086,7 @@ describe("AsanaHttpClient", () => {
     const result = await new AsanaHttpClient({
       baseUrl,
       maxRetries: 3,
-      requestTimeoutMs: 1,
+      requestTimeoutMs: 250,
       sleep: async () => undefined,
     }).createTask(
       "token",
@@ -2013,7 +2098,12 @@ describe("AsanaHttpClient", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: { kind: "network", message: "Unable to reach Asana" },
+      error: {
+        kind: "outcome_unknown",
+        message: "Asana may have applied the write",
+        retryable: false,
+        hint: "List tasks in the destination and look for the new task before retrying.",
+      },
     });
     expect(attempts).toBe(1);
   });
@@ -2044,7 +2134,12 @@ describe("AsanaHttpClient", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: { kind: "network", message: "Unable to reach Asana" },
+      error: {
+        kind: "outcome_unknown",
+        message: "Asana may have applied the write",
+        retryable: false,
+        hint: "List tasks in the destination and look for the new task before retrying.",
+      },
     });
     expect(waits).toEqual([]);
   });

@@ -6,6 +6,7 @@ import {
   parseTaskId,
   type TaskGateway,
   type TaskReadError,
+  type TaskWriteError,
 } from "../tasks/index.ts";
 
 export const MAX_ATTACHMENT_BYTES = 100_000_000;
@@ -22,7 +23,7 @@ export interface AttachmentWriteGateway {
     token: string,
     taskId: string,
     file: Readonly<{ name: string; bytes: Uint8Array; contentType: string }>,
-  ): Promise<Result<UploadedAttachment, TaskReadError>>;
+  ): Promise<Result<UploadedAttachment, TaskWriteError>>;
   setTaskHtmlNotes(
     token: string,
     taskId: string,
@@ -31,8 +32,9 @@ export interface AttachmentWriteGateway {
 }
 
 export type AttachmentUploadError =
-  | TaskReadError
-  | Readonly<{ kind: "invalid_usage" | "internal_error"; message: string }>
+  | TaskWriteError
+  | Readonly<{ kind: "invalid_usage"; message: string }>
+  | Readonly<{ kind: "internal_error"; message: string }>
   | Readonly<{
       kind: "partial";
       uploaded: UploadedAttachment;
