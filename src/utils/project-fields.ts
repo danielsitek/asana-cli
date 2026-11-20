@@ -1,5 +1,6 @@
 type FieldTree = Readonly<{
   selected: boolean;
+  optional: boolean;
   children: ReadonlyMap<string, FieldTree>;
 }>;
 
@@ -9,6 +10,7 @@ export type FieldProjection = Readonly<
 
 type MutableFieldTree = {
   selected: boolean;
+  optional: boolean;
   children: Map<string, MutableFieldTree>;
 };
 
@@ -16,19 +18,27 @@ type ProjectedValue = Readonly<
   { found: true; value: unknown } | { found: false }
 >;
 
-const fieldTree = (fields: readonly string[]): FieldTree => {
-  const root: MutableFieldTree = { selected: false, children: new Map() };
+const fieldTree = (
+  fields: readonly string[],
+  optionalFields: readonly string[],
+): FieldTree => {
+  const root: MutableFieldTree = {
+    selected: false,
+    optional: false,
+    children: new Map(),
+  };
   for (const field of fields) {
     let node = root;
     for (const segment of field.split(".")) {
       let child = node.children.get(segment);
       if (child === undefined) {
-        child = { selected: false, children: new Map() };
+        child = { selected: false, optional: false, children: new Map() };
         node.children.set(segment, child);
       }
       node = child;
     }
     node.selected = true;
+    node.optional = optionalFields.includes(field);
   }
   return root;
 };
@@ -49,7 +59,10 @@ const projectValue = (value: unknown, selection: FieldTree): ProjectedValue => {
   const source = value as Record<string, unknown>;
   const projected: Record<string, unknown> = {};
   for (const [field, child] of selection.children) {
-    if (!Object.hasOwn(source, field)) return { found: false };
+    if (!Object.hasOwn(source, field)) {
+      if (child.optional) continue;
+      return { found: false };
+    }
     const result = projectValue(source[field], child);
     if (!result.found) return result;
     projected[field] = result.value;
@@ -60,8 +73,9 @@ const projectValue = (value: unknown, selection: FieldTree): ProjectedValue => {
 export const projectFields = (
   value: unknown,
   fields: readonly string[],
+  optionalFields: readonly string[] = [],
 ): FieldProjection => {
-  const projected = projectValue(value, fieldTree(fields));
+  const projected = projectValue(value, fieldTree(fields, optionalFields));
   return projected.found &&
     typeof projected.value === "object" &&
     projected.value !== null &&

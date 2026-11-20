@@ -1242,6 +1242,58 @@ describe("AsanaHttpClient", () => {
     });
   });
 
+  test.each([
+    {
+      fields: ["custom_fields.gid", "custom_fields.number_value"],
+      mutation: { custom_fields: { "500": 239 } },
+      expected: [
+        { gid: "500", number_value: 239 },
+        { gid: "501" },
+        { gid: "502", number_value: null },
+      ],
+    },
+    {
+      fields: ["custom_fields.number_value"],
+      mutation: { name: "Renamed" },
+      expected: [{ number_value: 239 }, {}, { number_value: null }],
+    },
+  ])("projects conditional number values for $fields", async (testCase) => {
+    const { fields, mutation, expected } = testCase;
+    let requests = 0;
+    const baseUrl = serverFor(async (request) => {
+      requests += 1;
+      expect(request.method).toBe("PUT");
+      expect(new URL(request.url).searchParams.get("opt_fields")).toBe(
+        ["gid", ...fields].join(","),
+      );
+      expect(await request.json()).toEqual({ data: mutation });
+      return Response.json({
+        data: {
+          gid: "123",
+          name: "Renamed",
+          custom_fields: [
+            { gid: "500", format: "duration", number_value: 239 },
+            { gid: "501", text_value: "Example" },
+            { gid: "502", number_value: null },
+          ],
+        },
+      });
+    });
+
+    const result = await new AsanaHttpClient({ baseUrl }).updateTask(
+      "secret-token",
+      "123",
+      mutation,
+      fields,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { gid: "123", custom_fields: expected },
+    });
+    expect(requests).toBe(1);
+  });
+
   test("rejects an update response whose requested nested leaf is absent", async () => {
     const baseUrl = serverFor(async () =>
       Response.json({
