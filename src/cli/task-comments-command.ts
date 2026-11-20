@@ -5,10 +5,9 @@ import {
 import {
   renderCommentList,
   renderCommentScanWarning,
-  renderError,
   renderJson,
 } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -37,9 +36,8 @@ const prepareComments = (
     ...(options.latest === undefined ? {} : { latest: options.latest }),
   });
 
-const scanLimitError = (message: string): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "scan_limit", message }),
+const scanLimitError = (message: string): CommandResult => ({
+  error: { code: "scan_limit", message },
   exitCode: 5,
 });
 
@@ -47,7 +45,7 @@ const runTaskComments = async (
   context: TaskCommandContext,
   idArg: string,
   options: TaskCommentsOptions,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const prepared = prepareComments(idArg, options, invocation);
   if (!prepared.ok) return context.usageError(prepared.error.message);

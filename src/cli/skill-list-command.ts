@@ -1,7 +1,7 @@
 import { renderJson } from "../output/index.ts";
 import { listSkillInstallations } from "../skill/index.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import {
   renderSkillError,
   type SkillCommandContext,
@@ -10,7 +10,7 @@ import { renderSkillList } from "./skill-list-output.ts";
 
 const runSkillList = async (
   context: SkillCommandContext,
-): Promise<Execution | undefined> => {
+): Promise<CommandResult | undefined> => {
   const invocation = context.beginCommand();
   if (!invocation) return undefined;
   const listed = await listSkillInstallations(invocation.context);

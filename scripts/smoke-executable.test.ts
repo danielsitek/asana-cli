@@ -43,9 +43,10 @@ if [ "$*" = "${failedCommand}" ]; then exit 99; fi
 case "$*" in
   '') printf 'Usage: asana-cli\\n' ;;
   --version) printf '${version}\\n' ;;
-  'tasks get invalid') printf '{"message":"Invalid task identifier"}\\n' >&2; exit 2 ;;
+  'tasks get invalid') printf 'error: Invalid task identifier\\n\\nUsage: asana-cli tasks get\\n' >&2; exit 2 ;;
+  'tasks get invalid --json') printf '{"error":{"code":"invalid_usage","message":"Invalid task identifier"}}\\n' >&2; exit 2 ;;
   'completion zsh') printf '#compdef asana-cli\\n' ;;
-  whoami) printf '{"message":"ASANA_CLI_TOKEN is required"}\\n' >&2; exit 3 ;;
+  whoami) printf 'error: ASANA_CLI_TOKEN is required\\n' >&2; exit 3 ;;
   'skill install universal --local')
     mkdir -p .agents/skills/asana-cli
     cp '${canonicalSkill}' .agents/skills/asana-cli/SKILL.md
@@ -71,7 +72,8 @@ test("rejects a binary without executable permission before running commands", a
 test.each([
   ["", "help"],
   ["--version", "version"],
-  ["tasks get invalid", "invalid usage"],
+  ["tasks get invalid", "human-readable invalid usage"],
+  ["tasks get invalid --json", "JSON invalid usage"],
   ["completion zsh", "shell completion"],
   ["skill install universal --local", "bundled skill"],
 ])("rejects a failing core command: %s", async (command, label) => {
@@ -108,7 +110,7 @@ test.each([false, true])(
         await result;
       }
       expect(await readFile(log, "utf8")).toBe(
-        "\n--version\ntasks get invalid\ncompletion zsh\nskill install universal --local\nwhoami\n",
+        "\n--version\ntasks get invalid\ntasks get invalid --json\ncompletion zsh\nskill install universal --local\nwhoami\n",
       );
       const isolation = await readFile(join(directory, "isolation"), "utf8");
       await expect(stat(isolation.trim())).rejects.toMatchObject({

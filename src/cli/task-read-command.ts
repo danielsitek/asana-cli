@@ -5,7 +5,7 @@ import {
 } from "../tasks/index.ts";
 import { renderJson, renderTaskDetail } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -17,7 +17,7 @@ import {
 const selectedFields = (
   fields: string | undefined,
   usageError: TaskCommandContext["usageError"],
-): Result<readonly string[], Execution> => {
+): Result<readonly string[], CommandResult> => {
   if (fields === undefined) return { ok: true, value: DEFAULT_FIELDS };
   const validated = validateFieldList(fields);
   return validated.ok
@@ -29,7 +29,7 @@ const runTaskGet = async (
   context: TaskCommandContext,
   idArg: string,
   invocation: TaskInvocation,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const parsedId = parseTaskId(idArg);
   if (!parsedId.ok) return context.usageError("Invalid task identifier");
   const fields = selectedFields(invocation.fields, context.usageError);

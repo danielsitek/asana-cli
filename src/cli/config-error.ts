@@ -1,9 +1,7 @@
 import type { ConfigError } from "../config/index.ts";
-import { renderError } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 
-export const renderConfigFailure = (error: ConfigError): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "configuration", message: error.message }),
+export const renderConfigFailure = (error: ConfigError): CommandResult => ({
+  error: { code: "configuration", message: error.message },
   exitCode: 2,
 });

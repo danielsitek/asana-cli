@@ -3,7 +3,7 @@ import {
   prepareTaskCommentCreate,
 } from "../comments/index.ts";
 import { renderCommentDetail, renderJson } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
@@ -34,7 +34,7 @@ const runTaskComment = async (
   idArg: string,
   textArg: string | undefined,
   options: TaskCommentOptions,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const prepared = prepareComment(idArg, textArg, options, invocation);
   if (!prepared.ok) return context.usageError(prepared.error.message);

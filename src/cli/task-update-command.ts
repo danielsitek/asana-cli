@@ -6,7 +6,7 @@ import {
   type TaskUpdateOptions,
 } from "../tasks/index.ts";
 import { renderJson, renderTaskUpdate } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
   internalError,
@@ -27,7 +27,7 @@ const renderUpdatedTask = (
   json: boolean,
   task: Parameters<typeof renderTaskUpdate>[0],
   applied: Parameters<typeof renderTaskUpdate>[1],
-): Execution => ({
+): CommandResult => ({
   stdout: json
     ? renderJson(task, { applied })
     : renderTaskUpdate(task, applied),
@@ -40,7 +40,7 @@ const runTaskParentUpdate = async (
   idArg: string,
   options: TaskUpdateOptions & Readonly<{ parent: string }>,
   invocation: TaskInvocation,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const prepared = prepareTaskParentUpdate(idArg, options, invocation.fields);
   if (!prepared.ok) return context.usageError(prepared.error.message);
   const token = context.requireToken();
@@ -100,7 +100,7 @@ const runTaskUpdate = async (
   idArg: string,
   options: TaskMutationCliOptions,
   invocation: TaskInvocation,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const { customField, ...rest } = options;
   const prepared = prepareTaskUpdate(
     idArg,
@@ -137,7 +137,7 @@ const runSelectedUpdate = async (
   context: TaskCommandContext,
   idArg: string,
   options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const { customField, parent, ...rest } = options;
   if (parent === undefined) {

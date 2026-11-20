@@ -4,7 +4,7 @@ import {
   renderTaskList,
   renderTaskListScanWarning,
 } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -48,7 +48,7 @@ const prepareList = (options: TaskListOptions, invocation: TaskInvocation) =>
 const runTaskList = async (
   context: TaskCommandContext,
   options: TaskListOptions,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const prepared = prepareList(options, invocation);
   if (!prepared.ok) return context.usageError(prepared.error.message);

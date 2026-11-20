@@ -707,8 +707,7 @@ describe("execute", () => {
     const result = await execute(["whoami"], { environment: {}, identity });
     expect(result).toEqual({
       stdout: "",
-      stderr:
-        '{"error":{"code":"authentication","message":"ASANA_CLI_TOKEN is required"}}\n',
+      stderr: "error: ASANA_CLI_TOKEN is required\n",
       exitCode: 3,
     });
   });
@@ -1234,29 +1233,62 @@ describe("execute", () => {
   });
 
   test("requires JSON when reporting capabilities", async () => {
-    await expect(
-      execute(["capabilities"], { environment: {}, identity }),
-    ).resolves.toEqual({
+    const dependencies = { environment: {}, identity };
+    const help = await execute(["capabilities", "--help"], dependencies);
+    expect(await execute(["capabilities"], dependencies)).toEqual({
       stdout: "",
-      stderr:
-        '{"error":{"code":"invalid_usage","message":"capabilities requires --json"}}\n',
+      stderr: `error: capabilities requires --json\n\n${help.stdout}`,
       exitCode: 2,
     });
   });
 
-  test("rejects an unsupported completion shell", async () => {
-    expect(
-      await execute(["completion", "powershell"], {
+  test.each([
+    [
+      ["completion"],
+      ["tcsh"],
+      "Unsupported shell: tcsh; expected bash, zsh, fish",
+    ],
+    [["tasks", "get"], ["not-an-id"], "Invalid task identifier"],
+    [["tasks", "create"], [], "--name is required"],
+    [
+      ["tasks", "list"],
+      ["--section", "100", "--project", "200"],
+      "Exactly one of --my-section, --section, --project, or --parent is required",
+    ],
+    [["config", "init"], [], "config init requires either --shared or --local"],
+    [
+      ["whoami"],
+      ["--fields", "gid"],
+      "Option --fields is not supported for this command",
+    ],
+  ])(
+    "formats usage errors for %j in both modes",
+    async (command, args, message) => {
+      const dependencies = {
         environment: {},
         identity,
-      }),
-    ).toEqual({
-      stdout: "",
-      stderr:
-        '{"error":{"code":"invalid_usage","message":"Unsupported shell: powershell; expected bash, zsh, fish"}}\n',
-      exitCode: 2,
-    });
-  });
+        configuration: { cwd: ".", home: ".", environment: {} },
+      };
+      const help = await execute([...command, "--help"], dependencies);
+      expect(help.exitCode).toBe(0);
+      expect(await execute([...command, ...args], dependencies)).toEqual({
+        stdout: "",
+        stderr: `error: ${message}\n\n${help.stdout}`,
+        exitCode: 2,
+      });
+
+      for (const argv of [
+        ["--json", ...command, ...args],
+        [...command, ...args, "--json"],
+      ]) {
+        expect(await execute(argv, dependencies)).toEqual({
+          stdout: "",
+          stderr: `${JSON.stringify({ error: { code: "invalid_usage", message } })}\n`,
+          exitCode: 2,
+        });
+      }
+    },
+  );
 
   test("normalizes unknown commands as JSON usage errors", async () => {
     expect(
@@ -1270,7 +1302,7 @@ describe("execute", () => {
   });
 
   test("hides unexpected dependency errors", async () => {
-    const result = await execute(["whoami"], {
+    const result = await execute(["whoami", "--json"], {
       environment: { ASANA_CLI_TOKEN: "secret-value" },
       identity: new ThrowingIdentity(),
     });
@@ -2047,7 +2079,7 @@ describe("config commands", () => {
     );
 
     const result = await execute(
-      ["config", "init", "--local", "--write-gitignore"],
+      ["config", "init", "--local", "--write-gitignore", "--json"],
       {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
         identity: new InMemoryIdentity(
@@ -2110,7 +2142,7 @@ describe("config commands", () => {
     );
     await writeFile(join(root, ".gitignore"), "/.asana-cli.local.json\n");
 
-    const result = await execute(["config", "resolve", "my-tasks"], {
+    const result = await execute(["config", "resolve", "my-tasks", "--json"], {
       environment: { ASANA_CLI_TOKEN: "valid-token" },
       identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada Lovelace" })),
       discovery: new InMemoryDiscovery(
@@ -2144,8 +2176,22 @@ describe("config commands", () => {
       ["config", "get", "non.existent.key"],
       dependencies,
     );
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("non.existent.key");
+    const message = "non.existent.key: configuration key is not set";
+    expect(result).toEqual({
+      stdout: "",
+      stderr: `error: ${message}\n`,
+      exitCode: 2,
+    });
+    expect(
+      await execute(
+        ["config", "get", "non.existent.key", "--json"],
+        dependencies,
+      ),
+    ).toEqual({
+      stdout: "",
+      stderr: `${JSON.stringify({ error: { code: "configuration", message } })}\n`,
+      exitCode: 2,
+    });
   });
 });
 
@@ -2239,8 +2285,7 @@ describe("tasks get command", () => {
     });
 
     expect(result.exitCode).toBe(4);
-    expect(result.stderr).toContain('"code":"not_found"');
-    expect(result.stderr).toContain("Task not found");
+    expect(result.stderr).toBe("error: Task not found\n");
     expect(result.stderr).not.toContain("top-secret-token");
   });
 
@@ -2336,11 +2381,14 @@ describe("tasks get command", () => {
           message: `error for ${kind}`,
         }),
       );
-      const result = await execute(["tasks", "get", "1215978111726134"], {
-        environment: { ASANA_CLI_TOKEN: "valid-token" },
-        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
-        taskReader: failingReader,
-      });
+      const result = await execute(
+        ["tasks", "get", "1215978111726134", "--json"],
+        {
+          environment: { ASANA_CLI_TOKEN: "valid-token" },
+          identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+          taskReader: failingReader,
+        },
+      );
       expect(result.exitCode).toBe(exitCode);
       expect(result.stderr).toContain(kind);
     }
@@ -2953,7 +3001,16 @@ describe("tasks update command", () => {
     async (fields) => {
       const writer = new InMemoryTaskWriter(ok(updatedTask));
       const result = await execute(
-        ["--fields", fields, "tasks", "update", "123", "--name", "Updated"],
+        [
+          "--fields",
+          fields,
+          "tasks",
+          "update",
+          "123",
+          "--name",
+          "Updated",
+          "--json",
+        ],
         { environment: {}, identity, taskWriter: writer },
       );
 
@@ -4185,11 +4242,14 @@ describe("tasks comments command", () => {
           message: "Task not found",
         }),
     };
-    const result = await execute(["tasks", "comments", "1215978111726134"], {
-      environment: { ASANA_CLI_TOKEN: "valid-token" },
-      identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
-      commentReader: failingReader,
-    });
+    const result = await execute(
+      ["tasks", "comments", "1215978111726134", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
+        commentReader: failingReader,
+      },
+    );
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("not_found");
   });
@@ -4394,7 +4454,16 @@ describe("tasks comments command", () => {
         }),
     };
     const result = await execute(
-      ["tasks", "comments", "1215978111726134", "--max", "1", "--latest", "1"],
+      [
+        "tasks",
+        "comments",
+        "1215978111726134",
+        "--max",
+        "1",
+        "--latest",
+        "1",
+        "--json",
+      ],
       {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
         identity: new InMemoryIdentity(ok({ gid: "123", name: "Ada" })),
@@ -4762,7 +4831,7 @@ describe("tasks list command", () => {
       identity,
     });
     expect(result.exitCode).toBe(6);
-    expect(result.stderr).toContain("internal_error");
+    expect(result.stderr).toBe("error: Task list reader is required\n");
   });
 
   test("maps a not_found task list reader error", async () => {
@@ -4786,11 +4855,14 @@ describe("tasks list command", () => {
           message: "Resource not found",
         }),
     };
-    const result = await execute(["tasks", "list", "--section", "500"], {
-      environment: { ASANA_CLI_TOKEN: "valid-token" },
-      identity,
-      taskListReader: failingReader,
-    });
+    const result = await execute(
+      ["tasks", "list", "--section", "500", "--json"],
+      {
+        environment: { ASANA_CLI_TOKEN: "valid-token" },
+        identity,
+        taskListReader: failingReader,
+      },
+    );
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("not_found");
   });
@@ -4934,7 +5006,7 @@ describe("projects get command", () => {
       ["projects", "get", "not-a-gid"],
       ["projects", "get", "100", "--fields", "name,,archived"],
     ]) {
-      const result = await execute(argv, {
+      const result = await execute([...argv, "--json"], {
         environment: {},
         identity,
         projectDetailReader: reader,
@@ -4946,7 +5018,7 @@ describe("projects get command", () => {
   });
 
   test("maps not-found and missing-reader failures", async () => {
-    const notFound = await execute(["projects", "get", "100"], {
+    const notFound = await execute(["projects", "get", "100", "--json"], {
       environment: { ASANA_CLI_TOKEN: "valid-token" },
       identity,
       projectDetailReader: new InMemoryProjectDetailReader(
@@ -5244,7 +5316,7 @@ describe("projects list command", () => {
       ["projects", "list", "--workspace", "100", "--all"],
     ]) {
       const reader = new InMemoryProjectReader([]);
-      const result = await execute(argv, {
+      const result = await execute([...argv, "--json"], {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
         identity,
         projectReader: reader,
@@ -5257,14 +5329,18 @@ describe("projects list command", () => {
 
   test("rejects missing workspace configuration", async () => {
     const reader = new InMemoryProjectReader([]);
-    const result = await execute(["projects", "list"], {
+    const dependencies = {
       environment: { ASANA_CLI_TOKEN: "valid-token" },
       identity,
       projectReader: reader,
       configuration: await configured(undefined),
+    };
+    const help = await execute(["projects", "list", "--help"], dependencies);
+    expect(await execute(["projects", "list"], dependencies)).toEqual({
+      stdout: "",
+      stderr: `error: projects list requires --workspace or a configured workspace.gid\n\n${help.stdout}`,
+      exitCode: 2,
     });
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("workspace.gid");
     expect(reader.calls).toHaveLength(0);
   });
 
@@ -5277,8 +5353,7 @@ describe("projects list command", () => {
     });
     expect(result).toEqual({
       stdout: "",
-      stderr:
-        '{"error":{"code":"authentication","message":"ASANA_CLI_TOKEN is required"}}\n',
+      stderr: "error: ASANA_CLI_TOKEN is required\n",
       exitCode: 3,
     });
     expect(reader.calls).toHaveLength(0);
@@ -5286,7 +5361,7 @@ describe("projects list command", () => {
 
   test("maps authentication and pagination failures safely", async () => {
     const authentication = await execute(
-      ["projects", "list", "--workspace", "100"],
+      ["projects", "list", "--workspace", "100", "--json"],
       {
         environment: { ASANA_CLI_TOKEN: "invalid-token" },
         identity,
@@ -5310,7 +5385,16 @@ describe("projects list command", () => {
       }),
     ]);
     const pagination = await execute(
-      ["projects", "list", "--workspace", "100", "--max", "3", "--all"],
+      [
+        "projects",
+        "list",
+        "--workspace",
+        "100",
+        "--max",
+        "3",
+        "--all",
+        "--json",
+      ],
       {
         environment: { ASANA_CLI_TOKEN: "valid-token" },
         identity,
@@ -5819,8 +5903,20 @@ describe("skill commands", () => {
     );
     expect(installed.exitCode).toBe(0);
 
+    expect(
+      await execute(
+        ["skill", "install", "claude-code", "--local"],
+        commandDependencies,
+      ),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        "error: The asana-cli skill is already installed; use --force to replace it\n",
+      exitCode: 2,
+    });
+
     const duplicate = await execute(
-      ["skill", "install", "claude-code", "--local"],
+      ["skill", "install", "claude-code", "--local", "--json"],
       commandDependencies,
     );
     expect(duplicate).toMatchObject({ stdout: "", exitCode: 2 });
@@ -5829,7 +5925,7 @@ describe("skill commands", () => {
     });
 
     const unknown = await execute(
-      ["skill", "install", "other", "--local"],
+      ["skill", "install", "other", "--local", "--json"],
       commandDependencies,
     );
     expect(unknown).toMatchObject({ stdout: "", exitCode: 2 });

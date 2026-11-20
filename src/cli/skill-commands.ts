@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 
 import { withCommandCapabilities } from "./capabilities.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { registerSkillInstallCommand } from "./skill-install-command.ts";
 import { registerSkillListCommand } from "./skill-list-command.ts";
 import type { SkillInvocation } from "./skill-command-context.ts";
@@ -11,7 +11,7 @@ import { registerSkillUpdateCommand } from "./skill-update-command.ts";
 type SkillCommandRegistration = Readonly<{
   program: Command;
   beginCommand: () => SkillInvocation | undefined;
-  complete: (execution: Execution) => void;
+  complete: (execution: CommandResult) => void;
 }>;
 
 export const registerSkillCommands = (

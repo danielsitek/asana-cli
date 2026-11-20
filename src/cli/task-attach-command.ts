@@ -3,7 +3,7 @@ import {
   prepareAttachmentUpload,
 } from "../attachments/upload.ts";
 import { renderJson, renderTaskDetail } from "../output/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -21,7 +21,7 @@ const runTaskAttach = async (
   context: TaskCommandContext,
   id: string,
   options: Options,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const prepared = await prepareAttachmentUpload(id, options);
   if (!prepared.ok) {
