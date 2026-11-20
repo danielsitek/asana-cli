@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.12.0
+
+- Update project custom fields by GID on existing tasks with `tasks update`,
+  including tasks assigned to another user.
+- Print human-readable errors and contextual help for usage errors in the
+  terminal. With `--json`, emit one structured error on stderr.
+
 ## 0.11.0
 
 - Add bounded task attachment listing and safe streamed downloads using fresh
