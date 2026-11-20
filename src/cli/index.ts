@@ -145,9 +145,8 @@ const showHelpCommand = (program: Command, argv: readonly string[]): void => {
     }
     if (helpRequested && ["--help", "-h"].includes(arg)) continue;
 
-    const child = command.commands.find(
-      (candidate) =>
-        candidate.name() === arg || candidate.aliases().includes(arg),
+    const child = command.commands.find((candidate) =>
+      [candidate.name(), ...candidate.aliases()].includes(arg),
     );
     if (!child) {
       if (!helpRequested) return;
