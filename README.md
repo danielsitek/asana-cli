@@ -381,6 +381,8 @@ existing task does not require this assignee check.
 ### Comments (`tasks comment` / `tasks comments`)
 
 - `tasks comment <id> "text"` or `--file=<path|->` posts a comment; `--file=-` reads from stdin.
+- `tasks comment <id> --reply-to=<story-gid> --file=reply.txt` posts a threaded reply. Use the `gid` from `tasks comments <id> --json`. Positional text and stdin work here too.
+- The reply target must be a top-level comment on the same task with an Asana `comment_gid`. Invalid targets, existing replies, and legacy comments without a `comment_gid` exit with code 2.
 - `tasks comments <id> [--max=<n>] [--all]` reads existing comments, bounded the same way as `tasks list`: default scan cap 100, result cap 20; `--max=<n>` raises the scan cap; `--all` (requires `--max`) removes the result cap.
 
 ### Custom fields (`--custom-field`)
