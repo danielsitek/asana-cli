@@ -1,10 +1,11 @@
-import { executeTaskListRead, prepareTaskListRead } from "../tasks/index.ts";
 import {
-  renderJson,
-  renderTaskList,
-  renderTaskListScanWarning,
-} from "../output/index.ts";
+  executeTaskListRead,
+  prepareTaskListRead,
+  type TaskListOptions,
+} from "../tasks/index.ts";
+import { renderJson, renderTaskList } from "../output/index.ts";
 import type { CommandResult } from "./contracts.ts";
+import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -12,45 +13,14 @@ import {
   renderTaskWorkflowFailure,
   resolveAuthenticatedUserGid,
   type TaskCommandContext,
-  type TaskInvocation,
 } from "./task-command-context.ts";
-
-type TaskListOptions = Readonly<{
-  mySection?: string;
-  section?: string;
-  project?: string;
-  parent?: string;
-  assignee?: string;
-  completed?: string;
-  max?: string;
-  all?: boolean;
-}>;
-
-const prepareList = (options: TaskListOptions, invocation: TaskInvocation) =>
-  prepareTaskListRead(
-    {
-      ...(options.mySection === undefined
-        ? {}
-        : { mySection: options.mySection }),
-      ...(options.section === undefined ? {} : { section: options.section }),
-      ...(options.project === undefined ? {} : { project: options.project }),
-      ...(options.parent === undefined ? {} : { parent: options.parent }),
-      ...(options.assignee === undefined ? {} : { assignee: options.assignee }),
-      ...(options.completed === undefined
-        ? {}
-        : { completed: options.completed }),
-      ...(options.max === undefined ? {} : { max: options.max }),
-      ...(options.all === undefined ? {} : { all: options.all }),
-    },
-    invocation.fields,
-  );
 
 const runTaskList = async (
   context: TaskCommandContext,
   options: TaskListOptions,
 ): Promise<CommandResult> => {
   const invocation = context.beginCommand();
-  const prepared = prepareList(options, invocation);
+  const prepared = prepareTaskListRead(options, invocation.fields);
   if (!prepared.ok) return context.usageError(prepared.error.message);
   const token = context.requireToken();
   if (!token.ok) return token.error;
@@ -75,7 +45,12 @@ const runTaskList = async (
       : renderTaskList(listed.value.tasks, prepared.value.outputFields),
     stderr: invocation.json
       ? ""
-      : renderTaskListScanWarning(listed.value.meta.scan_truncated),
+      : renderListContinuation(
+          listed.value.meta,
+          ["tasks", "list"],
+          options,
+          invocation.fields,
+        ),
     exitCode: 0,
   };
 };
@@ -93,6 +68,7 @@ export const registerTaskListCommand = (context: TaskCommandContext): void => {
     .option("--assignee <value>", "filter by me or a user GID")
     .option("--completed <boolean>", "filter by completed true or false")
     .option("--max <n>", "cap tasks scanned; alone does not return all")
+    .option("--offset <token>", "resume from an Asana offset")
     .option("--all", "return all tasks within the scan cap; requires --max")
     .action(async (options: TaskListOptions) => {
       context.complete(await runTaskList(context, options));

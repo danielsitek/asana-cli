@@ -2,12 +2,9 @@ import {
   executeTaskCommentsRead,
   prepareTaskCommentsRead,
 } from "../comments/index.ts";
-import {
-  renderCommentList,
-  renderCommentScanWarning,
-  renderJson,
-} from "../output/index.ts";
+import { renderCommentList, renderJson } from "../output/index.ts";
 import type { CommandResult } from "./contracts.ts";
+import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
@@ -67,7 +64,12 @@ const runTaskComments = async (
       : renderCommentList(read.value.comments, prepared.value.outputFields),
     stderr: invocation.json
       ? ""
-      : renderCommentScanWarning(read.value.meta.scan_truncated),
+      : renderListContinuation(
+          read.value.meta,
+          ["tasks", "comments", idArg],
+          options,
+          invocation.fields,
+        ),
     exitCode: 0,
   };
 };
@@ -79,7 +81,7 @@ export const registerTaskCommentsCommand = (
     .command("comments <id>")
     .description("read task comments")
     .option("--max <n>", "cap stories scanned; alone does not return all")
-    .option("--offset <token>", "start from an Asana offset")
+    .option("--offset <token>", "resume from an Asana offset")
     .option("--all", "return all comments within the scan cap; requires --max")
     .option(
       "--latest <n>",

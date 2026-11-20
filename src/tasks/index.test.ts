@@ -1879,7 +1879,7 @@ describe("executeTaskListRead sources", () => {
         gid: "500",
         options: {
           fields: DEFAULT_TASK_LIST_FIELDS,
-          limit: 100,
+          limit: 20,
           completedSince: "now",
         },
       },
@@ -1911,7 +1911,7 @@ describe("executeTaskListRead sources", () => {
         gid: "700",
         options: {
           fields: DEFAULT_TASK_LIST_FIELDS,
-          limit: 100,
+          limit: 20,
         },
       },
     ]);
@@ -2107,7 +2107,12 @@ describe("executeTaskListRead filtering", () => {
       ok: true,
       value: {
         tasks: [],
-        meta: { scanned: 1, returned: 0, scan_truncated: false },
+        meta: {
+          scanned: 1,
+          returned: 0,
+          scan_truncated: false,
+          has_more: false,
+        },
       },
     });
   });
@@ -2118,20 +2123,38 @@ describe("executeTaskListRead pagination", () => {
     const tasks = Array.from({ length: 25 }, (_, index) =>
       listTask(`${index + 1}`),
     );
-    const reader = new QueuedTaskListReader([ok({ tasks })]);
+    const reader = new QueuedTaskListReader([
+      ok({ tasks: tasks.slice(0, 20), nextOffset: "page2" }),
+      ok({ tasks: tasks.slice(20) }),
+    ]);
     const result = await executeTaskListRead(
       "secret",
       preparedListFor({ section: "1" }),
       listDependenciesFor(reader),
     );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.tasks).toHaveLength(20);
+    if (!result.ok || !result.value.meta.has_more) {
+      throw new Error("expected the result cap to return a continuation");
+    }
+    expect(reader.calls[0]?.options.limit).toBe(20);
     expect(result.value.meta).toEqual({
       scanned: 20,
       returned: 20,
       scan_truncated: false,
+      has_more: true,
+      next_offset: "page2",
     });
+
+    const resumed = await executeTaskListRead(
+      "secret",
+      preparedListFor({ section: "1", offset: result.value.meta.next_offset }),
+      listDependenciesFor(reader),
+    );
+    if (!resumed.ok) throw new Error(resumed.error.message);
+    expect(reader.calls[1]?.options.offset).toBe("page2");
+    expect(
+      [...result.value.tasks, ...resumed.value.tasks].map((task) => task.gid),
+    ).toEqual(tasks.map((task) => task.gid));
+    expect(resumed.value.meta.has_more).toBe(false);
   });
 
   test("bounds scanning by --max across pages and reports truncation", async () => {
@@ -2140,7 +2163,7 @@ describe("executeTaskListRead pagination", () => {
         tasks: [listTask("1"), listTask("2"), listTask("3")],
         nextOffset: "page2",
       }),
-      ok({ tasks: [listTask("4"), listTask("5")] }),
+      ok({ tasks: [listTask("4")], nextOffset: "page3" }),
     ]);
     const result = await executeTaskListRead(
       "secret",
@@ -2159,6 +2182,8 @@ describe("executeTaskListRead pagination", () => {
       scanned: 4,
       returned: 4,
       scan_truncated: true,
+      has_more: true,
+      next_offset: "page3",
     });
     expect(reader.calls).toHaveLength(2);
     expect(reader.calls[1]?.options.limit).toBe(1);
@@ -2181,6 +2206,7 @@ describe("executeTaskListRead pagination", () => {
       scanned: 30,
       returned: 30,
       scan_truncated: false,
+      has_more: false,
     });
   });
 

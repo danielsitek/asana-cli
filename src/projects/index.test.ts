@@ -84,7 +84,12 @@ describe("project section listing", () => {
           { name: "One", gid: "1" },
           { name: "Two", gid: "2" },
         ],
-        meta: { scanned: 2, returned: 2, scan_truncated: false },
+        meta: {
+          scanned: 2,
+          returned: 2,
+          scan_truncated: false,
+          has_more: false,
+        },
       },
     });
     expect(reader.calls).toEqual([
@@ -104,13 +109,14 @@ describe("project section listing", () => {
     ]);
   });
 
-  test("caps default results and reports scan truncation", async () => {
+  test("caps default results and exposes the next offset", async () => {
     const reader = new SectionReader([
       ok({
-        sections: Array.from({ length: 21 }, (_, index) => ({
+        sections: Array.from({ length: 20 }, (_, index) => ({
           gid: String(index + 1),
           name: `Section ${index + 1}`,
         })),
+        nextOffset: "next",
       }),
     ]);
     const prepared = prepareProjectSectionList({
@@ -126,6 +132,8 @@ describe("project section listing", () => {
       scanned: 20,
       returned: 20,
       scan_truncated: false,
+      has_more: true,
+      next_offset: "next",
     });
   });
 
@@ -228,9 +236,10 @@ describe("project custom-field settings", () => {
   test("uses API order, selected fields, default result cap, and metadata", async () => {
     const { calls, reader } = readerFor([
       ok({
-        settings: Array.from({ length: 21 }, (_, index) => ({
+        settings: Array.from({ length: 20 }, (_, index) => ({
           gid: String(index + 1),
         })),
+        nextOffset: "next",
       }),
     ]);
     const result = await executeProjectCustomFieldSettingList(
@@ -244,14 +253,20 @@ describe("project custom-field settings", () => {
         settings: Array.from({ length: 20 }, (_, index) => ({
           gid: String(index + 1),
         })),
-        meta: { scanned: 20, returned: 20, scan_truncated: false },
+        meta: {
+          scanned: 20,
+          returned: 20,
+          scan_truncated: false,
+          has_more: true,
+          next_offset: "next",
+        },
       },
     });
     expect(calls).toEqual([
       {
         token: "token",
         projectGid: "100",
-        limit: 100,
+        limit: 20,
         fields: ["custom_field.name", "gid"],
       },
     ]);
@@ -274,6 +289,7 @@ describe("project custom-field settings", () => {
       scanned: 102,
       returned: 102,
       scan_truncated: false,
+      has_more: false,
     });
     expect(calls).toEqual([
       { token: "token", projectGid: "100", limit: 100, fields: ["gid"] },

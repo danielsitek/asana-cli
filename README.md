@@ -344,6 +344,17 @@ existing task does not require this assignee check.
   - literal `null` — promotes it to a top-level task
   - dedicated single-write operation, cannot be combined with any other `tasks update` flag; a task cannot be its own parent.
 
+### Continuing bounded lists
+
+Use `--offset=<token>` to continue `tasks list`, `tasks comments`,
+`tasks attachments`, `projects list`, `projects sections`, or
+`projects custom-fields` with the same filters and flags. Human output prints
+the next command on stderr. In JSON mode, `meta.has_more: true` includes the
+cursor in `meta.next_offset`. `meta.scan_truncated` is true when the scan cap
+leaves unread items. A result cap can leave more items even when
+`scan_truncated` is false. The `tasks comments --latest` mode reads to the end
+of the story stream and has no continuation.
+
 ### `tasks list`
 
 - Requires exactly one source:

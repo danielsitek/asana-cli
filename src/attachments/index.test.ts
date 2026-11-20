@@ -56,6 +56,7 @@ describe("task attachments", () => {
           scanned: 2,
           returned: 2,
           scan_truncated: true,
+          has_more: true,
           next_offset: "later",
         },
       },

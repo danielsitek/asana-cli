@@ -5,13 +5,11 @@ import type { IdentityError } from "../identity/index.ts";
 import {
   renderJson,
   renderProjectCustomFieldSettingList,
-  renderProjectCustomFieldSettingListScanWarning,
   renderProjectDetail,
   renderProjectList,
-  renderProjectListScanWarning,
   renderProjectSectionList,
-  renderProjectSectionListScanWarning,
 } from "../output/index.ts";
+import type { ListOptions } from "../pagination/index.ts";
 import {
   DEFAULT_PROJECT_CUSTOM_FIELD_SETTING_FIELDS,
   DEFAULT_PROJECT_FIELDS,
@@ -24,9 +22,11 @@ import {
   prepareProjectList,
   prepareProjectSectionList,
   type ProjectReadError,
+  type ProjectListOptions,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
 import { validateFieldList } from "../tasks/index.ts";
+import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
@@ -55,9 +55,6 @@ type ProjectCommandRegistration = Readonly<{
   usageError: (message: string) => CommandResult;
   outputConfiguration: OutputConfiguration;
 }>;
-
-type BoundedOptions = Readonly<{ max?: string; all?: boolean }>;
-type ProjectListOptions = BoundedOptions & Readonly<{ workspace?: string }>;
 
 const PROJECT_ID_ARGUMENT = "<id>";
 
@@ -139,7 +136,7 @@ const runProjectGet = async (
 
 const runProjectSections = async (
   idArg: string,
-  options: BoundedOptions,
+  options: ListOptions,
   registration: ProjectCommandRegistration,
 ): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
@@ -169,14 +166,19 @@ const runProjectSections = async (
       : renderProjectSectionList(listed.value.sections, prepared.value.fields),
     stderr: invocation.json
       ? ""
-      : renderProjectSectionListScanWarning(listed.value.meta.scan_truncated),
+      : renderListContinuation(
+          listed.value.meta,
+          ["projects", "sections", idArg],
+          options,
+          invocation.fields,
+        ),
     exitCode: 0,
   };
 };
 
 const runProjectCustomFields = async (
   idArg: string,
-  options: BoundedOptions,
+  options: ListOptions,
   registration: ProjectCommandRegistration,
 ): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
@@ -213,8 +215,11 @@ const runProjectCustomFields = async (
         ),
     stderr: invocation.json
       ? ""
-      : renderProjectCustomFieldSettingListScanWarning(
-          listed.value.meta.scan_truncated,
+      : renderListContinuation(
+          listed.value.meta,
+          ["projects", "custom-fields", idArg],
+          options,
+          invocation.fields,
         ),
     exitCode: 0,
   };
@@ -262,7 +267,10 @@ const runProjectList = async (
       : renderProjectList(listed.value.projects),
     stderr: invocation.json
       ? ""
-      : renderProjectListScanWarning(listed.value.meta.scan_truncated),
+      : renderListContinuation(listed.value.meta, ["projects", "list"], {
+          ...options,
+          workspace: prepared.value.workspaceGid,
+        }),
     exitCode: 0,
   };
 };
@@ -308,8 +316,9 @@ const registerProjectSections = (
         "cap sections scanned; alone does not return all",
       ),
     )
+    .option("--offset <token>", "resume from an Asana offset")
     .option("--all", "return all sections within the scan cap; requires --max")
-    .action(async (idArg: string, options: BoundedOptions) => {
+    .action(async (idArg: string, options: ListOptions) => {
       registration.complete(
         await runProjectSections(idArg, options, registration),
       );
@@ -336,6 +345,7 @@ const registerProjectCustomFields = (
         "cap custom-field settings scanned; alone does not return all",
       ),
     )
+    .option("--offset <token>", "resume from an Asana offset")
     .option(
       "--all",
       "return all custom-field settings within the scan cap; requires --max",
@@ -344,7 +354,7 @@ const registerProjectCustomFields = (
       "after",
       "\nGlobal options:\n  --json             output JSON\n  --fields <fields>  select explicit Asana fields",
     )
-    .action(async (idArg: string, options: BoundedOptions) => {
+    .action(async (idArg: string, options: ListOptions) => {
       registration.complete(
         await runProjectCustomFields(idArg, options, registration),
       );
@@ -371,6 +381,7 @@ const registerProjectList = (
         "cap projects scanned; alone does not return all",
       ),
     )
+    .option("--offset <token>", "resume from an Asana offset")
     .option("--all", "return all projects within the scan cap; requires --max")
     .action(async (options: ProjectListOptions) => {
       registration.complete(await runProjectList(options, registration));

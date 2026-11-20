@@ -1,10 +1,16 @@
+import {
+  collectPages,
+  prepareListBounds,
+  type ListBounds,
+  type ListMeta,
+  type ListOptions,
+} from "../pagination/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import {
   parseTaskId,
   validateFieldList,
   type TaskReadError,
 } from "../tasks/index.ts";
-import { prepareTaskListBounds } from "../tasks/task-list-preparation.ts";
 import { projectFields } from "../utils/project-fields.ts";
 
 export const DEFAULT_ATTACHMENT_FIELDS = [
@@ -18,21 +24,15 @@ export const DEFAULT_ATTACHMENT_FIELDS = [
 
 export type Attachment = Readonly<Record<string, unknown>>;
 
-export type PreparedAttachmentList = Readonly<{
-  taskId: string;
-  fields: readonly string[];
-  scanCap: number;
-  resultCap?: number;
-}>;
+export type PreparedAttachmentList = ListBounds &
+  Readonly<{
+    taskId: string;
+    fields: readonly string[];
+  }>;
 
 export type AttachmentListResult = Readonly<{
   attachments: readonly Attachment[];
-  meta: Readonly<{
-    scanned: number;
-    returned: number;
-    scan_truncated: boolean;
-    next_offset?: string;
-  }>;
+  meta: ListMeta;
 }>;
 
 export const selectAttachment = (
@@ -87,11 +87,11 @@ export interface AttachmentGateway {
 
 export const prepareAttachmentList = (
   id: string,
-  options: Readonly<{ fields?: string; max?: string; all?: boolean }>,
+  options: ListOptions & Readonly<{ fields?: string }>,
 ): Result<PreparedAttachmentList, Readonly<{ message: string }>> => {
   const task = parseTaskId(id);
   if (!task.ok) return err({ message: task.error });
-  const bounds = prepareTaskListBounds(options);
+  const bounds = prepareListBounds(options);
   if (!bounds.ok) return err(bounds.error);
   const fields =
     options.fields === undefined
@@ -106,48 +106,25 @@ export const executeAttachmentList = async (
   prepared: PreparedAttachmentList,
   reader: AttachmentGateway,
 ): Promise<Result<AttachmentListResult, TaskReadError>> => {
-  const attachments: Attachment[] = [];
-  let scanned = 0;
-  let offset: string | undefined;
-  let nextOffset: string | undefined;
-  while (
-    scanned < prepared.scanCap &&
-    attachments.length < (prepared.resultCap ?? Infinity)
-  ) {
-    const limit = Math.min(
-      100,
-      prepared.scanCap - scanned,
-      (prepared.resultCap ?? Infinity) - attachments.length,
-    );
-    const page = await reader.listTaskAttachments(token, prepared.taskId, {
-      fields: prepared.fields,
-      limit,
-      ...(offset === undefined ? {} : { offset }),
-    });
-    if (!page.ok) return page;
-    attachments.push(
-      ...page.value.attachments.map((attachment) =>
-        selectAttachment(attachment, prepared.fields),
-      ),
-    );
-    scanned += page.value.attachments.length;
-    nextOffset = page.value.nextOffset;
-    if (nextOffset === undefined) break;
-    if (nextOffset === offset || page.value.attachments.length === 0) {
-      return err({
-        kind: "invalid_response",
-        message: "Asana attachment pagination did not advance",
+  const result = await collectPages<Attachment, Attachment, TaskReadError>(
+    prepared,
+    async (limit, offset) => {
+      const page = await reader.listTaskAttachments(token, prepared.taskId, {
+        fields: prepared.fields,
+        limit,
+        ...(offset === undefined ? {} : { offset }),
       });
-    }
-    offset = nextOffset;
-  }
-  return ok({
-    attachments,
-    meta: {
-      scanned,
-      returned: attachments.length,
-      scan_truncated: nextOffset !== undefined,
-      ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
+      if (!page.ok) return page;
+      const { attachments, nextOffset } = page.value;
+      return ok({ items: attachments, nextOffset });
     },
-  });
+    (attachment) => selectAttachment(attachment, prepared.fields),
+    {
+      kind: "invalid_response",
+      message: "Asana attachment pagination did not advance",
+    },
+  );
+  return result.ok
+    ? ok({ attachments: result.value.items, meta: result.value.meta })
+    : result;
 };

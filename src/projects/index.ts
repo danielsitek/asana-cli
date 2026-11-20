@@ -1,3 +1,10 @@
+import {
+  collectPages,
+  prepareListBounds,
+  type ListBounds,
+  type ListMeta,
+  type ListOptions,
+} from "../pagination/index.ts";
 import type { IdentityError } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
@@ -114,83 +121,22 @@ export const parseProjectGid = (
         message: "Invalid project identifier",
       });
 
-export type ProjectListOptions = Readonly<{
-  workspace?: string;
-  max?: string;
-  all?: boolean;
-}>;
+export type ProjectListOptions = ListOptions & Readonly<{ workspace?: string }>;
+export type PreparedProjectList = ListBounds &
+  Readonly<{ workspaceGid: string }>;
+export type ProjectListMeta = ListMeta;
 
-export type PreparedProjectList = Readonly<{
-  workspaceGid: string;
-  scanCap: number;
-  resultCap?: number;
-}>;
+export type ProjectSectionListOptions = ListOptions &
+  Readonly<{
+    projectGid: string;
+    fields: readonly string[];
+  }>;
 
-export type ProjectListMeta = Readonly<{
-  scanned: number;
-  returned: number;
-  scan_truncated: boolean;
-  next_offset?: string;
-}>;
-
-const DEFAULT_SCAN_CAP = 100;
-const DEFAULT_RESULT_CAP = 20;
-
-const parseMax = (
-  input: string,
-): Result<number, Readonly<{ kind: "invalid_usage"; message: string }>> => {
-  if (!/^\d+$/.test(input)) {
-    return err({
-      kind: "invalid_usage",
-      message: "--max must be a positive safe integer",
-    });
-  }
-  const value = Number(input);
-  return Number.isSafeInteger(value) && value > 0
-    ? ok(value)
-    : err({
-        kind: "invalid_usage",
-        message: "--max must be a positive safe integer",
-      });
-};
-
-type BoundedListOptions = Readonly<{ max?: string; all?: boolean }>;
-type PreparedBoundedList = Readonly<{ scanCap: number; resultCap?: number }>;
-
-const prepareBoundedList = (
-  options: BoundedListOptions,
-): Result<
-  PreparedBoundedList,
-  Readonly<{ kind: "invalid_usage"; message: string }>
-> => {
-  if (options.all && options.max === undefined) {
-    return err({
-      kind: "invalid_usage",
-      message: "--all requires --max (e.g. --all --max 200)",
-    });
-  }
-  const scanCap =
-    options.max === undefined ? ok(DEFAULT_SCAN_CAP) : parseMax(options.max);
-  if (!scanCap.ok) return scanCap;
-  return ok({
-    scanCap: scanCap.value,
-    ...(options.all ? {} : { resultCap: DEFAULT_RESULT_CAP }),
-  });
-};
-
-export type ProjectSectionListOptions = Readonly<{
-  projectGid: string;
-  max?: string;
-  all?: boolean;
-  fields: readonly string[];
-}>;
-
-export type PreparedProjectSectionList = Readonly<{
-  projectGid: string;
-  scanCap: number;
-  resultCap?: number;
-  fields: readonly string[];
-}>;
+export type PreparedProjectSectionList = ListBounds &
+  Readonly<{
+    projectGid: string;
+    fields: readonly string[];
+  }>;
 
 export const prepareProjectSectionList = (
   options: ProjectSectionListOptions,
@@ -200,7 +146,7 @@ export const prepareProjectSectionList = (
 > => {
   const projectGid = parseProjectGid(options.projectGid);
   if (!projectGid.ok) return projectGid;
-  const bounded = prepareBoundedList(options);
+  const bounded = prepareListBounds(options);
   if (!bounded.ok) return bounded;
   return ok({
     projectGid: projectGid.value,
@@ -209,19 +155,8 @@ export const prepareProjectSectionList = (
   });
 };
 
-export type ProjectCustomFieldSettingListOptions = Readonly<{
-  projectGid: string;
-  max?: string;
-  all?: boolean;
-  fields: readonly string[];
-}>;
-
-export type PreparedProjectCustomFieldSettingList = Readonly<{
-  projectGid: string;
-  scanCap: number;
-  resultCap?: number;
-  fields: readonly string[];
-}>;
+export type ProjectCustomFieldSettingListOptions = ProjectSectionListOptions;
+export type PreparedProjectCustomFieldSettingList = PreparedProjectSectionList;
 
 export const prepareProjectCustomFieldSettingList = (
   options: ProjectCustomFieldSettingListOptions,
@@ -231,7 +166,7 @@ export const prepareProjectCustomFieldSettingList = (
 > => {
   const projectGid = parseProjectGid(options.projectGid);
   if (!projectGid.ok) return projectGid;
-  const bounded = prepareBoundedList(options);
+  const bounded = prepareListBounds(options);
   if (!bounded.ok) return bounded;
   return ok({
     projectGid: projectGid.value,
@@ -261,123 +196,8 @@ export const prepareProjectList = (
       message: "--workspace must be a digit-only GID",
     });
   }
-  const bounded = prepareBoundedList(options);
+  const bounded = prepareListBounds(options);
   return bounded.ok ? ok({ workspaceGid, ...bounded.value }) : bounded;
-};
-
-type BoundedPage<Item> = Readonly<{
-  items: readonly Item[];
-  nextOffset?: string;
-}>;
-
-type BoundedPageProgress =
-  | Readonly<{
-      kind: "complete";
-      scanned: number;
-      scanTruncated: boolean;
-      nextOffset?: string;
-    }>
-  | Readonly<{ kind: "continue"; scanned: number; offset: string }>;
-
-const boundedPaginationAdvanced = <Item>(
-  page: BoundedPage<Item>,
-  requestedOffsets: ReadonlySet<string>,
-): boolean =>
-  page.nextOffset === undefined ||
-  (page.items.length > 0 && !requestedOffsets.has(page.nextOffset));
-
-const processBoundedPage = <Item>(
-  page: BoundedPage<Item>,
-  prepared: PreparedBoundedList,
-  items: Item[],
-  previouslyScanned: number,
-): BoundedPageProgress => {
-  const remaining = prepared.scanCap - previouslyScanned;
-  const withinBudget = page.items.slice(0, remaining);
-  let scanned = previouslyScanned;
-
-  for (const [index, item] of withinBudget.entries()) {
-    scanned += 1;
-    items.push(item);
-    if (
-      prepared.resultCap !== undefined &&
-      items.length >= prepared.resultCap
-    ) {
-      const stoppedMidPage = index < page.items.length - 1;
-      return {
-        kind: "complete",
-        scanned,
-        scanTruncated:
-          scanned >= prepared.scanCap &&
-          (stoppedMidPage || page.nextOffset !== undefined),
-        ...(stoppedMidPage || page.nextOffset === undefined
-          ? {}
-          : { nextOffset: page.nextOffset }),
-      };
-    }
-  }
-
-  if (scanned >= prepared.scanCap) {
-    const pageExceedsBudget = page.items.length > withinBudget.length;
-    return {
-      kind: "complete",
-      scanned,
-      scanTruncated: pageExceedsBudget || page.nextOffset !== undefined,
-      ...(pageExceedsBudget || page.nextOffset === undefined
-        ? {}
-        : { nextOffset: page.nextOffset }),
-    };
-  }
-  return page.nextOffset === undefined
-    ? { kind: "complete", scanned, scanTruncated: false }
-    : { kind: "continue", scanned, offset: page.nextOffset };
-};
-
-const completeBoundedList = <Item>(
-  items: readonly Item[],
-  progress: Extract<BoundedPageProgress, Readonly<{ kind: "complete" }>>,
-): Readonly<{ items: readonly Item[]; meta: ProjectListMeta }> => ({
-  items,
-  meta: {
-    scanned: progress.scanned,
-    returned: items.length,
-    scan_truncated: progress.scanTruncated,
-    ...(progress.nextOffset === undefined
-      ? {}
-      : { next_offset: progress.nextOffset }),
-  },
-});
-
-const executeBoundedPages = async <Item, Failure>(
-  prepared: PreparedBoundedList,
-  readPage: (
-    limit: number,
-    offset?: string,
-  ) => Promise<Result<BoundedPage<Item>, Failure>>,
-  paginationError: Failure,
-): Promise<
-  Result<Readonly<{ items: readonly Item[]; meta: ProjectListMeta }>, Failure>
-> => {
-  const items: Item[] = [];
-  let scanned = 0;
-  let offset: string | undefined;
-  const requestedOffsets = new Set<string>();
-
-  for (;;) {
-    if (offset !== undefined) requestedOffsets.add(offset);
-    const page = await readPage(
-      Math.min(100, prepared.scanCap - scanned),
-      offset,
-    );
-    if (!page.ok) return page;
-    if (!boundedPaginationAdvanced(page.value, requestedOffsets))
-      return err(paginationError);
-    const progress = processBoundedPage(page.value, prepared, items, scanned);
-    if (progress.kind === "complete")
-      return ok(completeBoundedList(items, progress));
-    scanned = progress.scanned;
-    offset = progress.offset;
-  }
 };
 
 export const executeProjectList = async (
@@ -390,7 +210,11 @@ export const executeProjectList = async (
     ProjectListError
   >
 > => {
-  const result = await executeBoundedPages<ProjectListItem, ProjectListError>(
+  const result = await collectPages<
+    ProjectListItem,
+    ProjectListItem,
+    ProjectListError
+  >(
     prepared,
     async (limit, offset) => {
       const page = await dependencies.reader.listProjects(
@@ -401,12 +225,11 @@ export const executeProjectList = async (
       return page.ok
         ? ok({
             items: page.value.projects,
-            ...(page.value.nextOffset === undefined
-              ? {}
-              : { nextOffset: page.value.nextOffset }),
+            nextOffset: page.value.nextOffset,
           })
         : page;
     },
+    (item) => item,
     {
       kind: "invalid_response",
       message: "Project pagination did not advance",
@@ -432,7 +255,11 @@ export const executeProjectSectionList = async (
     ProjectReadError
   >
 > => {
-  const result = await executeBoundedPages<ProjectSection, ProjectReadError>(
+  const result = await collectPages<
+    ProjectSection,
+    ProjectSection,
+    ProjectReadError
+  >(
     prepared,
     async (limit, offset) => {
       const page = await dependencies.reader.listProjectSections({
@@ -445,12 +272,11 @@ export const executeProjectSectionList = async (
       return page.ok
         ? ok({
             items: page.value.sections,
-            ...(page.value.nextOffset === undefined
-              ? {}
-              : { nextOffset: page.value.nextOffset }),
+            nextOffset: page.value.nextOffset,
           })
         : page;
     },
+    (item) => item,
     {
       kind: "invalid_response",
       message: "Project section pagination did not advance",
@@ -474,7 +300,8 @@ export const executeProjectCustomFieldSettingList = async (
     ProjectReadError
   >
 > => {
-  const result = await executeBoundedPages<
+  const result = await collectPages<
+    ProjectCustomFieldSetting,
     ProjectCustomFieldSetting,
     ProjectReadError
   >(
@@ -490,12 +317,11 @@ export const executeProjectCustomFieldSettingList = async (
       return page.ok
         ? ok({
             items: page.value.settings,
-            ...(page.value.nextOffset === undefined
-              ? {}
-              : { nextOffset: page.value.nextOffset }),
+            nextOffset: page.value.nextOffset,
           })
         : page;
     },
+    (item) => item,
     {
       kind: "invalid_response",
       message: "Project custom field setting pagination did not advance",

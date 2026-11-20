@@ -1455,7 +1455,7 @@ describe("projects custom-fields command", () => {
       {
         token: "token",
         projectGid: "100",
-        limit: 100,
+        limit: 20,
         fields: [
           "gid",
           "is_important",
@@ -1505,7 +1505,7 @@ describe("projects custom-fields command", () => {
       ),
     ).resolves.toEqual({
       stdout:
-        '{"data":[{"gid":"10","custom_field":{"enum_options":[{"gid":"30","name":"High","enabled":true}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false}}\n',
+        '{"data":[{"gid":"10","custom_field":{"enum_options":[{"gid":"30","name":"High","enabled":true}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false,"has_more":false}}\n',
       stderr: "",
       exitCode: 0,
     });
@@ -1520,7 +1520,7 @@ describe("projects custom-fields command", () => {
       ),
     ).resolves.toEqual({
       stdout:
-        '{"data":[{"gid":"11","custom_field":{"enum_options":[{"gid":"31","name":"Low","enabled":false}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false}}\n',
+        '{"data":[{"gid":"11","custom_field":{"enum_options":[{"gid":"31","name":"Low","enabled":false}]}}],"meta":{"scanned":1,"returned":1,"scan_truncated":false,"has_more":false}}\n',
       stderr: "",
       exitCode: 0,
     });
@@ -1585,7 +1585,7 @@ describe("projects custom-fields command", () => {
       }),
     ).resolves.toMatchObject({
       stderr:
-        "Warning: custom-field setting scan cap reached; more custom-field settings may exist.\n",
+        "Scan limit reached. Run the following command for the next page.\nasana-cli projects custom-fields 100 --max 1 --all --offset=next\n",
     });
     await expect(
       execute(
@@ -4269,7 +4269,7 @@ describe("tasks comments command", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain("Warning:");
     expect(result.stderr).toBe(
-      "Warning: story scan cap reached; more comments may exist.\n",
+      "Scan limit reached. Run the following command for the next page.\nasana-cli tasks comments 1215978111726134 --max 1 --offset=page-2\n",
     );
   });
 
@@ -4291,7 +4291,7 @@ describe("tasks comments command", () => {
           created_by: { gid: "1001", name: "Ada" },
         },
       ],
-      meta: { scanned: 1, returned: 1, scan_truncated: false },
+      meta: { scanned: 1, returned: 1, scan_truncated: false, has_more: false },
     });
   });
 
@@ -4388,7 +4388,7 @@ describe("tasks comments command", () => {
           created_by: { gid: "1001", name: "Ada" },
         },
       ],
-      meta: { scanned: 2, returned: 1, scan_truncated: false },
+      meta: { scanned: 2, returned: 1, scan_truncated: false, has_more: false },
     });
   });
 
@@ -4748,7 +4748,7 @@ describe("tasks list command", () => {
       {
         kind: "section",
         gid: "500",
-        options: expect.objectContaining({ limit: 100 }),
+        options: expect.objectContaining({ limit: 20 }),
       },
     ]);
   });
@@ -4782,7 +4782,7 @@ describe("tasks list command", () => {
         gid: parentGid,
         options: {
           fields: DEFAULT_TASK_LIST_FIELDS,
-          limit: 100,
+          limit: 20,
         },
       },
     ]);
@@ -4818,7 +4818,7 @@ describe("tasks list command", () => {
           assignee: { gid: "9001", name: "Ada" },
         },
       ],
-      meta: { scanned: 1, returned: 1, scan_truncated: false },
+      meta: { scanned: 1, returned: 1, scan_truncated: false, has_more: false },
     });
   });
 
@@ -4880,7 +4880,7 @@ describe("tasks list command", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain("Warning:");
     expect(result.stderr).toBe(
-      "Warning: task scan cap reached; more tasks may exist.\n",
+      "Scan limit reached. Run the following command for the next page.\nasana-cli tasks list --section 500 --max 1 --offset=page-2\n",
     );
   });
 
@@ -5017,7 +5017,7 @@ describe("tasks list command", () => {
     expect(reader.calls[0]).toEqual({
       kind: "section",
       gid: "300",
-      options: expect.objectContaining({ limit: 100 }),
+      options: expect.objectContaining({ limit: 20 }),
     });
   });
 
@@ -5168,7 +5168,7 @@ describe("projects sections command", () => {
       {
         token: "token",
         projectGid: "100",
-        limit: 100,
+        limit: 20,
         fields: ["name", "gid"],
       },
     ]);
@@ -5201,7 +5201,7 @@ describe("projects sections command", () => {
     );
     expect(result).toEqual({
       stdout:
-        '{"data":[{"gid":"1","name":"Planning"}],"meta":{"scanned":1,"returned":1,"scan_truncated":true,"next_offset":"next"}}\n',
+        '{"data":[{"gid":"1","name":"Planning"}],"meta":{"scanned":1,"returned":1,"scan_truncated":true,"has_more":true,"next_offset":"next"}}\n',
       stderr: "",
       exitCode: 0,
     });
@@ -5309,7 +5309,7 @@ describe("projects list command", () => {
       exitCode: 0,
     });
     expect(reader.calls).toEqual([
-      { token: "valid-token", workspaceGid: "100", limit: 100 },
+      { token: "valid-token", workspaceGid: "100", limit: 20 },
     ]);
   });
 
@@ -5352,7 +5352,7 @@ describe("projects list command", () => {
     );
     expect(result).toEqual({
       stdout:
-        '{"data":[{"gid":"1","name":"Launch"},{"gid":"2","name":"Operations"}],"meta":{"scanned":2,"returned":2,"scan_truncated":false}}\n',
+        '{"data":[{"gid":"1","name":"Launch"},{"gid":"2","name":"Operations"}],"meta":{"scanned":2,"returned":2,"scan_truncated":false,"has_more":false}}\n',
       stderr: "",
       exitCode: 0,
     });
@@ -5384,34 +5384,41 @@ describe("projects list command", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe(
-      "Warning: project scan cap reached; more projects may exist.\n",
+      "Scan limit reached. Run the following command for the next page.\nasana-cli projects list --workspace 100 --max 1 --all --offset=page-2\n",
     );
   });
 
-  test("applies the default result cap", async () => {
-    const reader = new InMemoryProjectReader([
-      ok({
-        projects: Array.from({ length: 21 }, (_, index) => ({
-          gid: String(index + 1),
-          name: `Project ${index + 1}`,
-        })),
-      }),
-    ]);
-    const result = await execute(
-      ["projects", "list", "--workspace", "100", "--json"],
-      {
-        environment: { ASANA_CLI_TOKEN: "valid-token" },
-        identity,
-        projectReader: reader,
-      },
-    );
+  test("applies the default result cap and prints the next command in human mode", async () => {
+    const page = ok({
+      projects: Array.from({ length: 20 }, (_, index) => ({
+        gid: String(index + 1),
+        name: `Project ${index + 1}`,
+      })),
+      nextOffset: "page-2",
+    });
+    const argv = ["projects", "list", "--workspace", "100"];
+    const dependencies = {
+      environment: { ASANA_CLI_TOKEN: "valid-token" },
+      identity,
+      projectReader: new InMemoryProjectReader([page, page]),
+    };
+    const result = await execute([...argv, "--json"], dependencies);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.data).toHaveLength(20);
     expect(output.meta).toEqual({
       scanned: 20,
       returned: 20,
       scan_truncated: false,
+      has_more: true,
+      next_offset: "page-2",
     });
+    const human = await execute(argv, dependencies);
+    expect(human.exitCode).toBe(0);
+    expect(human.stderr).toBe(
+      "Result limit reached. Run the following command for the next page.\nasana-cli projects list --workspace 100 --offset=page-2\n",
+    );
   });
 
   test("rejects invalid workspace and bounded-read options before reading", async () => {
@@ -6105,4 +6112,136 @@ describe("skill commands", () => {
       error: { code: "invalid_usage" },
     });
   });
+});
+
+describe("bounded list continuation", () => {
+  test.each([
+    {
+      argv: ["tasks", "list", "--section", "42", "--assignee", "17"],
+      fields: ["--fields", "gid"],
+      field: "tasks",
+    },
+    {
+      argv: ["tasks", "comments", "42"],
+      fields: ["--fields", "gid"],
+      field: "stories",
+    },
+    {
+      argv: ["tasks", "attachments", "42"],
+      fields: ["--fields", "gid"],
+      field: "attachments",
+    },
+    {
+      argv: ["projects", "list", "--workspace", "42"],
+      fields: [],
+      field: "projects",
+    },
+    {
+      argv: ["projects", "sections", "42"],
+      fields: ["--fields", "gid"],
+      field: "sections",
+    },
+    {
+      argv: ["projects", "custom-fields", "42"],
+      fields: ["--fields", "gid"],
+      field: "settings",
+    },
+  ] as const)(
+    "resumes $field from the printed command",
+    async ({ argv, fields }) => {
+      const nextOffset = "next/+='example";
+      const calls: Array<{ limit: number; offset?: string }> = [];
+      const read = <Key extends string>(
+        key: Key,
+        options: { limit: number; offset?: string },
+      ) => {
+        calls.push(options);
+        const firstPage = options.offset === "previous";
+        const item = {
+          gid: firstPage ? "1" : "2",
+          name: "Example",
+          completed: false,
+          assignee: { gid: "17" },
+          resource_subtype: "comment_added",
+        };
+        return ok({
+          ...({ [key]: [item] } as Record<Key, (typeof item)[]>),
+          ...(firstPage ? { nextOffset } : {}),
+        });
+      };
+      const readTasks: TaskListGateway["getSectionTasks"] = async (
+        _token,
+        _gid,
+        options,
+      ) => read("tasks", options);
+      const dependencies: ExecuteDependencies = {
+        environment: { ASANA_CLI_TOKEN: "test-token" },
+        identity: new InMemoryIdentity(ok({ gid: "17", name: "Ada" })),
+        taskListReader: {
+          getSectionTasks: readTasks,
+          getProjectTasks: readTasks,
+          getTaskSubtasks: readTasks,
+        },
+        commentReader: {
+          getTaskStories: async (_token, _id, options) =>
+            read("stories", options),
+        },
+        attachmentReader: {
+          listTaskAttachments: async (_token, _id, options) =>
+            read("attachments", options),
+          getAttachment: async () => {
+            throw new Error("unexpected attachment lookup");
+          },
+        },
+        projectReader: {
+          listProjects: async (_token, _gid, options) =>
+            read("projects", options),
+        },
+        projectSectionReader: {
+          listProjectSections: async (request) => read("sections", request),
+        },
+        projectCustomFieldSettingReader: {
+          listProjectCustomFieldSettings: async (request) =>
+            read("settings", request),
+        },
+      };
+
+      const first = await execute(
+        [...argv, ...fields, "--max", "1", "--all", "--offset", "previous"],
+        dependencies,
+      );
+      expect(first.exitCode).toBe(0);
+      const continuationArgs = [
+        ...argv,
+        "--max",
+        "1",
+        "--all",
+        ...fields,
+        `--offset=${nextOffset}`,
+      ];
+      const command = `asana-cli ${continuationArgs.slice(0, -1).join(" ")} '--offset=next/+='${"\\'"}'example'`;
+      expect(first.stderr).toBe(
+        `Scan limit reached. Run the following command for the next page.\n${command}\n`,
+      );
+      const resumed = await execute(
+        [...continuationArgs, "--json"],
+        dependencies,
+      );
+      expect(resumed.exitCode).toBe(0);
+      expect(resumed.stderr).toBe("");
+      expect(JSON.parse(resumed.stdout)).toMatchObject({
+        data: [{ gid: "2" }],
+        meta: {
+          scanned: 1,
+          returned: 1,
+          scan_truncated: false,
+          has_more: false,
+        },
+      });
+      expect(calls.map(({ limit, offset }) => ({ limit, offset }))).toEqual([
+        { limit: 1, offset: "previous" },
+        { limit: 1, offset: nextOffset },
+      ]);
+    },
+  );
 });
