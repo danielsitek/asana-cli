@@ -337,8 +337,9 @@ existing task does not require this assignee check.
   It is a dedicated single-write operation and cannot be combined with any
   other update flag.
 - `--section=<gid>` is a dedicated single-write placement operation and cannot
-  be combined with any other update flag. It does not use My Tasks
-  configuration or impose an assignee requirement.
+  be combined with any other update flag. It adds the task to the section's
+  project if needed and preserves memberships in other projects. It does not
+  use My Tasks configuration or impose an assignee requirement.
 - `--parent=<gid>|null` reparents instead of updating:
   - GID or task URL — moves it under that parent
   - literal `null` — promotes it to a top-level task
