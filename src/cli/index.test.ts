@@ -863,6 +863,87 @@ describe("execute", () => {
     },
   );
 
+  test("help with no path matches root --help", async () => {
+    const dependencies = { environment: {}, identity };
+    const expected = await execute(["--help"], dependencies);
+    expect(await execute(["help"], dependencies)).toEqual(expected);
+  });
+
+  test.each([
+    [["attachments"], "download"],
+    [["config"], "get"],
+    [["config", "resolve"], "my-tasks"],
+    [["projects"], "get"],
+    [["skill"], "list"],
+    [["tasks"], "list"],
+    [["workspaces"], "list"],
+  ])("matches --help for %j and its subcommand", async (parent, child) => {
+    const dependencies = { environment: {}, identity };
+    const group = await execute([...parent, "--help"], dependencies);
+    const operation = await execute([...parent, child, "--help"], dependencies);
+
+    expect(group).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(group.stdout).toContain(`Usage: asana-cli ${parent.join(" ")}`);
+    expect(operation).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(operation.stdout).toContain(
+      `Usage: asana-cli ${[...parent, child].join(" ")}`,
+    );
+    expect(await execute(["help", ...parent], dependencies)).toEqual(group);
+    expect(await execute([...parent, "help"], dependencies)).toEqual(group);
+    expect(await execute(["help", ...parent, child], dependencies)).toEqual(
+      operation,
+    );
+    expect(await execute([...parent, "help", child], dependencies)).toEqual(
+      operation,
+    );
+  });
+
+  test("prints help for root operations that require arguments", async () => {
+    const dependencies = { environment: {}, identity };
+    const expected = await execute(["completion", "--help"], dependencies);
+    expect(expected).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(expected.stdout).toContain("Usage: asana-cli completion");
+    expect(await execute(["help", "completion"], dependencies)).toEqual(
+      expected,
+    );
+  });
+
+  test.each([
+    [[], ["help", "bogus"]],
+    [["tasks"], ["help", "tasks", "bogus"]],
+    [["tasks"], ["tasks", "help", "bogus"]],
+    [
+      ["config", "resolve"],
+      ["help", "config", "resolve", "bogus"],
+    ],
+  ])("reports an invalid help path under %j", async (parent, argv) => {
+    const dependencies = { environment: {}, identity };
+    expect(await execute(argv, dependencies)).toEqual(
+      await execute([...parent, "bogus"], dependencies),
+    );
+  });
+
+  test("reuses JSON usage errors for invalid help paths", async () => {
+    const dependencies = { environment: {}, identity };
+    const expected = await execute(["tasks", "bogus", "--json"], dependencies);
+    expect(
+      await execute(["--json", "help", "tasks", "bogus"], dependencies),
+    ).toEqual(expected);
+    expect(
+      await execute(["tasks", "help", "bogus", "--json"], dependencies),
+    ).toEqual(expected);
+  });
+
+  test("rejects extra help path segments after a leaf command", async () => {
+    const result = await execute(["help", "tasks", "get", "bogus"], {
+      environment: {},
+      identity,
+    });
+    expect(result).toMatchObject({ exitCode: 2, stdout: "" });
+    expect(result.stderr).toContain("error: unknown command 'bogus'");
+    expect(result.stderr).toContain("Usage: asana-cli tasks get");
+  });
+
   test.each([
     ["tasks comments", ["tasks", "comments", "123"], "--all", undefined],
     ["tasks comments latest", ["tasks", "comments", "123"], "--latest", "10"],

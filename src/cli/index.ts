@@ -119,6 +119,47 @@ const appendUpdateNotice = async (
   }
 };
 
+function* helpPathArguments(argv: readonly string[]): Iterable<string> {
+  const args = argv.values();
+  for (const arg of args) {
+    if (arg === "--") {
+      yield* args;
+      return;
+    }
+    if (arg === "--fields") {
+      args.next();
+      continue;
+    }
+    if (arg !== "--json" && !arg.startsWith("--fields=")) yield arg;
+  }
+}
+
+const showHelpCommand = (program: Command, argv: readonly string[]): void => {
+  let command = program;
+  let helpRequested = false;
+
+  for (const arg of helpPathArguments(argv)) {
+    if (!helpRequested && arg === "help" && command.commands.length > 0) {
+      helpRequested = true;
+      continue;
+    }
+    if (helpRequested && ["--help", "-h"].includes(arg)) continue;
+
+    const child = command.commands.find((candidate) =>
+      [candidate.name(), ...candidate.aliases()].includes(arg),
+    );
+    if (!child) {
+      if (!helpRequested) return;
+      return command.error(`error: unknown command '${arg}'`, {
+        code: "commander.unknownCommand",
+      });
+    }
+    command = child;
+  }
+
+  if (helpRequested) command.help();
+};
+
 export const execute = async (
   argv: readonly string[],
   dependencies: ExecuteDependencies,
@@ -404,6 +445,8 @@ export const execute = async (
   configureParser(program);
 
   try {
+    // Commander's implicit help accepts only one command name.
+    showHelpCommand(program, argv);
     const effectiveArgv =
       argv.length === 0
         ? ["--help"]
@@ -427,7 +470,7 @@ export const execute = async (
       }
       if (error.code === "commander.help") {
         return appendUpdateNotice(
-          { stdout: parserStderr, stderr: "", exitCode: 0 },
+          { stdout: parserStdout || parserStderr, stderr: "", exitCode: 0 },
           dependencies,
           skipUpdateCheck,
         );
