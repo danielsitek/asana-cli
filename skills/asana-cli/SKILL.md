@@ -106,6 +106,8 @@ A command group without a subcommand prints its help to stdout and exits 0. With
 
 Detect partial writes by exit code 1. Their details go to **stdout** in both modes. With `--json`, read the `completed` and `failed` fields before retrying.
 
+After exit 4 on a write, verify its effect in Asana before rerunning it. An `outcome_unknown` error means Asana may have applied the write. JSON errors include `retryable: false` and a `hint` naming what to check, such as the destination task list or the task's comments, attachments, or memberships. Retry only after confirming the write did not apply.
+
 | Code | Meaning                                                                                                           |
 | ---- | ----------------------------------------------------------------------------------------------------------------- |
 | 0    | success                                                                                                           |
@@ -125,7 +127,7 @@ File against `danielsitek/asana-cli` for two cases only:
 
 Always write the title and body in English, regardless of the conversation language.
 
-1. For a bug, rerun the exact failing command once to confirm the failure is deterministic, not a network blip. Skip this step for a feature request — there's nothing to rerun.
+1. For a bug on a read command, rerun it once to confirm the failure. For a write, use the original error as evidence and follow the write verification rule above. Skip this step for a feature request.
 2. Search for a duplicate: `gh issue list --repo danielsitek/asana-cli --search "<key phrase>" --state all` (error message for a bug, the missing capability in your own words for a feature request).
 3. If none matches, draft the body:
    - Bug: the exact command run (the token is never in argv, so it's safe to include verbatim), `asana-cli --version` output, OS, stderr output verbatim, and expected vs. actual behavior.
