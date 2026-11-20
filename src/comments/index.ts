@@ -1,6 +1,7 @@
 export {
   executeTaskCommentCreate,
   prepareTaskCommentCreate,
+  type CommentReplyTarget,
   type PreparedTaskCommentCreate,
   type TaskCommentCreateError,
   type TaskCommentCreationGateway,

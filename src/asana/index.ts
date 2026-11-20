@@ -7,6 +7,7 @@ import {
 
 import type {
   Comment,
+  CommentReplyTarget,
   TaskCommentCreationGateway,
   TaskStoryGateway,
 } from "../comments/index.ts";
@@ -66,6 +67,7 @@ import {
 } from "./response-validation.ts";
 import {
   buildCommentSchema,
+  commentReplyTargetSchema,
   prepareTaskStoriesRequest,
   type TaskStoriesOptions,
 } from "./stories.ts";
@@ -1389,11 +1391,38 @@ export class AsanaHttpClient
     );
   }
 
+  async getCommentReplyTarget(
+    token: string,
+    storyId: string,
+  ): Promise<Result<CommentReplyTarget, TaskReadError>> {
+    if (!isDigitOnlyGid(storyId)) {
+      return err({
+        kind: "invalid_response",
+        message: "Story GID is not digit-only",
+      });
+    }
+    const result = await this.#request(
+      token,
+      `stories/${storyId}`,
+      {
+        method: "GET",
+        searchParams: {
+          opt_fields: "resource_subtype,target.gid,comment_gid,anchor_gid",
+        },
+      },
+      commentReplyTargetSchema,
+    );
+    return result.ok
+      ? ok(result.value.data)
+      : err(mapTaskReadError(result.error, "Story not found"));
+  }
+
   async createTaskComment(
     token: string,
     taskId: string,
     text: string,
     fields: readonly string[],
+    parentCommentGid?: string,
   ): Promise<Result<Comment, TaskReadError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
@@ -1408,7 +1437,14 @@ export class AsanaHttpClient
       {
         method: "POST",
         searchParams: { opt_fields: fields.join(",") },
-        body: { data: { text } },
+        body: {
+          data: {
+            text,
+            ...(parentCommentGid === undefined
+              ? {}
+              : { parent_comment: parentCommentGid }),
+          },
+        },
       },
       z.object({ data: buildCommentSchema(fields) }),
     );

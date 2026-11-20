@@ -2280,6 +2280,93 @@ describe("AsanaHttpClient comments", () => {
     );
     expect(result).toEqual({ ok: true, value: { gid: "9", text: "hello" } });
   });
+
+  const replyTarget = {
+    gid: "7",
+    resource_subtype: "comment_added",
+    target: { gid: "123" },
+    comment_gid: "8",
+    anchor_gid: "123",
+  };
+
+  test("replies from stdin using the target comment envelope and returns the new story", async () => {
+    const text = "First line\nSecond line\n";
+    const calls: string[] = [];
+    const baseUrl = serverFor(async (request) => {
+      const url = new URL(request.url);
+      calls.push(request.method);
+      if (request.method === "GET") {
+        expect(url.pathname).toBe("/api/1.0/stories/7");
+        expect(url.searchParams.get("opt_fields")).toBe(
+          "resource_subtype,target.gid,comment_gid,anchor_gid",
+        );
+        return Response.json({ data: replyTarget });
+      }
+      expect(url.pathname).toBe("/api/1.0/tasks/123/stories");
+      expect(url.searchParams.get("opt_fields")).toBe("gid,text");
+      expect(await request.json()).toEqual({
+        data: { text, parent_comment: "8" },
+      });
+      return Response.json({ data: { gid: "9", text } }, { status: 201 });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await execute(
+      [
+        "tasks",
+        "comment",
+        "123",
+        "--reply-to=7",
+        "--file=-",
+        "--json",
+        "--fields=gid,text",
+      ],
+      {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity: client,
+        commentWriter: client,
+        readStdin: async () => text,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: { gid: "9", text },
+      meta: {},
+    });
+    expect(calls).toEqual(["GET", "POST"]);
+  });
+
+  test.each([
+    [
+      "another task",
+      { ...replyTarget, target: { gid: "456" }, anchor_gid: "456" },
+    ],
+    ["system story", { resource_subtype: "assigned" }],
+    ["existing reply", { ...replyTarget, anchor_gid: "6" }],
+    ["legacy comment", { ...replyTarget, comment_gid: null, anchor_gid: null }],
+    ["missing story", null],
+  ])("rejects a reply target in %s without posting", async (_label, target) => {
+    const calls: string[] = [];
+    const baseUrl = serverFor((request) => {
+      calls.push(request.method);
+      return target === null
+        ? new Response(null, { status: 404 })
+        : Response.json({ data: target });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await execute(
+      ["tasks", "comment", "123", "Answer", "--reply-to=7"],
+      {
+        environment: { ASANA_CLI_TOKEN: "token" },
+        identity: client,
+        commentWriter: client,
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(calls).toEqual(["GET"]);
+  });
 });
 
 describe("AsanaHttpClient task list", () => {

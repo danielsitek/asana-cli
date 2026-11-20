@@ -18,6 +18,17 @@ export type TaskStoriesOptions = Readonly<{
   offset?: string;
 }>;
 
+const replyTargetGid = z.custom<string>(isDigitOnlyGid);
+
+export const commentReplyTargetSchema = z.object({
+  data: z.object({
+    resource_subtype: z.string(),
+    target: z.object({ gid: replyTargetGid }).nullable().default(null),
+    comment_gid: replyTargetGid.nullable().default(null),
+    anchor_gid: replyTargetGid.nullable().default(null),
+  }),
+});
+
 const knownCommentFieldsAreValid = (
   value: Record<string, unknown>,
   requestedCreatedByFields: ReadonlySet<string>,

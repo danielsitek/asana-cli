@@ -4130,6 +4130,10 @@ class InMemoryCommentReader {
 class InMemoryCommentWriter {
   lastText?: string;
   lastFields?: readonly string[];
+  async getCommentReplyTarget(): Promise<never> {
+    throw new Error("unexpected comment lookup");
+  }
+
   async createTaskComment(
     _token: string,
     _taskId: string,
@@ -4477,6 +4481,26 @@ describe("tasks comments command", () => {
 });
 
 describe("tasks comment command", () => {
+  test.each(["", "not-a-gid"])(
+    "rejects invalid --reply-to=%s before authentication",
+    async (gid) => {
+      const result = await execute(
+        ["tasks", "comment", "123", "Answer", `--reply-to=${gid}`],
+        {
+          environment: {},
+          identity: new InMemoryIdentity(
+            err({ kind: "authentication", message: "fail" }),
+          ),
+        },
+      );
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(
+        "--reply-to requires a numeric story GID",
+      );
+    },
+  );
+
   test("creates a comment from positional text", async () => {
     const writer = new InMemoryCommentWriter();
     const result = await execute(
@@ -5570,6 +5594,9 @@ describe("workspaces list command", () => {
         },
       },
       commentWriter: {
+        getCommentReplyTarget: async () => {
+          throw new Error("comment lookup called");
+        },
         createTaskComment: async () => {
           throw new Error("comment writer called");
         },
