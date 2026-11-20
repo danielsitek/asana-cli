@@ -85,9 +85,21 @@ asana-cli skill uninstall universal
 ```
 
 Installation is global by default; `--local` targets the current project.
-`install` protects an existing file unless `--force` is supplied. `update all`
-updates installed targets and skips absent ones. CLI upgrades never modify
-agent directories automatically.
+`install` adds an ownership stamp with the bundled version and a checksum.
+`skill list` uses it to report `current`, `outdated`, or `newer` installations.
+Symlinks, edited copies, and older installations without a stamp appear as
+`foreign`.
+
+Use `skill update <agent> --force` to take over an unstamped copy or downgrade
+a newer one. Use `skill uninstall <agent> --force` to remove a foreign copy.
+When a directory in the installation path is symlinked, these
+forced commands can change the file in the linked directory. When
+`SKILL.md` itself is a symlink, they replace or remove the link.
+
+`skill update all` reports absent, foreign, and newer copies as skipped by
+default. A failure after changes have already been made exits with code 1
+and reports the completed changes. CLI upgrades never modify agent
+directories automatically.
 
 Supported targets append `asana-cli/SKILL.md` to these directories:
 
