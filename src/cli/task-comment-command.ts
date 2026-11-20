@@ -15,7 +15,7 @@ import {
   type TaskInvocation,
 } from "./task-command-context.ts";
 
-type TaskCommentOptions = Readonly<{ file?: string }>;
+type TaskCommentOptions = Readonly<{ file?: string; replyTo?: string }>;
 
 const prepareComment = (
   idArg: string,
@@ -27,6 +27,7 @@ const prepareComment = (
     ...(invocation.fields === undefined ? {} : { fields: invocation.fields }),
     ...(textArg === undefined ? {} : { text: textArg }),
     ...(options.file === undefined ? {} : { file: options.file }),
+    ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
   });
 
 const runTaskComment = async (
@@ -68,6 +69,10 @@ export const registerTaskCommentCommand = (
     .command("comment <id> [text]")
     .description("create a task comment")
     .option("--file <path>", "read comment text from a file or stdin with -")
+    .option(
+      "--reply-to <story-gid>",
+      "reply to a top-level comment on this task",
+    )
     .addHelpText("after", shellTextSafetyHelp("--file <path>"))
     .action(
       async (

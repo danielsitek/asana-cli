@@ -74,6 +74,10 @@ class RecordingWriter implements TaskCommentCreationGateway {
     }),
   ) {}
 
+  async getCommentReplyTarget(): Promise<never> {
+    throw new Error("unexpected comment lookup");
+  }
+
   async createTaskComment(
     token: string,
     taskId: string,
