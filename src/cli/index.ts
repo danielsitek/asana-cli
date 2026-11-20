@@ -119,30 +119,31 @@ const appendUpdateNotice = async (
   }
 };
 
+function* helpPathArguments(argv: readonly string[]): Iterable<string> {
+  const args = argv.values();
+  for (const arg of args) {
+    if (arg === "--") {
+      yield* args;
+      return;
+    }
+    if (arg === "--fields") {
+      args.next();
+      continue;
+    }
+    if (arg !== "--json" && !arg.startsWith("--fields=")) yield arg;
+  }
+}
+
 const showHelpCommand = (program: Command, argv: readonly string[]): void => {
   let command = program;
   let helpRequested = false;
-  let optionsEnded = false;
 
-  const args = argv.values();
-  for (const arg of args) {
-    if (!optionsEnded) {
-      if (arg === "--") {
-        optionsEnded = true;
-        continue;
-      }
-      if (arg === "--fields") {
-        if (args.next().done) return;
-        continue;
-      }
-      if (arg === "--json" || arg.startsWith("--fields=")) continue;
-      if (helpRequested && (arg === "--help" || arg === "-h")) continue;
-    }
-
+  for (const arg of helpPathArguments(argv)) {
     if (!helpRequested && arg === "help" && command.commands.length > 0) {
       helpRequested = true;
       continue;
     }
+    if (helpRequested && ["--help", "-h"].includes(arg)) continue;
 
     const child = command.commands.find(
       (candidate) =>
