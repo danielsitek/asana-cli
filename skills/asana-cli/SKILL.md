@@ -24,9 +24,11 @@ Before `tasks update` or `tasks comment`, read the target first with `asana-cli 
 
 Before `tasks update <id> --section=<gid>`, verify the section belongs to the intended project with `asana-cli projects sections <project-gid> --all --max=<scan-cap> --json` (raise the cap if the scan is truncated). Adding a task to a section also associates it with that section's project; memberships in other projects are preserved. For example, adding a task already in project A and its section to a section in project B leaves its project A and original section memberships in place and adds project B.
 
-## Preserve literal dollar amounts
+## Task notes and comment files
 
-For comment or update-notes text containing `$` followed by digits, write the exact text to a file and use `--file=<path>` or `--notes-file=<path>`. A double-quoted shell argument expands forms such as `$2` before `asana-cli` receives it; file input preserves the intended bytes.
+Use `--notes-file=<path|->` with `tasks create` and `tasks update`. Use `--file=<path|->` with `tasks comment`. In both flags, `-` reads from stdin.
+
+Use file input for multiline text or text containing `$` followed by digits. A double-quoted shell argument expands forms such as `$2` before `asana-cli` receives it.
 
 ## Config aliases can write as a side effect
 
