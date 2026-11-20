@@ -1,16 +1,16 @@
+import type { ListOptions } from "../pagination/index.ts";
 import {
   executeAttachmentList,
   prepareAttachmentList,
 } from "../attachments/index.ts";
 import { renderJson, renderTaskList } from "../output/index.ts";
+import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
   renderTaskReadFailure,
   type TaskCommandContext,
 } from "./task-command-context.ts";
-
-type Options = Readonly<{ max?: string; all?: boolean }>;
 
 export const registerTaskAttachmentsCommand = (
   context: TaskCommandContext,
@@ -19,18 +19,18 @@ export const registerTaskAttachmentsCommand = (
     .command("attachments <id>")
     .description("list attachments on a task, including inline images")
     .option("--max <n>", "cap attachments scanned; alone does not return all")
+    .option("--offset <token>", "resume from an Asana offset")
     .option(
       "--all",
       "return all attachments within the scan cap; requires --max",
     )
-    .action(async (id: string, options: Options) => {
+    .action(async (id: string, options: ListOptions) => {
       const invocation = context.beginCommand();
       const prepared = prepareAttachmentList(id, {
         ...(invocation.fields === undefined
           ? {}
           : { fields: invocation.fields }),
-        ...(options.max === undefined ? {} : { max: options.max }),
-        ...(options.all === undefined ? {} : { all: options.all }),
+        ...options,
       });
       if (!prepared.ok)
         return context.complete(context.usageError(prepared.error.message));
@@ -50,10 +50,14 @@ export const registerTaskAttachmentsCommand = (
         stdout: invocation.json
           ? renderJson(listed.value.attachments, listed.value.meta)
           : renderTaskList(listed.value.attachments, prepared.value.fields),
-        stderr:
-          invocation.json || !listed.value.meta.scan_truncated
-            ? ""
-            : "Attachment scan truncated; increase --max to read more.\n",
+        stderr: invocation.json
+          ? ""
+          : renderListContinuation(
+              listed.value.meta,
+              ["tasks", "attachments", id],
+              options,
+              invocation.fields,
+            ),
         exitCode: 0,
       });
     });

@@ -1,8 +1,14 @@
+import {
+  collectPages,
+  prepareListBounds,
+  type ListBounds,
+  type ListMeta,
+  type ListOptions,
+} from "../pagination/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { projectFields } from "../utils/project-fields.ts";
 import {
   assemblePreparedTaskListRead,
-  prepareTaskListBounds,
   type TaskListPreparationError,
 } from "./task-list-preparation.ts";
 import {
@@ -776,38 +782,30 @@ export type TaskListSource = Readonly<
   | { kind: "my_section"; selector: ResourceSelector }
 >;
 
-export type TaskListOptions = Readonly<{
-  mySection?: string;
-  section?: string;
-  project?: string;
-  parent?: string;
-  assignee?: string;
-  completed?: string;
-  max?: string;
-  all?: boolean;
-}>;
+export type TaskListOptions = ListOptions &
+  Readonly<{
+    mySection?: string;
+    section?: string;
+    project?: string;
+    parent?: string;
+    assignee?: string;
+    completed?: string;
+  }>;
 
 export type TaskListAssigneeFilter = Readonly<
   { kind: "me" } | { kind: "gid"; value: string }
 >;
 
-export type TaskListMeta = Readonly<{
-  scanned: number;
-  returned: number;
-  scan_truncated: boolean;
-  next_offset?: string;
-}>;
+export type TaskListMeta = ListMeta;
 
-export type PreparedTaskListRead = Readonly<{
-  source: TaskListSource;
-  assigneeFilter?: TaskListAssigneeFilter;
-  completed: boolean;
-  outputFields: readonly string[];
-  requestFields: readonly string[];
-  scanCap: number;
-  resultCap?: number;
-  offset?: string;
-}>;
+export type PreparedTaskListRead = ListBounds &
+  Readonly<{
+    source: TaskListSource;
+    assigneeFilter?: TaskListAssigneeFilter;
+    completed: boolean;
+    outputFields: readonly string[];
+    requestFields: readonly string[];
+  }>;
 
 export type TaskListPage = Readonly<{
   tasks: readonly Task[];
@@ -976,7 +974,7 @@ export const prepareTaskListRead = (
   if (!assigneeFilter.ok) return assigneeFilter;
   const completed = prepareTaskListCompleted(options.completed);
   if (!completed.ok) return completed;
-  const bounds = prepareTaskListBounds(options);
+  const bounds = prepareListBounds(options);
   if (!bounds.ok) return bounds;
   const selectedFields = prepareSelectedFields(fieldsInput);
   if (!selectedFields.ok) return selectedFields;
@@ -1069,104 +1067,6 @@ const readTaskListPage = (
     : reader.getProjectTasks(token, source.gid, { ...options, completedSince });
 };
 
-const taskListResult = (
-  tasks: readonly Task[],
-  scanned: number,
-  scanTruncated: boolean,
-  nextOffset?: string,
-): TaskListReadResult =>
-  ok({
-    tasks,
-    meta: {
-      scanned,
-      returned: tasks.length,
-      scan_truncated: scanTruncated,
-      ...(nextOffset === undefined ? {} : { next_offset: nextOffset }),
-    },
-  });
-
-const collectMatchingPageTasks = (
-  pageTasks: readonly Task[],
-  prepared: PreparedTaskListRead,
-  assigneeGid: string | undefined,
-  tasks: Task[],
-  remaining: number,
-) => {
-  const tasksWithinBudget = pageTasks.slice(0, remaining);
-  let consumed = 0;
-  for (const task of tasksWithinBudget) {
-    consumed += 1;
-    const matchesCompleted = task.completed === prepared.completed;
-    const matchesAssignee =
-      assigneeGid === undefined || task.assignee?.gid === assigneeGid;
-    if (matchesCompleted && matchesAssignee) {
-      tasks.push(projectTaskListFields(task, prepared.outputFields));
-      if (
-        prepared.resultCap !== undefined &&
-        tasks.length >= prepared.resultCap
-      ) {
-        break;
-      }
-    }
-  }
-  return {
-    consumed,
-    pageExceedsBudget: pageTasks.length > tasksWithinBudget.length,
-    resultCapReached:
-      prepared.resultCap !== undefined && tasks.length >= prepared.resultCap,
-  };
-};
-
-const taskListPaginationError = (
-  page: TaskListPage,
-  requestedOffsets: ReadonlySet<string>,
-): TaskUpdateError | undefined => {
-  if (
-    page.nextOffset !== undefined &&
-    (page.tasks.length === 0 || requestedOffsets.has(page.nextOffset))
-  ) {
-    return {
-      kind: "invalid_response",
-      message: "Task pagination did not advance",
-    };
-  }
-  return undefined;
-};
-
-const completedTaskListPageResult = (
-  tasks: readonly Task[],
-  prepared: PreparedTaskListRead,
-  scanned: number,
-  page: TaskListPage,
-  collected: ReturnType<typeof collectMatchingPageTasks>,
-): TaskListReadResult | undefined => {
-  if (collected.resultCapReached) {
-    const stoppedMidPage = collected.consumed < page.tasks.length;
-    const truncated =
-      scanned >= prepared.scanCap &&
-      (stoppedMidPage || page.nextOffset !== undefined);
-    return taskListResult(
-      tasks,
-      scanned,
-      truncated,
-      stoppedMidPage ? undefined : page.nextOffset,
-    );
-  }
-  if (scanned >= prepared.scanCap) {
-    const truncated =
-      collected.pageExceedsBudget || page.nextOffset !== undefined;
-    return taskListResult(
-      tasks,
-      scanned,
-      truncated,
-      collected.pageExceedsBudget ? undefined : page.nextOffset,
-    );
-  }
-  return page.nextOffset === undefined
-    ? taskListResult(tasks, scanned, false)
-    : undefined;
-};
-
 const collectTaskListPages = async (
   token: string,
   prepared: PreparedTaskListRead,
@@ -1174,47 +1074,32 @@ const collectTaskListPages = async (
   source: ResolvedTaskListSource,
   assigneeGid: string | undefined,
 ): Promise<TaskListReadResult> => {
-  const tasks: Task[] = [];
-  let scanned = 0;
-  let offset = prepared.offset;
-  const requestedOffsets = new Set<string>();
-  while (scanned < prepared.scanCap) {
-    if (offset !== undefined) requestedOffsets.add(offset);
-    const remaining = prepared.scanCap - scanned;
-    const page = await readTaskListPage(
-      token,
-      source,
-      prepared,
-      Math.min(100, remaining),
-      offset,
-      dependencies.reader,
-    );
-    if (!page.ok) return page;
-    const paginationError = taskListPaginationError(
-      page.value,
-      requestedOffsets,
-    );
-    if (paginationError !== undefined) return err(paginationError);
-    const { tasks: pageTasks, nextOffset } = page.value;
-    const collected = collectMatchingPageTasks(
-      pageTasks,
-      prepared,
-      assigneeGid,
-      tasks,
-      remaining,
-    );
-    scanned += collected.consumed;
-    const result = completedTaskListPageResult(
-      tasks,
-      prepared,
-      scanned,
-      page.value,
-      collected,
-    );
-    if (result !== undefined) return result;
-    offset = nextOffset;
-  }
-  return taskListResult(tasks, scanned, false);
+  const result = await collectPages<Task, Task, TaskUpdateError>(
+    prepared,
+    async (limit, offset) => {
+      const page = await readTaskListPage(
+        token,
+        source,
+        prepared,
+        limit,
+        offset,
+        dependencies.reader,
+      );
+      if (!page.ok) return page;
+      const { tasks, nextOffset } = page.value;
+      return ok({ items: tasks, nextOffset });
+    },
+    (task) => {
+      if (task.completed !== prepared.completed) return undefined;
+      if (assigneeGid !== undefined && task.assignee?.gid !== assigneeGid)
+        return undefined;
+      return projectTaskListFields(task, prepared.outputFields);
+    },
+    { kind: "invalid_response", message: "Task pagination did not advance" },
+  );
+  return result.ok
+    ? ok({ tasks: result.value.items, meta: result.value.meta })
+    : result;
 };
 
 export const executeTaskListRead = async (

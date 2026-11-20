@@ -336,6 +336,7 @@ describe("executeTaskCommentsRead", () => {
       scanned: 3,
       returned: 2,
       scan_truncated: false,
+      has_more: false,
     });
   });
 
@@ -356,48 +357,72 @@ describe("executeTaskCommentsRead", () => {
     expect(result.value.comments).toEqual([{ gid: "1", text: "comment 1" }]);
   });
 
-  test("result cap does not claim the story scan was truncated", async () => {
+  test("filtered stories leave room for a smaller page before the result cap", async () => {
     const reader = new QueuedReader([
       ok({
-        stories: [
-          story(1, "comment_added"),
-          story(2, "comment_added"),
-          story(3, "comment_added"),
-        ],
+        stories: [story(1, "assigned"), story(2, "comment_added")],
+        nextOffset: "page-2",
       }),
+      ok({ stories: [story(3, "comment_added")], nextOffset: "page-3" }),
+      ok({ stories: [story(4, "comment_added")] }),
     ]);
     const result = await executeTaskCommentsRead(
       "t",
       prepared({ mode: { kind: "capped", resultCap: 2 } }),
       { reader },
     );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.comments).toHaveLength(2);
+    if (!result.ok || !result.value.meta.has_more) {
+      throw new Error("expected a continuation");
+    }
+    expect(reader.calls.map((call) => call.limit)).toEqual([2, 1]);
+    expect(result.value.comments.map((comment) => comment.gid)).toEqual([
+      "2",
+      "3",
+    ]);
     expect(result.value.meta).toEqual({
-      scanned: 2,
+      scanned: 3,
       returned: 2,
       scan_truncated: false,
+      has_more: true,
+      next_offset: "page-3",
     });
-    expect(result.value.meta.next_offset).toBeUndefined();
+
+    const resumed = await executeTaskCommentsRead(
+      "t",
+      prepared({
+        mode: {
+          kind: "capped",
+          resultCap: 2,
+          offset: result.value.meta.next_offset,
+        },
+      }),
+      { reader },
+    );
+    if (!resumed.ok) throw new Error(resumed.error.message);
+    expect(reader.calls[2]?.offset).toBe("page-3");
+    expect(resumed.value.comments.map((comment) => comment.gid)).toEqual(["4"]);
+    expect(resumed.value.meta.has_more).toBe(false);
   });
 
-  test("returns at most 20 comments by default", async () => {
+  test("reports more results at the default cap of 20", async () => {
     const reader = new QueuedReader([
       ok({
-        stories: Array.from({ length: 21 }, (_, index) =>
+        stories: Array.from({ length: 20 }, (_, index) =>
           story(index + 1, "comment_added"),
         ),
+        nextOffset: "page-2",
       }),
     ]);
     const result = await executeTaskCommentsRead("t", prepared(), { reader });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(result.error.message);
+    expect(reader.calls[0]?.limit).toBe(20);
     expect(result.value.comments).toHaveLength(20);
     expect(result.value.meta).toEqual({
       scanned: 20,
       returned: 20,
       scan_truncated: false,
+      has_more: true,
+      next_offset: "page-2",
     });
   });
 
@@ -422,11 +447,8 @@ describe("executeTaskCommentsRead", () => {
   test("marks truncation when result and story caps are reached together", async () => {
     const reader = new QueuedReader([
       ok({
-        stories: [
-          story(1, "comment_added"),
-          story(2, "comment_added"),
-          story(3, "comment_added"),
-        ],
+        stories: [story(1, "comment_added"), story(2, "comment_added")],
+        nextOffset: "page-2",
       }),
     ]);
     const result = await executeTaskCommentsRead(
@@ -443,6 +465,8 @@ describe("executeTaskCommentsRead", () => {
       scanned: 2,
       returned: 2,
       scan_truncated: true,
+      has_more: true,
+      next_offset: "page-2",
     });
   });
 
@@ -466,7 +490,12 @@ describe("executeTaskCommentsRead", () => {
       ok: true,
       value: {
         comments: [],
-        meta: { scanned: 0, returned: 0, scan_truncated: false },
+        meta: {
+          scanned: 0,
+          returned: 0,
+          scan_truncated: false,
+          has_more: false,
+        },
       },
     });
     expect(reader.calls).toHaveLength(1);
@@ -551,6 +580,7 @@ describe("executeTaskCommentsRead", () => {
       scanned: 2,
       returned: 0,
       scan_truncated: true,
+      has_more: true,
       next_offset: "page-2",
     });
   });
@@ -569,11 +599,15 @@ describe("executeTaskCommentsRead", () => {
 
   test("caps each request limit at 100", async () => {
     const reader = new QueuedReader([ok({ stories: [] })]);
-    await executeTaskCommentsRead("t", prepared({ scanCap: 250 }), { reader });
+    await executeTaskCommentsRead(
+      "t",
+      prepared({ scanCap: 250, mode: { kind: "all" } }),
+      { reader },
+    );
     expect(reader.calls[0]?.limit).toBe(100);
   });
 
-  test("never processes stories beyond the remaining scan budget", async () => {
+  test("rejects an oversized page instead of returning an unusable cursor", async () => {
     const reader = new QueuedReader([
       ok({ stories: [story(1, "assigned")], nextOffset: "page-2" }),
       ok({
@@ -596,14 +630,13 @@ describe("executeTaskCommentsRead", () => {
       },
       { reader },
     );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
     expect(reader.calls.map((call) => call.limit)).toEqual([3, 2]);
-    expect(result.value.comments.map((comment) => comment.gid)).toEqual(["3"]);
-    expect(result.value.meta).toEqual({
-      scanned: 3,
-      returned: 1,
-      scan_truncated: true,
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid_response",
+        message: "Asana returned more items than the requested page limit",
+      },
     });
   });
 
@@ -671,6 +704,7 @@ describe("executeTaskCommentsRead", () => {
         scanned: 5,
         returned: 1,
         scan_truncated: false,
+        has_more: false,
       });
     });
 
@@ -698,6 +732,7 @@ describe("executeTaskCommentsRead", () => {
         scanned: 30,
         returned: 3,
         scan_truncated: false,
+        has_more: false,
       });
     });
 
@@ -740,7 +775,12 @@ describe("executeTaskCommentsRead", () => {
         ok: true,
         value: {
           comments: [],
-          meta: { scanned: 1, returned: 0, scan_truncated: false },
+          meta: {
+            scanned: 1,
+            returned: 0,
+            scan_truncated: false,
+            has_more: false,
+          },
         },
       });
     });
@@ -763,6 +803,7 @@ describe("executeTaskCommentsRead", () => {
         scanned: 2,
         returned: 2,
         scan_truncated: false,
+        has_more: false,
       });
     });
 
@@ -782,6 +823,7 @@ describe("executeTaskCommentsRead", () => {
         scanned: 2,
         returned: 2,
         scan_truncated: false,
+        has_more: false,
       });
     });
 

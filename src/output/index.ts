@@ -286,36 +286,5 @@ export const renderProjectCustomFieldSettingList = (
   fields: readonly string[],
 ): string => renderRecordTable(settings, fields);
 
-const renderScanWarning = (
-  scanTruncated: boolean,
-  scannedResource: string,
-  returnedResource: string,
-): string =>
-  scanTruncated
-    ? `Warning: ${scannedResource} scan cap reached; more ${returnedResource} may exist.\n`
-    : "";
-
-export const renderCommentScanWarning = (scanTruncated: boolean): string =>
-  renderScanWarning(scanTruncated, "story", "comments");
-
-export const renderTaskListScanWarning = (scanTruncated: boolean): string =>
-  renderScanWarning(scanTruncated, "task", "tasks");
-
-export const renderProjectListScanWarning = (scanTruncated: boolean): string =>
-  renderScanWarning(scanTruncated, "project", "projects");
-
-export const renderProjectSectionListScanWarning = (
-  scanTruncated: boolean,
-): string => renderScanWarning(scanTruncated, "section", "sections");
-
-export const renderProjectCustomFieldSettingListScanWarning = (
-  scanTruncated: boolean,
-): string =>
-  renderScanWarning(
-    scanTruncated,
-    "custom-field setting",
-    "custom-field settings",
-  );
-
 export const renderCommentDetail = (comment: Record<string, unknown>): string =>
   renderTaskDetail(comment);

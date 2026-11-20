@@ -10,15 +10,11 @@ import {
   renderTaskDetail,
   renderTaskUpdate,
   renderCommentList,
-  renderCommentScanWarning,
   renderTaskList,
-  renderTaskListScanWarning,
   renderCommentDetail,
   renderWorkspaceList,
   renderProjectSectionList,
-  renderProjectSectionListScanWarning,
   renderProjectCustomFieldSettingList,
-  renderProjectCustomFieldSettingListScanWarning,
 } from "./index.ts";
 
 describe("configuration output", () => {
@@ -235,13 +231,6 @@ describe("comment output", () => {
     );
   });
 
-  test("renderCommentScanWarning renders diagnostics only for truncation", () => {
-    expect(renderCommentScanWarning(true)).toBe(
-      "Warning: story scan cap reached; more comments may exist.\n",
-    );
-    expect(renderCommentScanWarning(false)).toBe("");
-  });
-
   test("renderCommentDetail renders key/value detail like task detail", () => {
     expect(
       renderCommentDetail({ gid: "1", text: "hi", created_by: null }),
@@ -275,13 +264,6 @@ describe("task list output", () => {
         "\n",
     );
   });
-
-  test("renderTaskListScanWarning renders diagnostics only for truncation", () => {
-    expect(renderTaskListScanWarning(true)).toBe(
-      "Warning: task scan cap reached; more tasks may exist.\n",
-    );
-    expect(renderTaskListScanWarning(false)).toBe("");
-  });
 });
 
 describe("workspace output", () => {
@@ -302,20 +284,16 @@ describe("workspace output", () => {
 });
 
 describe("project section output", () => {
-  test("renders selected fields in order and the bounded-read warning", () => {
+  test("renders selected fields in order", () => {
     expect(
       renderProjectSectionList(
         [{ gid: "1", name: "Planning" }],
         ["name", "gid"],
       ),
     ).toBe("name      gid\nPlanning  1\n");
-    expect(renderProjectSectionListScanWarning(true)).toBe(
-      "Warning: section scan cap reached; more sections may exist.\n",
-    );
-    expect(renderProjectSectionListScanWarning(false)).toBe("");
   });
 
-  test("renders custom-field settings and scan warning", () => {
+  test("renders custom-field settings", () => {
     expect(
       renderProjectCustomFieldSettingList(
         [{ gid: "1", custom_field: { gid: "2", name: "Priority" } }],
@@ -324,9 +302,5 @@ describe("project section output", () => {
     ).toBe(
       "gid  custom_field.gid  custom_field.name\n1    2                 Priority\n",
     );
-    expect(renderProjectCustomFieldSettingListScanWarning(true)).toBe(
-      "Warning: custom-field setting scan cap reached; more custom-field settings may exist.\n",
-    );
-    expect(renderProjectCustomFieldSettingListScanWarning(false)).toBe("");
   });
 });
