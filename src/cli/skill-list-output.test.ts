@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import type { SkillAgentStatus } from "../skill/index.ts";
+import type {
+  SkillAgentStatus,
+  SkillInstallationStatus,
+} from "../skill/index.ts";
 import { renderSkillList, terminalColorsEnabled } from "./skill-list-output.ts";
 
 const installation = (
-  status: "absent" | "current" | "outdated",
+  status: SkillInstallationStatus["status"],
   path: string,
 ) => ({ status, path }) as const;
 
@@ -37,15 +40,15 @@ describe("skill list output", () => {
 
   claude-code
     Claude Code skill for Asana CLI
-    [global]
+    [global: current]
 
   codex
     Codex skill for Asana CLI
-    [local]
+    [local: outdated]
 
   copilot
     GitHub Copilot skill for Asana CLI
-    [global, local]
+    [global: outdated, local: current]
 
   cursor
     Cursor skill for Asana CLI
@@ -58,17 +61,32 @@ describe("skill list output", () => {
       "\u001B[1mAvailable agents:\u001B[22m\n\n" +
         "  claude-code\n" +
         "    \u001B[2mClaude Code skill for Asana CLI\u001B[22m\n" +
-        "    \u001B[32m[global]\u001B[39m\n\n" +
+        "    \u001B[32m[global: current]\u001B[39m\n\n" +
         "  codex\n" +
         "    \u001B[2mCodex skill for Asana CLI\u001B[22m\n" +
-        "    \u001B[32m[local]\u001B[39m\n\n" +
+        "    \u001B[32m[local: outdated]\u001B[39m\n\n" +
         "  copilot\n" +
         "    \u001B[2mGitHub Copilot skill for Asana CLI\u001B[22m\n" +
-        "    \u001B[32m[global, local]\u001B[39m\n\n" +
+        "    \u001B[32m[global: outdated, local: current]\u001B[39m\n\n" +
         "  cursor\n" +
         "    \u001B[2mCursor skill for Asana CLI\u001B[22m\n" +
         "    \u001B[2m[not installed]\u001B[22m\n",
     );
+  });
+
+  test("identifies newer and foreign installations in human output", () => {
+    expect(
+      renderSkillList(
+        [
+          {
+            agent: "claude-code",
+            global: installation("newer", "/hidden/global"),
+            local: installation("foreign", "/hidden/local"),
+          },
+        ],
+        false,
+      ),
+    ).toContain("[global: newer, local: foreign]");
   });
 
   test("uses the product-specific description for every registered agent", () => {

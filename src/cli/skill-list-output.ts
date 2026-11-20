@@ -18,12 +18,10 @@ const styled = (
 ): string => (enabled ? `\u001B[${open}m${text}\u001B[${close}m` : text);
 
 const badgeFor = ({ global, local }: SkillAgentStatus): string => {
-  const globallyInstalled = global.status !== "absent";
-  const locallyInstalled = local.status !== "absent";
-  if (globallyInstalled && locallyInstalled) return "[global, local]";
-  if (globallyInstalled) return "[global]";
-  if (locallyInstalled) return "[local]";
-  return "[not installed]";
+  const scopes = Object.entries({ global: global.status, local: local.status })
+    .filter(([, status]) => status !== "absent")
+    .map(([scope, status]) => `${scope}: ${status}`);
+  return scopes.length ? `[${scopes.join(", ")}]` : "[not installed]";
 };
 
 export const terminalColorsEnabled = (

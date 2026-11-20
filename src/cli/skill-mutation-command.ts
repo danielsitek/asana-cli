@@ -17,15 +17,18 @@ export const completeSkillMutation = (
   context.complete(
     result.ok
       ? renderMutation(result.value, json)
-      : renderSkillError(result.error),
+      : renderSkillError(result.error, json),
   );
 };
 
-export const configureSkillMutationCommand = (command: Command): void => {
+export const configureSkillMutationCommand = (
+  command: Command,
+  partial = false,
+): void => {
   withCommandCapabilities(command, {
     operation: "write",
     requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2, 6],
+    exitCodes: partial ? [0, 1, 2, 6] : [0, 2, 6],
   });
   command.exitOverride();
 };

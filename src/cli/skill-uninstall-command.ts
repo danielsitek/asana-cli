@@ -16,15 +16,22 @@ export const registerSkillUninstallCommand = (
     .description("uninstall the bundled skill")
     .argument("<agent>", "registered agent")
     .option("--local", "uninstall from the current project")
-    .action(async (agent: string, options: Readonly<{ local?: boolean }>) => {
-      const invocation = context.beginCommand();
-      if (!invocation) return;
-      const removed = await uninstallSkill(
-        invocation.context,
-        agent,
-        scopeFrom(options.local),
-      );
-      completeSkillMutation(context, removed, invocation.json);
-    });
-  configureSkillMutationCommand(command);
+    .option("--force", "remove a foreign skill")
+    .action(
+      async (
+        agent: string,
+        options: Readonly<{ local?: boolean; force?: boolean }>,
+      ) => {
+        const invocation = context.beginCommand();
+        if (!invocation) return;
+        const removed = await uninstallSkill(
+          invocation.context,
+          agent,
+          scopeFrom(options.local),
+          options.force,
+        );
+        completeSkillMutation(context, removed, invocation.json);
+      },
+    );
+  configureSkillMutationCommand(command, true);
 };

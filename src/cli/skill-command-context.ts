@@ -25,26 +25,42 @@ export type SkillCommandContext = Readonly<{
 export const scopeFrom = (local?: boolean): SkillScope =>
   local ? "local" : "global";
 
-export const renderSkillError = (error: SkillError): CommandResult => ({
-  error: {
-    code:
-      error.kind === "unknown_agent"
-        ? "invalid_usage"
-        : error.kind === "filesystem"
-          ? "internal_error"
-          : "invalid_state",
-    message: error.message,
-  },
-  exitCode: error.kind === "filesystem" ? 6 : 2,
-});
+const mutationLine = ({ action, agent, scope, path }: SkillMutation): string =>
+  `${action} ${agent} skill (${scope}): ${path}\n`;
+
+export const renderSkillError = (
+  error: SkillError,
+  json = false,
+): CommandResult => {
+  const code =
+    error.kind === "unknown_agent"
+      ? "invalid_usage"
+      : error.kind === "filesystem"
+        ? "internal_error"
+        : "invalid_state";
+  if (error.completed?.length) {
+    return {
+      stdout: json
+        ? renderJson({
+            completed: error.completed,
+            failed: { code, message: error.message },
+          })
+        : error.completed.map(mutationLine).join(""),
+      stderr: json ? "" : `error: ${error.message}\n`,
+      exitCode: 1,
+    };
+  }
+  return {
+    error: { code, message: error.message },
+    exitCode: error.kind === "filesystem" ? 6 : 2,
+  };
+};
 
 export const renderMutation = (
   mutation: SkillMutation,
   json: boolean,
 ): CommandResult => ({
-  stdout: json
-    ? renderJson(mutation)
-    : `${mutation.action} ${mutation.agent} skill (${mutation.scope}): ${mutation.path}\n`,
+  stdout: json ? renderJson(mutation) : mutationLine(mutation),
   stderr: "",
   exitCode: 0,
 });
@@ -59,8 +75,8 @@ export const renderUpdateAll = (
       ({ agent, scope, path }) => `updated ${agent} skill (${scope}): ${path}`,
     ),
     ...result.skipped.map(
-      ({ agent, scope, path }) =>
-        `skipped ${agent} skill (${scope}, not installed): ${path}`,
+      ({ agent, scope, path, reason }) =>
+        `skipped ${agent} skill (${scope}, ${reason === "not_installed" ? "not installed" : reason}): ${path}`,
     ),
   ];
   return { stdout: `${lines.join("\n")}\n`, stderr: "", exitCode: 0 };
