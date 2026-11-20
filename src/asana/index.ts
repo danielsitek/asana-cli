@@ -136,7 +136,10 @@ const projectTaskFields = (
   value: unknown,
   fields: readonly string[],
 ): Record<string, unknown> | undefined => {
-  const projected = projectFields(value, fields);
+  // Asana omits number_value from custom fields of other types.
+  const projected = projectFields(value, fields, [
+    "custom_fields.number_value",
+  ]);
   return projected.found ? projected.value : undefined;
 };
 
