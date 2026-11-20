@@ -82,8 +82,7 @@ style: unify string quotes in CompanyListItem
 
 ## Good Practices
 
-- Keep commits atomic (one logical change).
-- Commit frequently after each completed step.
+- As work progresses, commit each completed, reviewable logical change separately.
 - If you need to fix a commit message before push:
 
 ```bash
