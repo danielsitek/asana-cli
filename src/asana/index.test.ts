@@ -233,7 +233,7 @@ describe("AsanaHttpClient", () => {
       maxRetries: 1,
       sleep: async () => undefined,
     });
-    const result = await execute(["whoami"], {
+    const result = await execute(["whoami", "--json"], {
       environment: { ASANA_CLI_TOKEN: "secret" },
       identity: client,
       discovery: client,

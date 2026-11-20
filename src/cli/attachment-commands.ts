@@ -4,7 +4,7 @@ import { downloadAttachment } from "../attachments/download.ts";
 import { renderJson } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
-import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
 import {
   internalError,
   renderTaskReadFailure,
@@ -15,9 +15,9 @@ export const registerAttachmentCommands = (
     program: Command;
     dependencies: ExecuteDependencies;
     beginCommand: () => Readonly<{ json: boolean }>;
-    complete: (execution: Execution) => void;
-    requireToken: () => Result<string, Execution>;
-    usageError: (message: string) => Execution;
+    complete: (execution: CommandResult) => void;
+    requireToken: () => Result<string, CommandResult>;
+    usageError: (message: string) => CommandResult;
     outputConfiguration: OutputConfiguration;
   }>,
 ): void => {

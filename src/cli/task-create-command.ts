@@ -5,7 +5,7 @@ import {
 } from "../tasks/index.ts";
 import { renderJson, renderTaskCreation } from "../output/index.ts";
 import { renderConfigFailure } from "./config-error.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 import {
   internalError,
   myTasksMutationResolverFor,
@@ -74,7 +74,7 @@ const runTaskCreate = async (
   context: TaskCommandContext,
   options: TaskMutationCliOptions &
     Readonly<{ parent?: string; project?: string }>,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const prepared = await prepareTaskCreation(context, options, invocation);
   if (!prepared.ok) {

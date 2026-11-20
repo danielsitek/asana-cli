@@ -22,7 +22,11 @@ import {
   withCommandCapabilities,
 } from "./capabilities.ts";
 import { registerConfigCommands } from "./config-commands.ts";
-import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import type {
+  CommandResult,
+  ExecuteDependencies,
+  Execution,
+} from "./contracts.ts";
 import { registerProjectCommands } from "./project-commands.ts";
 import { registerSkillCommands } from "./skill-commands.ts";
 import { terminalColorsEnabled } from "./skill-list-output.ts";
@@ -31,26 +35,24 @@ import { executeWorkspacesList } from "../workspaces/index.ts";
 
 export type { ExecuteDependencies, Execution } from "./contracts.ts";
 
-const usageError = (message: string): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "invalid_usage", message }),
+const usageError = (message: string): CommandResult => ({
+  error: { code: "invalid_usage", message },
   exitCode: 2,
 });
 
 const requireToken = (
   dependencies: Pick<ExecuteDependencies, "environment">,
-): Result<string, Execution> => {
+): Result<string, CommandResult> => {
   const token = resolveToken(dependencies.environment);
   return token.ok
     ? token
     : {
         ok: false,
         error: {
-          stdout: "",
-          stderr: renderError({
+          error: {
             code: "authentication",
             message: token.error.message,
-          }),
+          },
           exitCode: 3,
         },
       };
@@ -69,13 +71,29 @@ const identityFailures: Readonly<
   },
 };
 
-const renderIdentityFailure = (kind: AsanaError["kind"]): Execution => {
+const renderIdentityFailure = (kind: AsanaError["kind"]): CommandResult => {
   const mapped = identityFailures[kind];
   return {
-    stdout: "",
-    stderr: renderError({ code: kind, message: mapped.message }),
+    error: { code: kind, message: mapped.message },
     exitCode: mapped.exitCode,
   };
+};
+
+const formatCommandResult = (
+  result: CommandResult,
+  json: boolean,
+  command: Command,
+): Execution => {
+  if (!("error" in result)) return result;
+
+  const { error, exitCode } = result;
+  if (json) return { stdout: "", stderr: renderError(error), exitCode };
+
+  const help =
+    error.code === "invalid_usage"
+      ? `\n${command.helpInformation({ error: true })}`
+      : "";
+  return { stdout: "", stderr: `error: ${error.message}\n${help}`, exitCode };
 };
 
 const appendUpdateNotice = async (
@@ -111,12 +129,13 @@ export const execute = async (
   const version = dependencies.version ?? "0.11.0";
   let json = false;
   const invokedState = { value: false };
-  let result: Execution | undefined;
+  let result: CommandResult | undefined;
+  let activeCommand = program;
   let parserStdout = "";
   let parserStderr = "";
   let skipUpdateCheck = false;
 
-  const stopWith = (execution: Execution): void => {
+  const stopWith = (execution: CommandResult): void => {
     result = execution;
   };
 
@@ -133,6 +152,8 @@ export const execute = async (
   program.option("--fields <fields>", "select explicit Asana fields");
 
   program.hook("preAction", (thisCommand, actionCommand) => {
+    activeCommand = actionCommand;
+    json = program.opts<{ json?: boolean }>().json ?? false;
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
       const commandPath = [actionCommand.parent?.name(), actionCommand.name()]
         .filter((part): part is string => part !== undefined)
@@ -152,7 +173,6 @@ export const execute = async (
     .description("show the authenticated Asana user")
     .action(async () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       const token = requireToken(dependencies);
       if (!token.ok) {
         stopWith(token.error);
@@ -185,7 +205,6 @@ export const execute = async (
     dependencies,
     beginCommand: () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       const context = dependencies.configuration;
       if (!context) {
         result = usageError("Configuration context is unavailable");
@@ -203,15 +222,13 @@ export const execute = async (
     program,
     beginCommand: () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       const context = dependencies.configuration;
       if (!context) {
         result = {
-          stdout: "",
-          stderr: renderError({
+          error: {
             code: "internal_error",
             message: "Skill context is unavailable",
-          }),
+          },
           exitCode: 6,
         };
         return undefined;
@@ -233,7 +250,6 @@ export const execute = async (
     dependencies,
     beginCommand: () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       const fields = program.opts<{ fields?: string }>().fields;
       return { json, ...(fields === undefined ? {} : { fields }) };
     },
@@ -248,7 +264,6 @@ export const execute = async (
     dependencies,
     beginCommand: () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       return { json };
     },
     complete: stopWith,
@@ -262,7 +277,6 @@ export const execute = async (
     dependencies,
     beginCommand: () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       const fields = program.opts<{ fields?: string }>().fields;
       return { json, ...(fields === undefined ? {} : { fields }) };
     },
@@ -289,7 +303,6 @@ export const execute = async (
     .description("list workspaces visible to the authenticated user")
     .action(async () => {
       invokedState.value = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
 
       const tokenResult = requireToken(dependencies);
       if (!tokenResult.ok) {
@@ -299,11 +312,10 @@ export const execute = async (
 
       if (!dependencies.workspaceReader) {
         result = {
-          stdout: "",
-          stderr: renderError({
+          error: {
             code: "internal_error",
             message: "Workspace reader is required",
-          }),
+          },
           exitCode: 6,
         };
         return;
@@ -365,7 +377,6 @@ export const execute = async (
     .action(() => {
       invokedState.value = true;
       skipUpdateCheck = true;
-      json = program.opts<{ json?: boolean }>().json ?? false;
       result = json
         ? {
             stdout: renderJson(capabilitiesForProgram(program, version)),
@@ -422,26 +433,42 @@ export const execute = async (
         );
       }
       if (error.code === "commander.fieldsNotSupported") {
-        return usageError(error.message);
+        return formatCommandResult(
+          usageError(error.message),
+          json,
+          activeCommand,
+        );
       }
-      if (!argv.includes("--json") && parserStderr !== "") {
+      const jsonRequested = argv.includes("--json");
+      if (!jsonRequested && parserStderr !== "") {
         return { stdout: "", stderr: parserStderr, exitCode: 2 };
       }
-      return usageError(error.message.replace(/^error: /, ""));
+      return formatCommandResult(
+        usageError(error.message.replace(/^error: /, "")),
+        jsonRequested,
+        activeCommand,
+      );
     }
-    return {
-      stdout: "",
-      stderr: renderError({
-        code: "internal_error",
-        message: "An unexpected internal error occurred",
-      }),
-      exitCode: 6,
-    };
+    return formatCommandResult(
+      {
+        error: {
+          code: "internal_error",
+          message: "An unexpected internal error occurred",
+        },
+        exitCode: 6,
+      },
+      json,
+      activeCommand,
+    );
   }
   const execution =
     result ??
     (invokedState.value
       ? usageError("Command did not complete")
       : usageError("A command is required"));
-  return appendUpdateNotice(execution, dependencies, skipUpdateCheck);
+  return appendUpdateNotice(
+    formatCommandResult(execution, json, activeCommand),
+    dependencies,
+    skipUpdateCheck,
+  );
 };

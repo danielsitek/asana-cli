@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 
-import { renderError, renderJson } from "../output/index.ts";
+import { renderJson } from "../output/index.ts";
 import type {
   SkillContext,
   SkillError,
@@ -8,7 +8,7 @@ import type {
   SkillScope,
   SkillUpdateAllResult,
 } from "../skill/index.ts";
-import type { Execution } from "./contracts.ts";
+import type { CommandResult } from "./contracts.ts";
 
 export type SkillInvocation = Readonly<{
   context: SkillContext;
@@ -19,15 +19,14 @@ export type SkillInvocation = Readonly<{
 export type SkillCommandContext = Readonly<{
   skill: Command;
   beginCommand: () => SkillInvocation | undefined;
-  complete: (execution: Execution) => void;
+  complete: (execution: CommandResult) => void;
 }>;
 
 export const scopeFrom = (local?: boolean): SkillScope =>
   local ? "local" : "global";
 
-export const renderSkillError = (error: SkillError): Execution => ({
-  stdout: "",
-  stderr: renderError({
+export const renderSkillError = (error: SkillError): CommandResult => ({
+  error: {
     code:
       error.kind === "unknown_agent"
         ? "invalid_usage"
@@ -35,14 +34,14 @@ export const renderSkillError = (error: SkillError): Execution => ({
           ? "internal_error"
           : "invalid_state",
     message: error.message,
-  }),
+  },
   exitCode: error.kind === "filesystem" ? 6 : 2,
 });
 
 export const renderMutation = (
   mutation: SkillMutation,
   json: boolean,
-): Execution => ({
+): CommandResult => ({
   stdout: json
     ? renderJson(mutation)
     : `${mutation.action} ${mutation.agent} skill (${mutation.scope}): ${mutation.path}\n`,
@@ -53,7 +52,7 @@ export const renderMutation = (
 export const renderUpdateAll = (
   result: SkillUpdateAllResult,
   json: boolean,
-): Execution => {
+): CommandResult => {
   if (json) return { stdout: renderJson(result), stderr: "", exitCode: 0 };
   const lines = [
     ...result.updated.map(

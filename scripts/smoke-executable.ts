@@ -74,9 +74,19 @@ const checkCoreCommands = async (binary: string): Promise<void> => {
     await runCommand(binary, ["tasks", "get", "invalid"]),
     {
       exitCode: 2,
-      stderrIncludes: '"message":"Invalid task identifier"',
+      stderrIncludes:
+        "error: Invalid task identifier\n\nUsage: asana-cli tasks get",
     },
-    "invalid usage",
+    "human-readable invalid usage",
+  );
+  requireResult(
+    await runCommand(binary, ["tasks", "get", "invalid", "--json"]),
+    {
+      exitCode: 2,
+      stderr:
+        '{"error":{"code":"invalid_usage","message":"Invalid task identifier"}}\n',
+    },
+    "JSON invalid usage",
   );
   requireResult(
     await runCommand(binary, ["completion", "zsh"]),
@@ -116,7 +126,7 @@ const checkConfigurationIsolation = async (binary: string): Promise<void> => {
       }),
       {
         exitCode: 3,
-        stderrIncludes: '"message":"ASANA_CLI_TOKEN is required"',
+        stderr: "error: ASANA_CLI_TOKEN is required\n",
       },
       "configuration isolation",
     );

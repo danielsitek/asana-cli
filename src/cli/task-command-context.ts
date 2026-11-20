@@ -5,11 +5,10 @@ import {
   createMySectionResolver,
   createMyTasksMutationResolver,
 } from "../my-tasks/index.ts";
-import { renderError } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import type { TaskReadError, TaskUpdateError } from "../tasks/index.ts";
 import { renderConfigFailure } from "./config-error.ts";
-import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
 
 export type TaskCommandDependencies = Pick<
   ExecuteDependencies,
@@ -42,9 +41,9 @@ export type TaskCommandContext = Readonly<{
   tasks: Command;
   dependencies: TaskCommandDependencies;
   beginCommand: () => TaskInvocation;
-  complete: (execution: Execution) => void;
-  requireToken: () => Result<string, Execution>;
-  usageError: (message: string) => Execution;
+  complete: (execution: CommandResult) => void;
+  requireToken: () => Result<string, CommandResult>;
+  usageError: (message: string) => CommandResult;
   outputConfiguration: OutputConfiguration;
 }>;
 
@@ -52,9 +51,9 @@ export type TaskCommandRegistration = Readonly<{
   program: Command;
   dependencies: TaskCommandDependencies;
   beginCommand: () => TaskInvocation;
-  complete: (execution: Execution) => void;
-  requireToken: () => Result<string, Execution>;
-  usageError: (message: string) => Execution;
+  complete: (execution: CommandResult) => void;
+  requireToken: () => Result<string, CommandResult>;
+  usageError: (message: string) => CommandResult;
   outputConfiguration: OutputConfiguration;
 }>;
 
@@ -87,28 +86,26 @@ const taskReadFailures: Readonly<
 
 export const renderTaskReadFailure = (
   kind: TaskReadError["kind"],
-): Execution => {
+): CommandResult => {
   const mapped = taskReadFailures[kind];
   return {
-    stdout: "",
-    stderr: renderError({ code: kind, message: mapped.message }),
+    error: { code: kind, message: mapped.message },
     exitCode: mapped.exitCode,
   };
 };
 
 export const renderTaskWorkflowFailure = (
   error: TaskUpdateError,
-  usageError: (message: string) => Execution,
-): Execution => {
+  usageError: (message: string) => CommandResult,
+): CommandResult => {
   if (error.kind === "invalid_usage") return usageError(error.message);
   if (error.kind === "configuration") return renderConfigFailure(error);
   if (error.kind !== "internal_error") return renderTaskReadFailure(error.kind);
   return internalError(error.message);
 };
 
-export const internalError = (message: string): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "internal_error", message }),
+export const internalError = (message: string): CommandResult => ({
+  error: { code: "internal_error", message },
   exitCode: 6,
 });
 

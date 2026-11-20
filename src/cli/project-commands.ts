@@ -3,7 +3,6 @@ import { Option, type Command, type OutputConfiguration } from "commander";
 import { resolveConfig } from "../config/index.ts";
 import type { IdentityError } from "../identity/index.ts";
 import {
-  renderError,
   renderJson,
   renderProjectCustomFieldSettingList,
   renderProjectCustomFieldSettingListScanWarning,
@@ -30,7 +29,7 @@ import type { Result } from "../shared/result.ts";
 import { validateFieldList } from "../tasks/index.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import { renderConfigFailure } from "./config-error.ts";
-import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
 
 type ProjectCommandDependencies = Pick<
   ExecuteDependencies,
@@ -50,10 +49,10 @@ type ProjectCommandRegistration = Readonly<{
   program: Command;
   dependencies: ProjectCommandDependencies;
   beginCommand: () => ProjectInvocation;
-  complete: (execution: Execution) => void;
-  requireToken: () => Result<string, Execution>;
-  renderIdentityFailure: (kind: IdentityError["kind"]) => Execution;
-  usageError: (message: string) => Execution;
+  complete: (execution: CommandResult) => void;
+  requireToken: () => Result<string, CommandResult>;
+  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult;
+  usageError: (message: string) => CommandResult;
   outputConfiguration: OutputConfiguration;
 }>;
 
@@ -81,26 +80,24 @@ const projectReadFailures: Readonly<
 
 const renderProjectReadFailure = (
   kind: ProjectReadError["kind"],
-): Execution => {
+): CommandResult => {
   const mapped = projectReadFailures[kind];
   return {
-    stdout: "",
-    stderr: renderError({ code: kind, message: mapped.message }),
+    error: { code: kind, message: mapped.message },
     exitCode: mapped.exitCode,
   };
 };
 
-const internalError = (message: string): Execution => ({
-  stdout: "",
-  stderr: renderError({ code: "internal_error", message }),
+const internalError = (message: string): CommandResult => ({
+  error: { code: "internal_error", message },
   exitCode: 6,
 });
 
 const selectedFields = (
   fields: string | undefined,
   defaults: readonly string[],
-  usageError: (message: string) => Execution,
-): Result<readonly string[], Execution> => {
+  usageError: (message: string) => CommandResult,
+): Result<readonly string[], CommandResult> => {
   if (fields === undefined) return { ok: true, value: defaults };
   const validated = validateFieldList(fields);
   return validated.ok
@@ -111,7 +108,7 @@ const selectedFields = (
 const runProjectGet = async (
   idArg: string,
   registration: ProjectCommandRegistration,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
   const parsedId = parseProjectGid(idArg);
   if (!parsedId.ok) return registration.usageError(parsedId.error.message);
@@ -144,7 +141,7 @@ const runProjectSections = async (
   idArg: string,
   options: BoundedOptions,
   registration: ProjectCommandRegistration,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
   const fields = selectedFields(
     invocation.fields,
@@ -181,7 +178,7 @@ const runProjectCustomFields = async (
   idArg: string,
   options: BoundedOptions,
   registration: ProjectCommandRegistration,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
   const fields = selectedFields(
     invocation.fields,
@@ -226,7 +223,7 @@ const runProjectCustomFields = async (
 const configuredWorkspace = async (
   options: ProjectListOptions,
   registration: ProjectCommandRegistration,
-): Promise<Result<string | undefined, Execution>> => {
+): Promise<Result<string | undefined, CommandResult>> => {
   if (options.workspace !== undefined) {
     return { ok: true, value: undefined };
   }
@@ -243,7 +240,7 @@ const configuredWorkspace = async (
 const runProjectList = async (
   options: ProjectListOptions,
   registration: ProjectCommandRegistration,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const invocation = registration.beginCommand();
   const workspace = await configuredWorkspace(options, registration);
   if (!workspace.ok) return workspace.error;

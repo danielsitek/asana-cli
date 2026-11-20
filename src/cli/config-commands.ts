@@ -15,14 +15,13 @@ import type { IdentityError } from "../identity/index.ts";
 import {
   renderConfig,
   renderConfigValue,
-  renderError,
   renderJson,
   renderResolvedMyTasks,
 } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
-import type { ExecuteDependencies, Execution } from "./contracts.ts";
+import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
 
 type ConfigCommandDependencies = Pick<ExecuteDependencies, "discovery">;
 
@@ -35,10 +34,10 @@ type ConfigCommandRegistration = Readonly<{
   program: Command;
   dependencies: ConfigCommandDependencies;
   beginCommand: () => ConfigInvocation | undefined;
-  complete: (execution: Execution) => void;
-  requireToken: () => Result<string, Execution>;
-  renderIdentityFailure: (kind: IdentityError["kind"]) => Execution;
-  usageError: (message: string) => Execution;
+  complete: (execution: CommandResult) => void;
+  requireToken: () => Result<string, CommandResult>;
+  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult;
+  usageError: (message: string) => CommandResult;
 }>;
 
 type ConfigInitOptions = Readonly<{
@@ -51,7 +50,7 @@ type ConfigInitOptions = Readonly<{
 const renderStageFailure = (
   error: StageFailureError,
   json: boolean,
-): Execution => {
+): CommandResult => {
   if (json) {
     return {
       stdout: renderJson({
@@ -76,11 +75,11 @@ const renderStageFailure = (
 const requireConfig = async (
   context: ConfigContext,
   dependencies: ConfigCommandDependencies,
-  requireToken: () => Result<string, Execution>,
-  renderIdentityFailure: (kind: IdentityError["kind"]) => Execution,
+  requireToken: () => Result<string, CommandResult>,
+  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult,
   options: Readonly<{ writeGitignore?: boolean }>,
   json: boolean,
-): Promise<Result<LocalConfigInitResult, Execution>> => {
+): Promise<Result<LocalConfigInitResult, CommandResult>> => {
   const token = requireToken();
   if (!token.ok) return token;
 
@@ -89,11 +88,10 @@ const requireConfig = async (
     return {
       ok: false,
       error: {
-        stdout: "",
-        stderr: renderError({
+        error: {
           code: "internal_error",
           message: "Discovery gateway is required",
-        }),
+        },
         exitCode: 6,
       },
     };
@@ -160,7 +158,7 @@ const validateConfigInitOptions = (
 const renderInitialized = (
   initialized: Readonly<{ path?: string }>,
   json: boolean,
-): Execution => ({
+): CommandResult => ({
   stdout: json ? renderJson(initialized) : `initialized ${initialized.path}\n`,
   stderr: "",
   exitCode: 0,
@@ -170,7 +168,7 @@ const runSharedConfigInit = async (
   context: ConfigContext,
   workspace: string | undefined,
   json: boolean,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const initialized = await initializeSharedConfig(context, workspace);
   return initialized.ok
     ? renderInitialized(initialized.value, json)
@@ -182,7 +180,7 @@ const runLocalConfigInit = async (
   options: ConfigInitOptions,
   json: boolean,
   registration: ConfigCommandRegistration,
-): Promise<Execution> => {
+): Promise<CommandResult> => {
   const initialized = await requireConfig(
     context,
     registration.dependencies,
