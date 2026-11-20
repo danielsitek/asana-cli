@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -152,7 +153,14 @@ const checkBundledSkill = async (binary: string): Promise<void> => {
     const canonical = await Bun.file(
       new URL("../skills/asana-cli/SKILL.md", import.meta.url),
     ).text();
-    if (installed !== canonical) {
+    const { version } = packageManifest.parse(
+      await Bun.file(new URL("../package.json", import.meta.url)).json(),
+    );
+    const digest = createHash("sha256").update(canonical).digest("hex");
+    if (
+      installed !==
+      `${canonical}\n<!-- asana-cli managed: ${version} sha256:${digest} -->\n`
+    ) {
       throw new Error("bundled skill smoke check failed");
     }
   } finally {

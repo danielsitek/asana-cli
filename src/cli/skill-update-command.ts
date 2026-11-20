@@ -18,21 +18,36 @@ export const registerSkillUpdateCommand = (
     .description("update an installed bundled skill")
     .argument("<agent>", "registered agent or all")
     .option("--local", "update in the current project")
-    .action(async (agent: string, options: Readonly<{ local?: boolean }>) => {
-      const invocation = context.beginCommand();
-      if (!invocation) return;
-      const scope = scopeFrom(options.local);
-      if (agent === "all") {
-        const updated = await updateAllSkills(invocation.context, scope);
-        context.complete(
-          updated.ok
-            ? renderUpdateAll(updated.value, invocation.json)
-            : renderSkillError(updated.error),
+    .option("--force", "replace foreign or newer skills")
+    .action(
+      async (
+        agent: string,
+        options: Readonly<{ local?: boolean; force?: boolean }>,
+      ) => {
+        const invocation = context.beginCommand();
+        if (!invocation) return;
+        const scope = scopeFrom(options.local);
+        if (agent === "all") {
+          const updated = await updateAllSkills(
+            invocation.context,
+            scope,
+            options.force,
+          );
+          context.complete(
+            updated.ok
+              ? renderUpdateAll(updated.value, invocation.json)
+              : renderSkillError(updated.error, invocation.json),
+          );
+          return;
+        }
+        const updated = await updateSkill(
+          invocation.context,
+          agent,
+          scope,
+          options.force,
         );
-        return;
-      }
-      const updated = await updateSkill(invocation.context, agent, scope);
-      completeSkillMutation(context, updated, invocation.json);
-    });
-  configureSkillMutationCommand(command);
+        completeSkillMutation(context, updated, invocation.json);
+      },
+    );
+  configureSkillMutationCommand(command, true);
 };

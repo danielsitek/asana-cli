@@ -49,7 +49,7 @@ import {
   type TaskSectionMutationGateway,
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
-import { bundledSkillContents, SKILL_AGENTS } from "../skill/index.ts";
+import { bundledInstallationContents, SKILL_AGENTS } from "../skill/index.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
 
 describe("attachment commands", () => {
@@ -5853,7 +5853,7 @@ describe("skill commands", () => {
     expect(result.stdout).not.toMatch(/\b(absent|current|outdated)\b/);
   });
 
-  test("installs the bundled bytes into the local project", async () => {
+  test("installs a stamped skill into the local project", async () => {
     const commandDependencies = await dependencies();
     const result = await execute(
       ["skill", "install", "universal", "--local", "--json"],
@@ -5868,7 +5868,7 @@ describe("skill commands", () => {
       "asana-cli",
       "SKILL.md",
     );
-    expect(await readFile(path, "utf8")).toBe(bundledSkillContents());
+    expect(await readFile(path, "utf8")).toBe(bundledInstallationContents());
     expect(JSON.parse(result.stdout)).toMatchObject({
       data: {
         agent: "universal",
@@ -5899,9 +5899,24 @@ describe("skill commands", () => {
       exitCode: 0,
     });
 
-    await writeFile(path, "outdated skill\n");
+    await writeFile(path, "legacy installation\n");
+    for (const action of ["update", "uninstall"]) {
+      const refused = await execute(
+        ["skill", action, "universal", "--local", "--json"],
+        commandDependencies,
+      );
+      expect(refused.exitCode).toBe(2);
+      expect(JSON.parse(refused.stderr)).toMatchObject({
+        error: {
+          code: "invalid_state",
+          message: expect.stringContaining("foreign"),
+        },
+      });
+    }
+    expect(await readFile(path, "utf8")).toBe("legacy installation\n");
+
     const updated = await execute(
-      ["skill", "update", "universal", "--local", "--json"],
+      ["skill", "update", "universal", "--local", "--force", "--json"],
       commandDependencies,
     );
     expect(updated).toEqual({
@@ -5909,10 +5924,11 @@ describe("skill commands", () => {
       stderr: "",
       exitCode: 0,
     });
-    expect(await readFile(path, "utf8")).toBe(bundledSkillContents());
+    expect(await readFile(path, "utf8")).toBe(bundledInstallationContents());
 
+    await writeFile(path, "customized skill\n");
     const removed = await execute(
-      ["skill", "uninstall", "universal", "--local"],
+      ["skill", "uninstall", "universal", "--local", "--force"],
       commandDependencies,
     );
     expect(removed).toEqual({
@@ -5921,6 +5937,54 @@ describe("skill commands", () => {
       exitCode: 0,
     });
   });
+
+  test.each([false, true])(
+    "reports prior updates on a bulk failure (JSON %s)",
+    async (json) => {
+      const commandDependencies = await dependencies();
+      const root = commandDependencies.configuration?.cwd ?? "";
+      const path = join(root, ".claude", "skills", "asana-cli", "SKILL.md");
+      const failingPath = join(root, ".agents");
+      await execute(
+        ["skill", "install", "claude-code", "--local"],
+        commandDependencies,
+      );
+      await writeFile(path, "legacy installation\n");
+      await writeFile(failingPath, "blocks traversal\n");
+      const result = await execute(
+        [
+          "skill",
+          "update",
+          "all",
+          "--local",
+          "--force",
+          ...(json ? ["--json"] : []),
+        ],
+        commandDependencies,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(await readFile(path, "utf8")).toBe(bundledInstallationContents());
+      if (json) {
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          data: {
+            completed: [
+              { agent: "claude-code", scope: "local", path, action: "updated" },
+            ],
+            failed: {
+              code: "internal_error",
+              message: expect.stringContaining(failingPath),
+            },
+          },
+        });
+      } else {
+        expect(result.stdout).toBe(
+          `updated claude-code skill (local): ${path}\n`,
+        );
+        expect(result.stderr).toContain(failingPath);
+      }
+    },
+  );
 
   test("reports state and agent errors as JSON on stderr", async () => {
     const commandDependencies = await dependencies();

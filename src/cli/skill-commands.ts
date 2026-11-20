@@ -23,7 +23,7 @@ export const registerSkillCommands = (
   withCommandCapabilities(skill, {
     operation: "mixed",
     requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2, 6],
+    exitCodes: [0, 1, 2, 6],
   });
   skill.exitOverride();
 

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { version } from "../package.json";
+import { bundledInstallationContents } from "../src/skill/index.ts";
 import { runExecutableSmoke } from "./smoke-executable.ts";
 
 const directories: string[] = [];
@@ -26,7 +27,8 @@ const createExecutable = async (failedCommand = "") => {
   directories.push(directory);
   const binary = join(directory, "cli");
   const log = join(directory, "commands");
-  const canonicalSkill = join(process.cwd(), "skills", "asana-cli", "SKILL.md");
+  const stampedSkill = join(directory, "SKILL.md");
+  await writeFile(stampedSkill, bundledInstallationContents());
   await writeFile(
     binary,
     `#!/bin/sh
@@ -49,7 +51,7 @@ case "$*" in
   whoami) printf 'error: ASANA_CLI_TOKEN is required\\n' >&2; exit 3 ;;
   'skill install universal --local')
     mkdir -p .agents/skills/asana-cli
-    cp '${canonicalSkill}' .agents/skills/asana-cli/SKILL.md
+    cp '${stampedSkill}' .agents/skills/asana-cli/SKILL.md
     printf 'installed universal skill\n'
     ;;
   *) exit 98 ;;
