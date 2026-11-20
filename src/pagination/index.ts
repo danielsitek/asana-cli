@@ -40,6 +40,27 @@ export const listMeta = (
         next_offset: nextOffset,
       };
 
+const validatePage = <Failure extends { message: string }>(
+  page: Page<unknown>,
+  limit: number,
+  requestedOffsets: ReadonlySet<string>,
+  stalledPagination: Failure,
+): Failure | undefined => {
+  if (page.items.length > limit) {
+    return {
+      ...stalledPagination,
+      message: "Asana returned more items than the requested page limit",
+    };
+  }
+  if (
+    page.nextOffset !== undefined &&
+    (page.items.length === 0 || requestedOffsets.has(page.nextOffset))
+  ) {
+    return stalledPagination;
+  }
+  return undefined;
+};
+
 export const collectPages = async <
   Item,
   Output,
@@ -51,7 +72,7 @@ export const collectPages = async <
     offset?: string,
   ) => Promise<Result<Page<Item>, Failure>>,
   select: (item: Item) => Output | undefined,
-  paginationError: Failure,
+  stalledPagination: Failure,
 ): Promise<
   Result<Readonly<{ items: readonly Output[]; meta: ListMeta }>, Failure>
 > => {
@@ -72,20 +93,15 @@ export const collectPages = async <
     );
     const page = await readPage(limit, offset);
     if (!page.ok) return page;
-    const { items: pageItems, nextOffset } = page.value;
-    if (pageItems.length > limit) {
-      return err({
-        ...paginationError,
-        message: "Asana returned more items than the requested page limit",
-      });
-    }
-    if (
-      nextOffset !== undefined &&
-      (pageItems.length === 0 || requestedOffsets.has(nextOffset))
-    ) {
-      return err(paginationError);
-    }
+    const invalidPage = validatePage(
+      page.value,
+      limit,
+      requestedOffsets,
+      stalledPagination,
+    );
+    if (invalidPage !== undefined) return err(invalidPage);
 
+    const { items: pageItems, nextOffset } = page.value;
     scanned += pageItems.length;
     for (const item of pageItems) {
       const selected = select(item);
