@@ -3,6 +3,21 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.13.0
+
+- Post threaded replies to task comments with `tasks comment --reply-to`.
+- Resume bounded task, comment, attachment, and project lists with `--offset`.
+  JSON output includes the next cursor when more results are available.
+- Report ambiguous Asana writes as `outcome_unknown` with guidance to verify
+  the result before retrying.
+- Track bundled skill ownership and protect edited, unstamped, or symlinked
+  installations during updates and uninstalls. Skip newer copies on update
+  unless `--force` is supplied.
+- Resolve nested command help with paths such as `asana-cli help tasks list`.
+- Accept sparse numeric custom field values in task write responses.
+- Clarify that moving a task to a section adds it to the section's project
+  when needed and preserves its other project memberships.
+
 ## 0.12.0
 
 - Update project custom fields by GID on existing tasks with `tasks update`,

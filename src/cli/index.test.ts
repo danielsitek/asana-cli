@@ -658,8 +658,8 @@ describe("execute", () => {
   test.each([
     ["short help", ["-h"], "Usage: asana-cli"],
     ["long help", ["--help"], "Usage: asana-cli"],
-    ["short version", ["-v"], "0.12.0\n"],
-    ["long version", ["--version"], "0.12.0\n"],
+    ["short version", ["-v"], "0.13.0\n"],
+    ["long version", ["--version"], "0.13.0\n"],
   ])("adds an update notice after %s", async (_label, argv, expectedStdout) => {
     const result = await execute(argv, {
       environment: {},
@@ -756,7 +756,7 @@ describe("execute", () => {
       ["whoami", "--version"],
     ]) {
       expect(await execute(argv, { environment: {}, identity })).toEqual({
-        stdout: "0.12.0\n",
+        stdout: "0.13.0\n",
         stderr: "",
         exitCode: 0,
       });
