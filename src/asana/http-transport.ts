@@ -72,6 +72,21 @@ const responseErrors = z.object({
   errors: z.tuple([z.object({ message: z.string() })]).rest(z.unknown()),
 });
 
+const sanitizeAsanaMessage = (
+  input: string,
+  token: string,
+): string | undefined => {
+  const redacted = token === "" ? input : input.replaceAll(token, "[redacted]");
+  const message = redacted
+    .replace(/\bBearer\s+[^\s"'<>]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
+    .replace(/\p{C}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (message.length <= 512) return message || undefined;
+  return message.slice(0, 511) + "…";
+};
+
 const readAsanaMessage = async (
   response: Response,
   token: string,
@@ -95,18 +110,9 @@ const readAsanaMessage = async (
     const parsed = responseErrors.safeParse(
       JSON.parse(body + decoder.decode()),
     );
-    if (!parsed.success) return undefined;
-    const first = parsed.data.errors[0].message;
-    const redacted =
-      token === "" ? first : first.replaceAll(token, "[redacted]");
-    const message = redacted
-      .replace(/\bBearer\s+[^\s"'<>]+/gi, "Bearer [redacted]")
-      .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
-      .replace(/\p{C}+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (message.length <= 512) return message || undefined;
-    return `${message.slice(0, 511)}…`;
+    return parsed.success
+      ? sanitizeAsanaMessage(parsed.data.errors[0].message, token)
+      : undefined;
   } catch {
     return undefined;
   } finally {
