@@ -102,21 +102,21 @@ implicitly.
 
 With `--json`, successful reads and writes print a single compact, minified `{"data":...,"meta":...}` line to stdout. Diagnostics never go to stdout on success.
 
-A command group without a subcommand prints its help to stdout and exits 0. Without `--json`, errors print an `error: …` message to stderr. Syntax errors and `invalid_usage` errors also print the relevant command help and exit 2. With `--json`, errors print one compact `{"error":{"code":"...","message":"..."}}` line to stderr and leave stdout empty.
+A command group without a subcommand prints help to stdout and exits 0. Without `--json`, errors print an `error: …` message to stderr. Syntax errors and `invalid_usage` errors also print command help and exit 2. With `--json`, errors print one compact JSON line to stderr and leave stdout empty. Read `error.code`, `error.message`, and `error.retryable`. Use `usage` and `allowed_values` to correct invalid input. Read `hints`, `details.status`, and `details.message` when present. `capabilities --json` lists `error_codes` for each command and maps codes to exit status and retryability in `data.errors`.
 
-Detect partial writes by exit code 1. Their details go to **stdout** in both modes. With `--json`, read the `completed` and `failed` fields before retrying.
+Exit 1 reports a partial write on **stdout**. Inspect the completed and failed steps before retrying.
 
-After exit 4 on a write, verify its effect in Asana before rerunning it. An `outcome_unknown` error means Asana may have applied the write. JSON errors include `retryable: false` and a `hint` naming what to check, such as the destination task list or the task's comments, attachments, or memberships. Retry only after confirming the write did not apply.
+Before rerunning a failed write, verify its effect in Asana. An `outcome_unknown` error means Asana may have applied the write. Its JSON error includes `retryable: false` and verification guidance in `hints` and `hint`. Retry only after confirming the write did not apply.
 
-| Code | Meaning                                                                                                           |
-| ---- | ----------------------------------------------------------------------------------------------------------------- |
-| 0    | success                                                                                                           |
-| 1    | partial write — from `tasks attach --inline`, `tasks create`, `config init --local`, or `config resolve my-tasks` |
-| 2    | invalid usage or configuration                                                                                    |
-| 3    | authentication/authorization failure                                                                              |
-| 4    | Asana API, not-found, or network error                                                                            |
-| 5    | rate-limit, retry exhaustion, or `tasks comments --latest` scan limit                                             |
-| 6    | unexpected internal CLI error                                                                                     |
+| Exit | Codes or result                                                                           |
+| ---- | ----------------------------------------------------------------------------------------- |
+| 0    | Success                                                                                   |
+| 1    | Partial write                                                                             |
+| 2    | `invalid_usage`, `configuration`, or `invalid_state`                                      |
+| 3    | `authentication` (missing token or HTTP 401) or `permission_denied` (HTTP 403)            |
+| 4    | `api`, `not_found`, `network`, `invalid_response`, or `outcome_unknown`                   |
+| 5    | `rate_limit` or `upstream_unavailable` are retryable. For `scan_limit`, increase `--max`. |
+| 6    | `internal_error`                                                                          |
 
 ## Filing a CLI issue
 
