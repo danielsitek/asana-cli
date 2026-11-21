@@ -171,8 +171,8 @@ export const execute = async (
 ): Promise<Execution> => {
   const program = new Command()
     .name("asana-cli")
-    .version(dependencies.version ?? "0.12.0", "-v, --version");
-  const version = dependencies.version ?? "0.12.0";
+    .version(dependencies.version ?? "0.13.0", "-v, --version");
+  const version = dependencies.version ?? "0.13.0";
   let json = false;
   const invokedState = { value: false };
   let result: CommandResult | undefined;
