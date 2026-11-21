@@ -21,7 +21,7 @@ const mapWriteError = <E extends TaskWriteError>(
   error: E,
 ): E | TaskReadError =>
   error.kind === "api" && error.status === 404
-    ? { kind: "not_found", status: 404, message: "Task not found" }
+    ? { ...error, kind: "not_found", message: "Task not found" }
     : error;
 
 export class AsanaAttachmentWriter implements AttachmentWriteGateway {

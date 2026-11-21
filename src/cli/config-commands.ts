@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import type { Command } from "commander";
 
 import {
@@ -11,7 +12,6 @@ import {
   type LocalConfigInitResult,
   type StageFailureError,
 } from "../config/index.ts";
-import type { IdentityError } from "../identity/index.ts";
 import {
   renderConfig,
   renderConfigValue,
@@ -36,7 +36,6 @@ type ConfigCommandRegistration = Readonly<{
   beginCommand: () => ConfigInvocation | undefined;
   complete: (execution: CommandResult) => void;
   requireToken: () => Result<string, CommandResult>;
-  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult;
   usageError: (message: string) => CommandResult;
 }>;
 
@@ -76,7 +75,6 @@ const requireConfig = async (
   context: ConfigContext,
   dependencies: ConfigCommandDependencies,
   requireToken: () => Result<string, CommandResult>,
-  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult,
   options: Readonly<{ writeGitignore?: boolean }>,
   json: boolean,
 ): Promise<Result<LocalConfigInitResult, CommandResult>> => {
@@ -87,13 +85,7 @@ const requireConfig = async (
   if (!discovery) {
     return {
       ok: false,
-      error: {
-        error: {
-          code: "internal_error",
-          message: "Discovery gateway is required",
-        },
-        exitCode: 6,
-      },
+      error: commandError("internal_error", "Discovery gateway is required"),
     };
   }
 
@@ -112,7 +104,7 @@ const requireConfig = async (
   }
   return {
     ok: false,
-    error: renderIdentityFailure(initialized.error.kind),
+    error: asanaFailure(initialized.error),
   };
 };
 
@@ -185,7 +177,6 @@ const runLocalConfigInit = async (
     context,
     registration.dependencies,
     registration.requireToken,
-    registration.renderIdentityFailure,
     options.writeGitignore !== undefined
       ? { writeGitignore: options.writeGitignore }
       : {},
@@ -230,6 +221,7 @@ const registerConfigInit = (
 ): void => {
   const command = config
     .command("init")
+    .usage("(--shared | --local) [options]")
     .description("initialize configuration")
     .option("--shared", "initialize shared repository configuration")
     .option("--local", "initialize local repository configuration")
@@ -247,7 +239,8 @@ const registerConfigInit = (
       authentication: "conditional",
       configuration: "required",
     },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "configuration"],
+    partial: true,
   });
 };
 
@@ -261,7 +254,6 @@ const runConfigResolve = async (
     invocation.context,
     registration.dependencies,
     registration.requireToken,
-    registration.renderIdentityFailure,
     {},
     invocation.json,
   );
@@ -289,7 +281,6 @@ const registerConfigResolve = (
   withCommandCapabilities(resolve, {
     operation: "write",
     requirements: { authentication: "required", configuration: "required" },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
   });
   const command = resolve
     .command("my-tasks")
@@ -298,7 +289,8 @@ const registerConfigResolve = (
   withCommandCapabilities(command, {
     operation: "write",
     requirements: { authentication: "required", configuration: "required" },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "configuration"],
+    partial: true,
   });
 };
 
@@ -347,7 +339,7 @@ const registerConfigGet = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "never", configuration: "required" },
-    exitCodes: [0, 2, 6],
+    errors: ["configuration"],
   });
 };
 
@@ -410,7 +402,7 @@ const registerConfigSet = (
   withCommandCapabilities(command, {
     operation: "write",
     requirements: { authentication: "never", configuration: "required" },
-    exitCodes: [0, 2, 6],
+    errors: ["configuration"],
   });
 };
 
@@ -452,7 +444,7 @@ const registerConfigShow = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "never", configuration: "required" },
-    exitCodes: [0, 2, 6],
+    errors: ["configuration"],
   });
 };
 
@@ -468,7 +460,6 @@ export const registerConfigCommands = (
       authentication: "conditional",
       configuration: "required",
     },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
   });
 
   registerConfigInit(config, registration);

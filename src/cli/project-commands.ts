@@ -1,7 +1,7 @@
+import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import { Option, type Command, type OutputConfiguration } from "commander";
 
 import { resolveConfig } from "../config/index.ts";
-import type { IdentityError } from "../identity/index.ts";
 import {
   renderJson,
   renderProjectCustomFieldSettingList,
@@ -21,7 +21,6 @@ import {
   prepareProjectCustomFieldSettingList,
   prepareProjectList,
   prepareProjectSectionList,
-  type ProjectReadError,
   type ProjectListOptions,
 } from "../projects/index.ts";
 import type { Result } from "../shared/result.ts";
@@ -51,44 +50,14 @@ type ProjectCommandRegistration = Readonly<{
   beginCommand: () => ProjectInvocation;
   complete: (execution: CommandResult) => void;
   requireToken: () => Result<string, CommandResult>;
-  renderIdentityFailure: (kind: IdentityError["kind"]) => CommandResult;
   usageError: (message: string) => CommandResult;
   outputConfiguration: OutputConfiguration;
 }>;
 
 const PROJECT_ID_ARGUMENT = "<id>";
 
-const projectReadFailures: Readonly<
-  Record<
-    ProjectReadError["kind"],
-    Readonly<{ exitCode: number; message: string }>
-  >
-> = {
-  authentication: { exitCode: 3, message: "Asana authentication failed" },
-  api: { exitCode: 4, message: "Asana API request failed" },
-  not_found: { exitCode: 4, message: "Project not found" },
-  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
-  network: { exitCode: 4, message: "Unable to reach Asana" },
-  invalid_response: {
-    exitCode: 4,
-    message: "Asana returned an invalid response",
-  },
-};
-
-const renderProjectReadFailure = (
-  kind: ProjectReadError["kind"],
-): CommandResult => {
-  const mapped = projectReadFailures[kind];
-  return {
-    error: { code: kind, message: mapped.message },
-    exitCode: mapped.exitCode,
-  };
-};
-
-const internalError = (message: string): CommandResult => ({
-  error: { code: "internal_error", message },
-  exitCode: 6,
-});
+const internalError = (message: string): CommandResult =>
+  commandError("internal_error", message);
 
 const selectedFields = (
   fields: string | undefined,
@@ -124,7 +93,7 @@ const runProjectGet = async (
     projectGid: parsedId.value,
     fields: fields.value,
   });
-  if (!project.ok) return renderProjectReadFailure(project.error.kind);
+  if (!project.ok) return asanaFailure(project.error, "Project not found");
   return {
     stdout: invocation.json
       ? renderJson(project.value)
@@ -159,7 +128,7 @@ const runProjectSections = async (
   const listed = await executeProjectSectionList(token.value, prepared.value, {
     reader,
   });
-  if (!listed.ok) return renderProjectReadFailure(listed.error.kind);
+  if (!listed.ok) return asanaFailure(listed.error, "Project not found");
   return {
     stdout: invocation.json
       ? renderJson(listed.value.sections, listed.value.meta)
@@ -205,7 +174,7 @@ const runProjectCustomFields = async (
     prepared.value,
     { reader },
   );
-  if (!listed.ok) return renderProjectReadFailure(listed.error.kind);
+  if (!listed.ok) return asanaFailure(listed.error, "Project not found");
   return {
     stdout: invocation.json
       ? renderJson(listed.value.settings, listed.value.meta)
@@ -259,7 +228,7 @@ const runProjectList = async (
     reader,
   });
   if (!listed.ok) {
-    return registration.renderIdentityFailure(listed.error.kind);
+    return asanaFailure(listed.error);
   }
   return {
     stdout: invocation.json
@@ -297,7 +266,7 @@ const registerProjectGet = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   return command;
 };
@@ -326,7 +295,7 @@ const registerProjectSections = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   return command;
 };
@@ -362,7 +331,7 @@ const registerProjectCustomFields = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   return command;
 };
@@ -392,7 +361,7 @@ const registerProjectList = (
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "configuration"],
   });
   return command;
 };
@@ -409,7 +378,6 @@ export const registerProjectCommands = (
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 2, 3, 4, 5, 6],
   });
 
   const commands = [

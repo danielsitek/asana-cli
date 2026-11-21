@@ -295,7 +295,7 @@ describe("parseTaskId", () => {
     ]) {
       expect(parseTaskId(input)).toEqual({
         ok: false,
-        error: "Invalid task identifier",
+        error: `Invalid task identifier "${input.split(/[?#]/, 1)[0]}". Use a task GID or Asana task URL.`,
       });
     }
   });
@@ -1711,7 +1711,7 @@ describe("prepareTaskListRead", () => {
       "invalid max before fields",
       { section: "1", max: "invalid" },
       ",",
-      "--max must be a positive safe integer",
+      '--max must be a positive safe integer. Got "invalid"',
     ],
   ] as const)(
     "preserves validation order for %s",

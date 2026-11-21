@@ -15,10 +15,7 @@ export type AttachmentDownload = Readonly<{
 
 export type AttachmentDownloadError =
   | TaskReadError
-  | Readonly<{
-      kind: "invalid_usage" | "internal_error";
-      message: string;
-    }>;
+  | Readonly<{ kind: "invalid_usage"; message: string }>;
 
 export type FetchAttachment = (
   url: URL,

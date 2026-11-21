@@ -140,7 +140,8 @@ describe("prepareTaskCommentsRead", () => {
       {
         taskId: "not-a-gid",
         options: { fields: "gid,,text", offset: "", max: "abc" },
-        message: "Invalid task identifier",
+        message:
+          'Invalid task identifier "not-a-gid". Use a task GID or Asana task URL.',
       },
       {
         taskId: "123",
@@ -170,7 +171,7 @@ describe("prepareTaskCommentsRead", () => {
       {
         taskId: "123",
         options: { latest: "abc", max: "xyz" },
-        message: "--latest must be a positive safe integer",
+        message: '--latest must be a positive safe integer. Got "abc"',
       },
     ] as const;
 
@@ -217,7 +218,7 @@ describe("prepareTaskCommentsRead", () => {
       expect(prepared.ok).toBe(false);
       if (prepared.ok) continue;
       expect(prepared.error.message).toBe(
-        "--max must be a positive safe integer",
+        `--max must be a positive safe integer. Got "${invalid}"`,
       );
     }
   });
@@ -277,7 +278,7 @@ describe("prepareTaskCommentsRead", () => {
       expect(prepared.ok).toBe(false);
       if (prepared.ok) continue;
       expect(prepared.error.message).toBe(
-        "--latest must be a positive safe integer",
+        `--latest must be a positive safe integer. Got "${invalid}"`,
       );
     }
   });

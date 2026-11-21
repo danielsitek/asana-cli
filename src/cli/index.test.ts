@@ -734,7 +734,8 @@ describe("execute", () => {
     });
     expect(api).toEqual({
       stdout: "",
-      stderr: '{"error":{"code":"api","message":"Asana API request failed"}}\n',
+      stderr:
+        '{"error":{"code":"api","message":"Asana API request failed","retryable":false,"details":{"status":500}}}\n',
       exitCode: 4,
     });
 
@@ -980,6 +981,10 @@ describe("execute", () => {
       expect(JSON.parse(result.stderr)).toEqual({
         error: {
           code: "invalid_usage",
+          retryable: false,
+          usage: expect.stringContaining(
+            `asana-cli ${command.slice(0, 2).join(" ")} `,
+          ),
           message:
             option === "--latest"
               ? "--latest requires --max (e.g. --latest 10 --max 200)"
@@ -1020,31 +1025,39 @@ describe("execute", () => {
       "missing argument",
       ["projects", "get", "--json"],
       "missing required argument 'id'",
+      "asana-cli projects get [options] <id>",
     ],
     [
       "unknown subcommand",
       ["projects", "unknown", "--json"],
       "unknown command 'unknown'",
+      "asana-cli projects [options] [command]",
     ],
     [
       "unknown option",
       ["tasks", "create", "--file=notes.txt", "--json"],
       "unknown option '--file=notes.txt'",
+      "asana-cli tasks create --name",
     ],
     [
       "misspelled option",
       ["tasks", "create", "--notes-fil", "--json"],
       "unknown option '--notes-fil'\n(Did you mean --notes-file?)",
+      "asana-cli tasks create --name",
     ],
   ])(
     "keeps %s errors machine-readable with --json",
-    async (_case, argv, message) => {
+    async (_case, argv, message, usagePrefix) => {
       const result = await execute(argv, { environment: {}, identity });
 
-      expect(result).toEqual({
-        stdout: "",
-        stderr: `${JSON.stringify({ error: { code: "invalid_usage", message } })}\n`,
-        exitCode: 2,
+      expect(result).toMatchObject({ stdout: "", exitCode: 2 });
+      expect(JSON.parse(result.stderr)).toEqual({
+        error: {
+          code: "invalid_usage",
+          message,
+          retryable: false,
+          usage: expect.stringContaining(usagePrefix),
+        },
       });
     },
   );
@@ -1115,6 +1128,7 @@ describe("execute", () => {
       data: {
         schema_version: number;
         cli_version: string;
+        errors: Record<string, { exit_code: number; retryable: boolean }>;
         commands: Array<{
           path: string;
           description: string;
@@ -1143,6 +1157,7 @@ describe("execute", () => {
             configuration: string;
           };
           exit_codes: number[];
+          error_codes: string[];
         }>;
       };
       meta: Record<string, never>;
@@ -1201,6 +1216,18 @@ describe("execute", () => {
       expect(command.exit_codes).toEqual(
         [...command.exit_codes].sort((left, right) => left - right),
       );
+      expect(command.error_codes).toEqual(
+        [...new Set(command.error_codes)].sort(),
+      );
+      expect(command.exit_codes.filter((code) => code > 1)).toEqual(
+        [
+          ...new Set(
+            command.error_codes.map(
+              (code) => envelope.data.errors[code]?.exit_code ?? -1,
+            ),
+          ),
+        ].sort(),
+      );
       for (const options of [
         command.options.local,
         command.options.inherited,
@@ -1221,6 +1248,41 @@ describe("execute", () => {
     const byPath = new Map(
       envelope.data.commands.map((command) => [command.path, command]),
     );
+    expect(byPath.get("asana-cli skill list")).toMatchObject({
+      exit_codes: [0, 2, 6],
+      error_codes: ["internal_error", "invalid_usage"],
+    });
+    expect(byPath.get("asana-cli tasks comments")?.error_codes).toContain(
+      "scan_limit",
+    );
+    expect(byPath.get("asana-cli tasks list")?.error_codes).not.toContain(
+      "scan_limit",
+    );
+    expect(byPath.get("asana-cli tasks comment")?.error_codes).toContain(
+      "outcome_unknown",
+    );
+    expect(byPath.get("asana-cli tasks get")?.error_codes).not.toContain(
+      "outcome_unknown",
+    );
+    expect(envelope.data.errors).toMatchObject({
+      scan_limit: { exit_code: 5, retryable: false },
+      rate_limit: { exit_code: 5, retryable: true },
+      upstream_unavailable: { exit_code: 5, retryable: true },
+      permission_denied: { exit_code: 3, retryable: false },
+    });
+    const invalidSkillList = await execute(
+      ["skill", "list", "--bogus", "--json"],
+      { environment: {}, identity },
+    );
+    expect(invalidSkillList).toMatchObject({ exitCode: 2, stdout: "" });
+    expect(JSON.parse(invalidSkillList.stderr)).toEqual({
+      error: {
+        code: "invalid_usage",
+        message: "unknown option '--bogus'",
+        retryable: false,
+        usage: "asana-cli skill list [options]",
+      },
+    });
     expect(byPath.get("asana-cli tasks get")?.options.inherited).toContainEqual(
       expect.objectContaining({
         flags: ["--fields"],
@@ -1261,7 +1323,7 @@ describe("execute", () => {
       },
       operation: "local",
       requirements: { authentication: "never", configuration: "never" },
-      exit_codes: [0, 2],
+      exit_codes: [0, 2, 6],
     });
     expect(byPath.get("asana-cli tasks get")).toMatchObject({
       arguments: [
@@ -1329,7 +1391,11 @@ describe("execute", () => {
       ["tcsh"],
       "Unsupported shell: tcsh; expected bash, zsh, fish",
     ],
-    [["tasks", "get"], ["not-an-id"], "Invalid task identifier"],
+    [
+      ["tasks", "get"],
+      ["not-an-id"],
+      'Invalid task identifier "not-an-id". Use a task GID or Asana task URL.',
+    ],
     [["tasks", "create"], [], "--name is required"],
     [
       ["tasks", "list"],
@@ -1362,10 +1428,15 @@ describe("execute", () => {
         ["--json", ...command, ...args],
         [...command, ...args, "--json"],
       ]) {
-        expect(await execute(argv, dependencies)).toEqual({
-          stdout: "",
-          stderr: `${JSON.stringify({ error: { code: "invalid_usage", message } })}\n`,
-          exitCode: 2,
+        const result = await execute(argv, dependencies);
+        expect(result).toMatchObject({ stdout: "", exitCode: 2 });
+        expect(JSON.parse(result.stderr)).toMatchObject({
+          error: {
+            code: "invalid_usage",
+            message,
+            retryable: false,
+            usage: expect.stringContaining(`asana-cli ${command.join(" ")} `),
+          },
         });
       }
     },
@@ -1377,7 +1448,7 @@ describe("execute", () => {
     ).toEqual({
       stdout: "",
       stderr:
-        '{"error":{"code":"invalid_usage","message":"unknown command \'unknown\'"}}\n',
+        '{"error":{"code":"invalid_usage","message":"unknown command \'unknown\'","retryable":false,"usage":"asana-cli [options] [command]"}}\n',
       exitCode: 2,
     });
   });
@@ -1390,7 +1461,7 @@ describe("execute", () => {
     expect(result).toEqual({
       stdout: "",
       stderr:
-        '{"error":{"code":"internal_error","message":"An unexpected internal error occurred"}}\n',
+        '{"error":{"code":"internal_error","message":"An unexpected internal error occurred","retryable":false}}\n',
       exitCode: 6,
     });
     expect(result.stderr).not.toContain("secret-value");
@@ -2270,7 +2341,7 @@ describe("config commands", () => {
       ),
     ).toEqual({
       stdout: "",
-      stderr: `${JSON.stringify({ error: { code: "configuration", message } })}\n`,
+      stderr: `${JSON.stringify({ error: { code: "configuration", message, retryable: false } })}\n`,
       exitCode: 2,
     });
   });
@@ -2448,6 +2519,8 @@ describe("tasks get command", () => {
   test("maps task reader errors correctly for other kinds", async () => {
     const errors = taskReadErrorCases([
       ["authentication", 3],
+      ["permission_denied", 3],
+      ["upstream_unavailable", 5],
       ["api", 4],
       ["not_found", 4],
       ["rate_limit", 5],
@@ -2693,6 +2766,8 @@ describe("tasks update --parent", () => {
   test.each(
     taskReadErrorCases([
       ["authentication", 3],
+      ["permission_denied", 3],
+      ["upstream_unavailable", 5],
       ["api", 4],
       ["not_found", 4],
       ["rate_limit", 5],
@@ -4557,7 +4632,9 @@ describe("tasks comments command", () => {
     );
     expect(result.exitCode).toBe(5);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("scan_limit");
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      error: { code: "scan_limit", retryable: false },
+    });
   });
 });
 
@@ -4907,7 +4984,7 @@ describe("tasks list command", () => {
     expect(noSource).toEqual({
       stdout: "",
       stderr:
-        '{"error":{"code":"invalid_usage","message":"Exactly one of --my-section, --section, --project, or --parent is required"}}\n',
+        '{"error":{"code":"invalid_usage","message":"Exactly one of --my-section, --section, --project, or --parent is required","retryable":false,"usage":"asana-cli tasks list (--my-section <alias> | --section <gid> | --project <gid> | --parent <id>) [options]"}}\n',
       exitCode: 2,
     });
 
@@ -5136,7 +5213,8 @@ describe("projects get command", () => {
     });
     expect(notFound).toEqual({
       stdout: "",
-      stderr: '{"error":{"code":"not_found","message":"Project not found"}}\n',
+      stderr:
+        '{"error":{"code":"not_found","message":"Project not found","retryable":false,"details":{"status":404}}}\n',
       exitCode: 4,
     });
 
@@ -5489,7 +5567,7 @@ describe("projects list command", () => {
     expect(authentication).toEqual({
       stdout: "",
       stderr:
-        '{"error":{"code":"authentication","message":"Asana authentication failed"}}\n',
+        '{"error":{"code":"authentication","message":"Asana authentication failed","retryable":false,"details":{"status":401}}}\n',
       exitCode: 3,
     });
 
@@ -6113,7 +6191,11 @@ describe("skill commands", () => {
     );
     expect(unknown).toMatchObject({ stdout: "", exitCode: 2 });
     expect(JSON.parse(unknown.stderr)).toMatchObject({
-      error: { code: "invalid_usage" },
+      error: {
+        code: "invalid_usage",
+        retryable: false,
+        allowed_values: SKILL_AGENTS.map(({ name }) => name),
+      },
     });
   });
 });

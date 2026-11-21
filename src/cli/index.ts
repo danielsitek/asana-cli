@@ -6,7 +6,8 @@ import {
   isCompletionShell,
   renderCompletion,
 } from "../completion/index.ts";
-import type { IdentityError as AsanaError } from "../identity/index.ts";
+import type { ErrorAdvice } from "../shared/errors.ts";
+import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import {
   renderError,
   renderIdentity,
@@ -19,6 +20,7 @@ import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import { registerAttachmentCommands } from "./attachment-commands.ts";
 import {
   capabilitiesForProgram,
+  commandPath,
   withCommandCapabilities,
 } from "./capabilities.ts";
 import { registerConfigCommands } from "./config-commands.ts";
@@ -35,10 +37,8 @@ import { executeWorkspacesList } from "../workspaces/index.ts";
 
 export type { ExecuteDependencies, Execution } from "./contracts.ts";
 
-const usageError = (message: string): CommandResult => ({
-  error: { code: "invalid_usage", message },
-  exitCode: 2,
-});
+const usageError = (message: string, advice?: ErrorAdvice): CommandResult =>
+  commandError("invalid_usage", message, advice);
 
 const requireToken = (
   dependencies: Pick<ExecuteDependencies, "environment">,
@@ -46,37 +46,7 @@ const requireToken = (
   const token = resolveToken(dependencies.environment);
   return token.ok
     ? token
-    : {
-        ok: false,
-        error: {
-          error: {
-            code: "authentication",
-            message: token.error.message,
-          },
-          exitCode: 3,
-        },
-      };
-};
-
-const identityFailures: Readonly<
-  Record<AsanaError["kind"], Readonly<{ exitCode: number; message: string }>>
-> = {
-  authentication: { exitCode: 3, message: "Asana authentication failed" },
-  api: { exitCode: 4, message: "Asana API request failed" },
-  rate_limit: { exitCode: 5, message: "Asana request retries exhausted" },
-  network: { exitCode: 4, message: "Unable to reach Asana" },
-  invalid_response: {
-    exitCode: 4,
-    message: "Asana returned an invalid response",
-  },
-};
-
-const renderIdentityFailure = (kind: AsanaError["kind"]): CommandResult => {
-  const mapped = identityFailures[kind];
-  return {
-    error: { code: kind, message: mapped.message },
-    exitCode: mapped.exitCode,
-  };
+    : { ok: false, error: commandError("authentication", token.error.message) };
 };
 
 const formatCommandResult = (
@@ -87,16 +57,38 @@ const formatCommandResult = (
   if (!("error" in result)) return result;
 
   const { error, exitCode } = result;
-  if (json) return { stdout: "", stderr: renderError(error), exitCode };
+  if (json) {
+    const usage =
+      error.code === "invalid_usage"
+        ? {
+            usage:
+              error.usage ??
+              `${commandPath(command)} ${command.usage()}`.trim(),
+          }
+        : {};
+    const allowed = error.allowed_values?.slice(0, 20);
+    return {
+      stdout: "",
+      stderr: renderError({
+        ...error,
+        ...usage,
+        ...(allowed ? { allowed_values: allowed } : {}),
+      }),
+      exitCode,
+    };
+  }
 
   const help =
     error.code === "invalid_usage"
       ? `\n${command.helpInformation({ error: true })}`
       : "";
-  const hint = error.hint === undefined ? "" : `hint: ${error.hint}\n`;
+  const details = error.details?.message
+    ? `Asana: ${error.details.message}\n`
+    : "";
+  const hint = (error.hints ?? []).map((text) => `hint: ${text}\n`).join("");
   return {
     stdout: "",
-    stderr: `error: ${error.message}\n${hint}${help}`,
+    stderr: `error: ${error.message}\n${details}${hint}${help}`,
     exitCode,
   };
 };
@@ -177,6 +169,7 @@ export const execute = async (
   const invokedState = { value: false };
   let result: CommandResult | undefined;
   let activeCommand = program;
+  let failedParserCommand = program;
   let parserStdout = "";
   let parserStderr = "";
   let skipUpdateCheck = false;
@@ -228,7 +221,7 @@ export const execute = async (
         token.value,
       );
       if (!identity.ok) {
-        result = renderIdentityFailure(identity.error.kind);
+        result = asanaFailure(identity.error);
         return;
       }
       result = {
@@ -242,7 +235,7 @@ export const execute = async (
   withCommandCapabilities(whoami, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES],
   });
   whoami.version(version, "-v, --version");
 
@@ -260,7 +253,6 @@ export const execute = async (
     },
     complete: stopWith,
     requireToken: () => requireToken(dependencies),
-    renderIdentityFailure,
     usageError,
   });
 
@@ -270,13 +262,7 @@ export const execute = async (
       invokedState.value = true;
       const context = dependencies.configuration;
       if (!context) {
-        result = {
-          error: {
-            code: "internal_error",
-            message: "Skill context is unavailable",
-          },
-          exitCode: 6,
-        };
+        result = commandError("internal_error", "Skill context is unavailable");
         return undefined;
       }
       return {
@@ -328,7 +314,6 @@ export const execute = async (
     },
     complete: stopWith,
     requireToken: () => requireToken(dependencies),
-    renderIdentityFailure,
     usageError,
     outputConfiguration: captureOutput,
   });
@@ -339,7 +324,6 @@ export const execute = async (
   withCommandCapabilities(workspaces, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
   });
   workspaces.exitOverride();
   workspaces.configureOutput(captureOutput);
@@ -357,13 +341,7 @@ export const execute = async (
       }
 
       if (!dependencies.workspaceReader) {
-        result = {
-          error: {
-            code: "internal_error",
-            message: "Workspace reader is required",
-          },
-          exitCode: 6,
-        };
+        result = commandError("internal_error", "Workspace reader is required");
         return;
       }
 
@@ -371,7 +349,7 @@ export const execute = async (
         reader: dependencies.workspaceReader,
       });
       if (!listed.ok) {
-        result = renderIdentityFailure(listed.error.kind);
+        result = asanaFailure(listed.error);
         return;
       }
 
@@ -386,7 +364,7 @@ export const execute = async (
   withCommandCapabilities(workspacesList, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES],
   });
 
   workspacesList.exitOverride();
@@ -400,6 +378,7 @@ export const execute = async (
       if (!isCompletionShell(shell)) {
         result = usageError(
           `Unsupported shell: ${shell}; expected ${COMPLETION_SHELLS.join(", ")}`,
+          { allowed_values: COMPLETION_SHELLS },
         );
         return;
       }
@@ -412,7 +391,6 @@ export const execute = async (
   withCommandCapabilities(completion, {
     operation: "local",
     requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2],
   });
   completion.exitOverride();
   completion.configureOutput(captureOutput);
@@ -429,12 +407,13 @@ export const execute = async (
             stderr: "",
             exitCode: 0,
           }
-        : usageError("capabilities requires --json");
+        : usageError("capabilities requires --json", {
+            usage: "asana-cli capabilities --json",
+          });
     });
   withCommandCapabilities(capabilities, {
     operation: "local",
     requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 2],
     options: { json: { required: true } },
   });
   capabilities.exitOverride();
@@ -442,7 +421,13 @@ export const execute = async (
 
   const configureParser = (command: Command): void => {
     command.exitOverride();
-    command.configureOutput(captureOutput);
+    command.configureOutput({
+      ...captureOutput,
+      outputError: (str, write) => {
+        failedParserCommand = command;
+        write(str);
+      },
+    });
     command.showHelpAfterError();
     command.showSuggestionAfterError();
     for (const child of command.commands) configureParser(child);
@@ -482,24 +467,21 @@ export const execute = async (
           activeCommand,
         );
       }
-      const jsonRequested = argv.includes("--json");
+      const separator = argv.indexOf("--");
+      const jsonRequested = argv
+        .slice(0, separator === -1 ? argv.length : separator)
+        .includes("--json");
       if (!jsonRequested && parserStderr !== "") {
         return { stdout: "", stderr: parserStderr, exitCode: 2 };
       }
       return formatCommandResult(
         usageError(error.message.replace(/^error: /, "")),
         jsonRequested,
-        activeCommand,
+        failedParserCommand,
       );
     }
     return formatCommandResult(
-      {
-        error: {
-          code: "internal_error",
-          message: "An unexpected internal error occurred",
-        },
-        exitCode: 6,
-      },
+      commandError("internal_error", "An unexpected internal error occurred"),
       json,
       activeCommand,
     );

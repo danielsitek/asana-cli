@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import type { ListOptions } from "../pagination/index.ts";
 import {
   executeAttachmentList,
@@ -8,7 +9,6 @@ import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
-  renderTaskReadFailure,
   type TaskCommandContext,
 } from "./task-command-context.ts";
 
@@ -44,8 +44,7 @@ export const registerTaskAttachmentsCommand = (
         prepared.value,
         reader,
       );
-      if (!listed.ok)
-        return context.complete(renderTaskReadFailure(listed.error.kind));
+      if (!listed.ok) return context.complete(asanaFailure(listed.error));
       context.complete({
         stdout: invocation.json
           ? renderJson(listed.value.attachments, listed.value.meta)
@@ -64,7 +63,7 @@ export const registerTaskAttachmentsCommand = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

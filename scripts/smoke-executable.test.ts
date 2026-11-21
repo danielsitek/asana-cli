@@ -45,8 +45,8 @@ if [ "$*" = "${failedCommand}" ]; then exit 99; fi
 case "$*" in
   '') printf 'Usage: asana-cli\\n' ;;
   --version) printf '${version}\\n' ;;
-  'tasks get invalid') printf 'error: Invalid task identifier\\n\\nUsage: asana-cli tasks get\\n' >&2; exit 2 ;;
-  'tasks get invalid --json') printf '{"error":{"code":"invalid_usage","message":"Invalid task identifier"}}\\n' >&2; exit 2 ;;
+  'tasks get invalid') printf 'error: Invalid task identifier "invalid". Use a task GID or Asana task URL.\\n\\nUsage: asana-cli tasks get\\n' >&2; exit 2 ;;
+  'tasks get invalid --json') printf '%s\\n' '{"error":{"code":"invalid_usage","message":"Invalid task identifier \\"invalid\\". Use a task GID or Asana task URL.","retryable":false,"usage":"asana-cli tasks get [options] <id>"}}' >&2; exit 2 ;;
   'completion zsh') printf '#compdef asana-cli\\n' ;;
   whoami) printf 'error: ASANA_CLI_TOKEN is required\\n' >&2; exit 3 ;;
   'skill install universal --local')

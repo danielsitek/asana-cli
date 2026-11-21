@@ -1,3 +1,4 @@
+import { describeInput } from "../shared/input-diagnostic.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
 const DIGIT_ONLY_TASK_GID = /^\d+$/;
@@ -17,7 +18,9 @@ export const parseTaskId = (input: string): Result<string, string> => {
   }
   const urlTaskId = parseLegacyTaskUrl(input) ?? parseCurrentTaskUrl(input);
   return urlTaskId === undefined
-    ? err("Invalid task identifier")
+    ? err(
+        `Invalid task identifier ${describeInput(input.split(/[?#]/, 1)[0] ?? input)}. Use a task GID or Asana task URL.`,
+      )
     : ok(urlTaskId);
 };
 

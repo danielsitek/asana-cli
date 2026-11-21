@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES } from "./errors.ts";
 import { resolveConfig } from "../config/index.ts";
 import {
   executeTaskCreation,
@@ -113,6 +114,9 @@ export const registerTaskCreateCommand = (
   const command = withTaskMutationOptions(
     context.tasks
       .command("create")
+      .usage(
+        "--name <name> [options] (--parent <id> | --project <gid> | --section <gid> | --my-section <alias>)",
+      )
       .description("create a task or subtask")
       .option("--parent <id>", "parent task GID or URL")
       .option("--project <gid>", "destination project GID"),
@@ -128,7 +132,13 @@ export const registerTaskCreateCommand = (
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+    errors: [
+      ...ASANA_ERROR_CODES,
+      "configuration",
+      "not_found",
+      "outcome_unknown",
+    ],
+    partial: true,
     options: { customField: { repeatable: true } },
   });
   command.exitOverride();

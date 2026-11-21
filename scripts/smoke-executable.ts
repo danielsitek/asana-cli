@@ -76,7 +76,7 @@ const checkCoreCommands = async (binary: string): Promise<void> => {
     {
       exitCode: 2,
       stderrIncludes:
-        "error: Invalid task identifier\n\nUsage: asana-cli tasks get",
+        'error: Invalid task identifier "invalid". Use a task GID or Asana task URL.\n\nUsage: asana-cli tasks get',
     },
     "human-readable invalid usage",
   );
@@ -84,8 +84,15 @@ const checkCoreCommands = async (binary: string): Promise<void> => {
     await runCommand(binary, ["tasks", "get", "invalid", "--json"]),
     {
       exitCode: 2,
-      stderr:
-        '{"error":{"code":"invalid_usage","message":"Invalid task identifier"}}\n',
+      stderr: `${JSON.stringify({
+        error: {
+          code: "invalid_usage",
+          message:
+            'Invalid task identifier "invalid". Use a task GID or Asana task URL.',
+          retryable: false,
+          usage: "asana-cli tasks get [options] <id>",
+        },
+      })}\n`,
     },
     "JSON invalid usage",
   );

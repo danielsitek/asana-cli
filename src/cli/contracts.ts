@@ -26,7 +26,7 @@ import type {
   TaskProjectMutationGateway,
   TaskSectionMutationGateway,
 } from "../tasks/index.ts";
-import type { CliError } from "../output/index.ts";
+import type { CliError } from "../shared/errors.ts";
 import type { UpdateNotice } from "../update/index.ts";
 import type { WorkspaceGateway } from "../workspaces/index.ts";
 

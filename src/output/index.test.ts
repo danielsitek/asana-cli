@@ -69,12 +69,20 @@ describe("configuration output", () => {
   });
 
   test("renderError renders compact JSON on a single line", () => {
-    const err = { code: "ERR_1", message: "something failed" };
+    const err = {
+      code: "api" as const,
+      retryable: false,
+      message: "something failed",
+    };
     expect(renderError(err)).toBe(JSON.stringify({ error: err }) + "\n");
   });
 
   test("renderError escapes embedded newlines within a single line", () => {
-    const err = { code: "ERR_1", message: "line 1\nline 2" };
+    const err = {
+      code: "api" as const,
+      retryable: false,
+      message: "line 1\nline 2",
+    };
     const result = renderError(err);
     expect(result).toBe(JSON.stringify({ error: err }) + "\n");
     expect(result.split("\n")).toHaveLength(2);

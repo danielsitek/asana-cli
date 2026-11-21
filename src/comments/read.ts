@@ -1,3 +1,4 @@
+import { describeInput } from "../shared/input-diagnostic.ts";
 import {
   collectPages,
   listMeta,
@@ -92,14 +93,14 @@ const parsePositiveSafeInteger = (
   if (!/^\d+$/.test(input)) {
     return err({
       kind: "invalid_usage",
-      message: `${flag} must be a positive safe integer`,
+      message: `${flag} must be a positive safe integer. Got ${describeInput(input)}`,
     });
   }
   const value = Number(input);
   if (!Number.isSafeInteger(value) || value <= 0) {
     return err({
       kind: "invalid_usage",
-      message: `${flag} must be a positive safe integer`,
+      message: `${flag} must be a positive safe integer. Got ${describeInput(input)}`,
     });
   }
   return ok(value);

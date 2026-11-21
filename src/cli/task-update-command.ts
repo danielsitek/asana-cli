@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES } from "./errors.ts";
 import {
   executeTaskParentUpdate,
   executeTaskUpdate,
@@ -159,7 +160,10 @@ export const registerTaskUpdateCommand = (
   context: TaskCommandContext,
 ): void => {
   const command = withTaskMutationOptions(
-    context.tasks.command("update <id>").description("update a task's fields"),
+    context.tasks
+      .command("update <id>")
+      .usage("[options] <id> <mutation-options>")
+      .description("update a task's fields"),
   )
     .option(
       "--project <gid>",
@@ -182,7 +186,12 @@ export const registerTaskUpdateCommand = (
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [
+      ...ASANA_ERROR_CODES,
+      "configuration",
+      "not_found",
+      "outcome_unknown",
+    ],
     options: { customField: { repeatable: true } },
   });
   command.exitOverride();
