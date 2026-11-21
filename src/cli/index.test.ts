@@ -4698,7 +4698,7 @@ class InMemoryTaskListReader implements TaskListGateway {
 describe("tasks list command", () => {
   const identity = new InMemoryIdentity(ok({ gid: "9001", name: "Ada" }));
 
-  test("renders command help when invoked without options", async () => {
+  test("reports a missing source with command help in human mode", async () => {
     const dependencies: ExecuteDependencies = {
       environment: new Proxy(
         {},
@@ -4716,11 +4716,15 @@ describe("tasks list command", () => {
       dependencies,
     );
 
-    expect(bare).toEqual(explicitHelp);
-    expect(bare.exitCode).toBe(0);
-    expect(bare.stderr).toBe("");
-    expect(bare.stdout).toContain("Usage: asana-cli tasks list");
-    expect(bare.stdout).toContain("--project <gid>");
+    expect(explicitHelp.exitCode).toBe(0);
+    expect(explicitHelp.stderr).toBe("");
+    expect(explicitHelp.stdout).toContain("Usage: asana-cli tasks list");
+    expect(explicitHelp.stdout).toContain("--project <gid>");
+    expect(bare).toEqual({
+      stdout: "",
+      stderr: `error: Exactly one of --my-section, --section, --project, or --parent is required\n\n${explicitHelp.stdout}`,
+      exitCode: 2,
+    });
   });
 
   test("lists tasks from a section and outputs a human-readable table", async () => {
