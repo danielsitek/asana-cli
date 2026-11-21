@@ -452,12 +452,7 @@ export const execute = async (
   try {
     // Commander's implicit help accepts only one command name.
     showHelpCommand(program, argv);
-    const effectiveArgv =
-      argv.length === 0
-        ? ["--help"]
-        : argv.length === 2 && argv[0] === "tasks" && argv[1] === "list"
-          ? [...argv, "--help"]
-          : argv;
+    const effectiveArgv = argv.length === 0 ? ["--help"] : argv;
     await program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
       from: "node",
     });
