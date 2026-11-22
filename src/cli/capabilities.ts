@@ -1,5 +1,6 @@
 import type { Argument, Command, Option } from "commander";
 
+import { ERROR_CONTRACT, type ErrorCode } from "../shared/errors.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 
 export type CapabilityOperation = "local" | "read" | "write" | "mixed";
@@ -11,7 +12,8 @@ type CommandCapabilityMetadata = Readonly<{
     authentication: CapabilityRequirement;
     configuration: CapabilityRequirement;
   }>;
-  exitCodes: readonly number[];
+  errors?: readonly ErrorCode[];
+  partial?: boolean;
   options?: Readonly<
     Record<
       string,
@@ -57,11 +59,13 @@ export type CommandCapability = Readonly<{
     configuration: CapabilityRequirement;
   }>;
   exit_codes: readonly number[];
+  error_codes: readonly ErrorCode[];
 }>;
 
 export type CapabilityDocument = Readonly<{
   schema_version: 1;
   cli_version: string;
+  errors: typeof ERROR_CONTRACT;
   commands: readonly CommandCapability[];
 }>;
 
@@ -91,7 +95,7 @@ const rootCommand = (command: Command): Command => {
   return root;
 };
 
-const commandPath = (command: Command): string =>
+export const commandPath = (command: Command): string =>
   [rootCommand(command).name(), ...commandPathParts(command)].join(" ");
 
 const internalCommandPath = (command: Command): string =>
@@ -192,6 +196,18 @@ const toCommandCapability = (command: Command): CommandCapability => {
     throw new Error(`Missing capability metadata for ${commandPath(command)}`);
   }
   const local = localOptions(command);
+  const errors = [
+    ...new Set<ErrorCode>([
+      "invalid_usage",
+      "internal_error",
+      ...(metadata.errors ?? []),
+    ]),
+  ].sort(compareText);
+  const exitCodes = new Set([
+    0,
+    ...errors.map((code) => ERROR_CONTRACT[code].exit_code),
+  ]);
+  if (metadata.partial) exitCodes.add(1);
   return {
     path: commandPath(command),
     description: command.description(),
@@ -202,7 +218,8 @@ const toCommandCapability = (command: Command): CommandCapability => {
     },
     operation: metadata.operation,
     requirements: metadata.requirements,
-    exit_codes: [...metadata.exitCodes].sort((left, right) => left - right),
+    exit_codes: [...exitCodes].sort((left, right) => left - right),
+    error_codes: errors,
   };
 };
 
@@ -224,6 +241,7 @@ export const capabilitiesForProgram = (
 ): CapabilityDocument => ({
   schema_version: 1,
   cli_version: version,
+  errors: ERROR_CONTRACT,
   commands: registeredCommands(program)
     .map(toCommandCapability)
     .sort((left, right) => compareText(left.path, right.path)),

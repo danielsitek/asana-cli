@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import {
   executeTaskCommentsRead,
   prepareTaskCommentsRead,
@@ -8,7 +9,6 @@ import { renderListContinuation } from "./list-pagination.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
-  renderTaskReadFailure,
   type TaskCommandContext,
   type TaskInvocation,
 } from "./task-command-context.ts";
@@ -33,10 +33,8 @@ const prepareComments = (
     ...(options.latest === undefined ? {} : { latest: options.latest }),
   });
 
-const scanLimitError = (message: string): CommandResult => ({
-  error: { code: "scan_limit", message },
-  exitCode: 5,
-});
+const scanLimitError = (message: string): CommandResult =>
+  commandError("scan_limit", message);
 
 const runTaskComments = async (
   context: TaskCommandContext,
@@ -56,7 +54,7 @@ const runTaskComments = async (
   if (!read.ok) {
     return read.error.kind === "scan_limit"
       ? scanLimitError(read.error.message)
-      : renderTaskReadFailure(read.error.kind);
+      : asanaFailure(read.error);
   }
   return {
     stdout: invocation.json
@@ -93,7 +91,7 @@ export const registerTaskCommentsCommand = (
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found", "scan_limit"],
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

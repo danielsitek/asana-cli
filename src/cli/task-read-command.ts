@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import {
   DEFAULT_FIELDS,
   parseTaskId,
@@ -9,7 +10,6 @@ import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
-  renderTaskReadFailure,
   type TaskCommandContext,
   type TaskInvocation,
 } from "./task-command-context.ts";
@@ -31,7 +31,7 @@ const runTaskGet = async (
   invocation: TaskInvocation,
 ): Promise<CommandResult> => {
   const parsedId = parseTaskId(idArg);
-  if (!parsedId.ok) return context.usageError("Invalid task identifier");
+  if (!parsedId.ok) return context.usageError(parsedId.error);
   const fields = selectedFields(invocation.fields, context.usageError);
   if (!fields.ok) return fields.error;
   const token = context.requireToken();
@@ -39,7 +39,7 @@ const runTaskGet = async (
   const reader = context.dependencies.taskReader;
   if (!reader) return internalError("Task reader is required");
   const task = await reader.getTask(token.value, parsedId.value, fields.value);
-  if (!task.ok) return renderTaskReadFailure(task.error.kind);
+  if (!task.ok) return asanaFailure(task.error);
   return {
     stdout: invocation.json
       ? renderJson(task.value)
@@ -61,7 +61,7 @@ export const registerTaskReadCommand = (context: TaskCommandContext): void => {
   withCommandCapabilities(command, {
     operation: "read",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

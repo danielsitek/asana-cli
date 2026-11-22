@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES } from "./errors.ts";
 import {
   executeTaskListRead,
   prepareTaskListRead,
@@ -58,6 +59,9 @@ const runTaskList = async (
 export const registerTaskListCommand = (context: TaskCommandContext): void => {
   const command = context.tasks
     .command("list")
+    .usage(
+      "(--my-section <alias> | --section <gid> | --project <gid> | --parent <id>) [options]",
+    )
     .description(
       "list tasks from a My Tasks section, section, project, or parent task",
     )
@@ -79,7 +83,7 @@ export const registerTaskListCommand = (context: TaskCommandContext): void => {
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "configuration", "not_found"],
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

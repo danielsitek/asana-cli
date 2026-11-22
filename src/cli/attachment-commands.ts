@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import type { Command, OutputConfiguration } from "commander";
 
 import { downloadAttachment } from "../attachments/download.ts";
@@ -5,10 +6,7 @@ import { renderJson } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import type { ExecuteDependencies, CommandResult } from "./contracts.ts";
-import {
-  internalError,
-  renderTaskReadFailure,
-} from "./task-command-context.ts";
+import { internalError } from "./task-command-context.ts";
 
 export const registerAttachmentCommands = (
   context: Readonly<{
@@ -27,13 +25,13 @@ export const registerAttachmentCommands = (
   withCommandCapabilities(attachments, {
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
   });
   attachments.exitOverride();
   attachments.configureOutput(context.outputConfiguration);
 
   const download = attachments
     .command("download <attachment-gid>")
+    .usage("--out <path> [options] <attachment-gid>")
     .description("save an attachment to a file or directory")
     .requiredOption("--out <path>", "output file or existing directory")
     .option("--force", "replace an existing file")
@@ -61,9 +59,7 @@ export const registerAttachmentCommands = (
         if (!result.ok) {
           if (result.error.kind === "invalid_usage")
             return context.complete(context.usageError(result.error.message));
-          if (result.error.kind === "internal_error")
-            return context.complete(internalError(result.error.message));
-          return context.complete(renderTaskReadFailure(result.error.kind));
+          return context.complete(asanaFailure(result.error));
         }
         context.complete({
           stdout: invocation.json
@@ -77,7 +73,7 @@ export const registerAttachmentCommands = (
   withCommandCapabilities(download, {
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found"],
   });
   download.exitOverride();
   download.configureOutput(context.outputConfiguration);

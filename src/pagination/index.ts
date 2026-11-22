@@ -1,3 +1,4 @@
+import { describeInput } from "../shared/input-diagnostic.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 
 export type Page<Item> = Readonly<{
@@ -132,14 +133,14 @@ const parseMax = (input: string): Result<number, ListPreparationError> => {
   if (!/^\d+$/.test(input)) {
     return err({
       kind: "invalid_usage",
-      message: "--max must be a positive safe integer",
+      message: `--max must be a positive safe integer. Got ${describeInput(input)}`,
     });
   }
   const value = Number(input);
   if (!Number.isSafeInteger(value) || value <= 0) {
     return err({
       kind: "invalid_usage",
-      message: "--max must be a positive safe integer",
+      message: `--max must be a positive safe integer. Got ${describeInput(input)}`,
     });
   }
   return ok(value);

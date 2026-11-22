@@ -1,3 +1,5 @@
+import { SKILL_AGENTS } from "../skill/index.ts";
+import { commandError } from "./errors.ts";
 import type { Command } from "commander";
 
 import { renderJson } from "../output/index.ts";
@@ -31,6 +33,7 @@ const mutationLine = ({ action, agent, scope, path }: SkillMutation): string =>
 export const renderSkillError = (
   error: SkillError,
   json = false,
+  additionalAgents: readonly string[] = [],
 ): CommandResult => {
   const code =
     error.kind === "unknown_agent"
@@ -50,10 +53,18 @@ export const renderSkillError = (
       exitCode: 1,
     };
   }
-  return {
-    error: { code, message: error.message },
-    exitCode: error.kind === "filesystem" ? 6 : 2,
-  };
+  return commandError(
+    code,
+    error.message,
+    error.kind === "unknown_agent"
+      ? {
+          allowed_values: [
+            ...SKILL_AGENTS.map(({ name }) => name),
+            ...additionalAgents,
+          ],
+        }
+      : {},
+  );
 };
 
 export const renderMutation = (

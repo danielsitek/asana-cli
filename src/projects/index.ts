@@ -30,17 +30,7 @@ export type ProjectCustomFieldSetting = Readonly<{
   [key: string]: unknown;
 }>;
 
-export type ProjectReadError = Readonly<{
-  kind:
-    | "authentication"
-    | "api"
-    | "not_found"
-    | "rate_limit"
-    | "network"
-    | "invalid_response";
-  message: string;
-  status?: number;
-}>;
+export type ProjectReadError = IdentityError<"not_found">;
 
 export type ProjectListError = IdentityError;
 

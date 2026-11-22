@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import type { IdentityError } from "../identity/index.ts";
+import {
+  ASANA_FAILURE_MESSAGES,
+  type IdentityError,
+} from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import type { WriteOutcomeUnknown } from "../tasks/index.ts";
 
@@ -29,7 +32,6 @@ export type HttpTransportOptions = Readonly<{
 
 type RetryOutcome = Readonly<{
   kind: "retry";
-  error: IdentityError;
   retryAfter: string | null;
 }>;
 
@@ -64,25 +66,77 @@ const unknownWriteOutcome = (
   ...(status === undefined ? {} : { status }),
 });
 
-const responseError = (status: number, retryable: boolean): IdentityError => {
-  if (status === 401 || status === 403) {
-    return {
-      kind: "authentication",
-      status,
-      message: "Asana authentication failed",
-    };
-  }
-  return retryable
-    ? {
-        kind: "rate_limit",
-        status,
-        message: "Asana request retries exhausted",
+const upstreamStatuses = [502, 503, 504];
+
+const responseErrors = z.object({
+  errors: z.tuple([z.object({ message: z.string() })]).rest(z.unknown()),
+});
+
+const sanitizeAsanaMessage = (
+  input: string,
+  token: string,
+): string | undefined => {
+  const redacted = token === "" ? input : input.replaceAll(token, "[redacted]");
+  const message = redacted
+    .replace(/\bBearer\s+[^\s"'<>]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
+    .replace(/\p{C}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (message.length <= 512) return message || undefined;
+  return message.slice(0, 511) + "…";
+};
+
+const readAsanaMessage = async (
+  response: Response,
+  token: string,
+): Promise<string | undefined> => {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 16_384) {
+        void reader.cancel().catch(() => undefined);
+        return undefined;
       }
-    : {
-        kind: "api",
-        status,
-        message: `Asana API request failed (${status})`,
-      };
+      body += decoder.decode(value, { stream: true });
+    }
+    const parsed = responseErrors.safeParse(
+      JSON.parse(body + decoder.decode()),
+    );
+    return parsed.success
+      ? sanitizeAsanaMessage(parsed.data.errors[0].message, token)
+      : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+const responseError = (status: number): IdentityError => {
+  const kind =
+    status === 401
+      ? "authentication"
+      : status === 403
+        ? "permission_denied"
+        : status === 429
+          ? "rate_limit"
+          : upstreamStatuses.includes(status)
+            ? "upstream_unavailable"
+            : "api";
+  const message = ASANA_FAILURE_MESSAGES[kind];
+  return {
+    kind,
+    status,
+    message: kind === "api" ? `${message} (${status})` : message,
+  };
 };
 
 const retryAfterMs = (
@@ -138,27 +192,39 @@ const responseIsRetryable = (
   method: RequestOptions["method"],
   status: number,
 ): boolean =>
-  method === "POST" ? status === 429 : [429, 502, 503, 504].includes(status);
+  method === "POST"
+    ? status === 429
+    : status === 429 || upstreamStatuses.includes(status);
 
-const failedResponseOutcome = (
+const failedResponseOutcome = async (
   options: RequestOptions,
   response: Response,
-): AttemptOutcome<never> => {
+  token: string,
+  lastAttempt: boolean,
+): Promise<AttemptOutcome<never>> => {
+  const retryable = responseIsRetryable(options.method, response.status);
+  if (retryable && !lastAttempt) {
+    void response.body?.cancel().catch(() => undefined);
+    return {
+      kind: "retry",
+      retryAfter: response.headers.get("Retry-After"),
+    };
+  }
+  const asanaMessage = await readAsanaMessage(response, token);
+  const details = asanaMessage === undefined ? {} : { asanaMessage };
   if (options.method === "POST" && response.status >= 500) {
     return {
       kind: "complete",
-      result: err(unknownWriteOutcome(options, response.status)),
+      result: err({
+        ...unknownWriteOutcome(options, response.status),
+        ...details,
+      }),
     };
   }
-  const retryable = responseIsRetryable(options.method, response.status);
-  const error = responseError(response.status, retryable);
-  return retryable
-    ? {
-        kind: "retry",
-        error,
-        retryAfter: response.headers.get("Retry-After"),
-      }
-    : { kind: "complete", result: err(error) };
+  return {
+    kind: "complete",
+    result: err({ ...responseError(response.status), ...details }),
+  };
 };
 
 const networkFailureOutcome = (
@@ -166,7 +232,7 @@ const networkFailureOutcome = (
 ): AttemptOutcome<never> => {
   return options.method === "POST"
     ? { kind: "complete", result: err(unknownWriteOutcome(options)) }
-    : { kind: "retry", error: networkError(), retryAfter: null };
+    : { kind: "retry", retryAfter: null };
 };
 
 const parseResponse = async <T>(
@@ -224,9 +290,15 @@ export class AsanaHttpTransport {
   ): Promise<Result<T, RequestError>> {
     const url = requestUrl(this.#baseUrl, path, options.searchParams);
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
-      const outcome = await this.executeAttempt(token, url, options, schema);
+      const outcome = await this.executeAttempt(
+        token,
+        url,
+        options,
+        schema,
+        attempt === this.#maxRetries,
+      );
       if (outcome.kind === "complete") return outcome.result;
-      if (attempt === this.#maxRetries) return err(outcome.error);
+      if (attempt === this.#maxRetries) return err(networkError());
       await this.#sleep(this.retryDelay(attempt, outcome.retryAfter));
     }
     return err(networkError());
@@ -237,6 +309,7 @@ export class AsanaHttpTransport {
     url: URL,
     options: RequestOptions,
     schema: z.ZodType<T>,
+    lastAttempt: boolean,
   ): Promise<AttemptOutcome<T>> {
     const controller = new AbortController();
     const init = requestInit(token, options, controller.signal);
@@ -251,7 +324,7 @@ export class AsanaHttpTransport {
             kind: "complete",
             result: await parseResponse(response, schema, options),
           }
-        : failedResponseOutcome(options, response);
+        : await failedResponseOutcome(options, response, token, lastAttempt);
     } catch {
       return networkFailureOutcome(options);
     } finally {

@@ -448,9 +448,61 @@ asana-cli capabilities --json
 
 The compact JSON `data` document contains an explicit schema version, the CLI
 version, and a deterministic list of command paths, arguments, local and
-inherited options, operational requirements, read/write classification, and
-possible exit codes. The command runs locally and does not read credentials,
+inherited options, operational requirements, and read/write classification.
+Each command lists its possible `error_codes` and `exit_codes`. The top-level
+`data.errors` object maps each symbolic error code to its `exit_code` and
+`retryable` value. The command runs locally and does not read credentials,
 configuration, files, stdin, or the Asana API.
+
+## Errors and exit codes
+
+With `--json`, an error writes one compact JSON object to stderr and leaves
+stdout empty. Every envelope includes `error.code`, `error.message`, and
+`error.retryable`. A command that rejects a field selection may return this
+error:
+
+```json
+{
+  "error": {
+    "code": "api",
+    "message": "Asana API request failed",
+    "retryable": false,
+    "details": { "status": 400, "message": "Unknown field: bogus" }
+  }
+}
+```
+
+`invalid_usage` includes a `usage` string with the command syntax and may also
+include `allowed_values` (up to 20 choices). Some errors include a `hints`
+array with recovery steps. `outcome_unknown` also includes the original
+singular `hint` field for compatibility.
+
+HTTP failures include `details.status`. When available, `details.message`
+contains the first Asana error message, with the request token, bearer
+credentials, and URLs redacted. The CLI replaces control characters with
+spaces and caps this message at 512 characters.
+[Asana API error format](https://developers.asana.com/docs/errors)
+
+| Error code             | Exit | Retryable | Meaning                                                                    |
+| ---------------------- | ---- | --------- | -------------------------------------------------------------------------- |
+| `invalid_usage`        | 2    | No        | Command syntax or input validation failed.                                 |
+| `configuration`        | 2    | No        | Configuration is missing or invalid.                                       |
+| `invalid_state`        | 2    | No        | Current state prevents the requested operation.                            |
+| `authentication`       | 3    | No        | The token is missing or Asana returned HTTP 401.                           |
+| `permission_denied`    | 3    | No        | Asana denied access with HTTP 403.                                         |
+| `api`                  | 4    | No        | An API request failed. Inspect `details` when present.                     |
+| `not_found`            | 4    | No        | The requested resource was not found.                                      |
+| `network`              | 4    | Yes       | A network failure prevented the request from completing.                   |
+| `invalid_response`     | 4    | No        | The response failed validation.                                            |
+| `outcome_unknown`      | 4    | No        | Asana may have applied a write. Check its effect before retrying.          |
+| `rate_limit`           | 5    | Yes       | Asana kept returning HTTP 429 through the configured retries.              |
+| `upstream_unavailable` | 5    | Yes       | Asana kept returning HTTP 502, 503, or 504 through the configured retries. |
+| `scan_limit`           | 5    | No        | A complete latest-comment scan requires a higher `--max`.                  |
+| `internal_error`       | 6    | No        | An unexpected CLI failure occurred.                                        |
+
+Exit 0 means success. Exit 1 reports a partial write on stdout. A
+`retryable: true` error indicates a transient failure. Before replaying a
+write, check its effect in Asana.
 
 ## Shell completion
 

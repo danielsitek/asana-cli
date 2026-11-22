@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import {
   executeAttachmentUpload,
   prepareAttachmentUpload,
@@ -7,7 +8,6 @@ import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
-  renderTaskWriteFailure,
   type TaskCommandContext,
 } from "./task-command-context.ts";
 
@@ -45,8 +45,7 @@ const runTaskAttach = async (
       return context.usageError(attached.error.message);
     if (attached.error.kind === "internal_error")
       return internalError(attached.error.message);
-    if (attached.error.kind !== "partial")
-      return renderTaskWriteFailure(attached.error);
+    if (attached.error.kind !== "partial") return asanaFailure(attached.error);
     return {
       stdout: `${JSON.stringify({
         completed: { upload: attached.error.uploaded },
@@ -74,6 +73,7 @@ export const registerTaskAttachCommand = (
 ): void => {
   const command = context.tasks
     .command("attach <id>")
+    .usage("--file <path> [options] <id>")
     .description(
       "upload a file to a task and optionally insert an inline image",
     )
@@ -89,7 +89,8 @@ export const registerTaskAttachCommand = (
   withCommandCapabilities(command, {
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found", "outcome_unknown"],
+    partial: true,
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

@@ -23,7 +23,6 @@ export const registerTaskCommands = ({
       authentication: "required",
       configuration: "conditional",
     },
-    exitCodes: [0, 1, 2, 3, 4, 5, 6],
   });
   const context: TaskCommandContext = {
     ...registration,

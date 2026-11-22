@@ -1,3 +1,4 @@
+import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import {
   executeTaskCommentCreate,
   prepareTaskCommentCreate,
@@ -8,7 +9,6 @@ import { withCommandCapabilities } from "./capabilities.ts";
 import { shellTextSafetyHelp } from "./shell-text-help.ts";
 import {
   internalError,
-  renderTaskWriteFailure,
   taskFileReader,
   taskStdinReader,
   type TaskCommandContext,
@@ -51,7 +51,7 @@ const runTaskComment = async (
   if (!created.ok) {
     return created.error.kind === "invalid_usage"
       ? context.usageError(created.error.message)
-      : renderTaskWriteFailure(created.error);
+      : asanaFailure(created.error);
   }
   return {
     stdout: invocation.json
@@ -67,6 +67,7 @@ export const registerTaskCommentCommand = (
 ): void => {
   const command = context.tasks
     .command("comment <id> [text]")
+    .usage("[options] <id> (<text> | --file <path>)")
     .description("create a task comment")
     .option("--file <path>", "read comment text from a file or stdin with -")
     .option(
@@ -88,7 +89,7 @@ export const registerTaskCommentCommand = (
   withCommandCapabilities(command, {
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
-    exitCodes: [0, 2, 3, 4, 5, 6],
+    errors: [...ASANA_ERROR_CODES, "not_found", "outcome_unknown"],
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

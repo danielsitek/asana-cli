@@ -279,9 +279,9 @@ const sectionProjectSchema = z.object({
 const mapTaskReadError = <E extends IdentityError | WriteOutcomeUnknown>(
   error: E,
   message: string,
-): E | Readonly<{ kind: "not_found"; status: 404; message: string }> =>
+): E | IdentityError<"not_found"> =>
   error.kind === "api" && error.status === 404
-    ? { kind: "not_found", status: 404, message }
+    ? { ...error, kind: "not_found", message }
     : error;
 
 const enumOptionIsValid = (value: unknown): boolean =>

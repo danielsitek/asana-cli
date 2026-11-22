@@ -1,13 +1,5 @@
+import type { CliError } from "../shared/errors.ts";
 import { resolvePath } from "../utils/resolve-path.ts";
-
-export type CliError = Readonly<{
-  code: string;
-  message: string;
-  retryable?: false;
-  hint?: string;
-  completed?: readonly string[];
-  failed?: readonly string[];
-}>;
 
 type ValueSource = Readonly<{
   layer: string;

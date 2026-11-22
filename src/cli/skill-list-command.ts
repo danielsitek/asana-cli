@@ -37,7 +37,6 @@ export const registerSkillListCommand = (
   withCommandCapabilities(command, {
     operation: "local",
     requirements: { authentication: "never", configuration: "never" },
-    exitCodes: [0, 6],
   });
   command.exitOverride();
 };

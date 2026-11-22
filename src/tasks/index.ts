@@ -1,3 +1,4 @@
+import type { IdentityError } from "../identity/index.ts";
 import { ok, type Result } from "../shared/result.ts";
 
 export { executeTaskCreation, executeTaskUpdate } from "./mutation-workflow.ts";
@@ -44,19 +45,10 @@ export type WriteOutcomeUnknown = Readonly<{
   retryable: false;
   hint: string;
   status?: number;
+  asanaMessage?: string;
 }>;
 
-export type TaskReadError = Readonly<{
-  kind:
-    | "authentication"
-    | "api"
-    | "not_found"
-    | "rate_limit"
-    | "network"
-    | "invalid_response";
-  message: string;
-  status?: number;
-}>;
+export type TaskReadError = IdentityError<"not_found">;
 
 export type TaskWriteError = TaskReadError | WriteOutcomeUnknown;
 

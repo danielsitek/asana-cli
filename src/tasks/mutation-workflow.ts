@@ -1,3 +1,4 @@
+import { ASANA_FAILURE_MESSAGES } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import type {
   PreparedCustomField,
@@ -273,15 +274,13 @@ const validateCreationWriter = (
 const publicTaskError = (
   error: TaskReadError,
 ): NonNullable<TaskCreationStage["error"]> => {
-  const messages: Readonly<Record<TaskReadError["kind"], string>> = {
-    authentication: "Asana authentication failed",
-    api: "Asana API request failed",
-    not_found: "Task not found",
-    rate_limit: "Asana request retries exhausted",
-    network: "Unable to reach Asana",
-    invalid_response: "Asana returned an invalid response",
+  return {
+    kind: error.kind,
+    message:
+      error.kind === "not_found"
+        ? "Task not found"
+        : ASANA_FAILURE_MESSAGES[error.kind],
   };
-  return { kind: error.kind, message: messages[error.kind] };
 };
 
 const applyCreationStages = async (

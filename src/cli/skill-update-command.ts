@@ -46,7 +46,7 @@ export const registerSkillUpdateCommand = (
           scope,
           options.force,
         );
-        completeSkillMutation(context, updated, invocation.json);
+        completeSkillMutation(context, updated, invocation.json, ["all"]);
       },
     );
   configureSkillMutationCommand(command, true);

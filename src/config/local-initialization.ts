@@ -1,3 +1,4 @@
+import type { IdentityError } from "../identity/index.ts";
 import { randomUUID } from "node:crypto";
 import { readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -78,16 +79,7 @@ export type DiscoveredMyTaskSections = Pick<
   "userTaskListGid" | "sections"
 >;
 
-export type DiscoveryError = Readonly<{
-  kind:
-    | "authentication"
-    | "api"
-    | "rate_limit"
-    | "network"
-    | "invalid_response";
-  message: string;
-  status?: number;
-}>;
+export type DiscoveryError = IdentityError;
 
 export interface MyTasksDiscoveryGateway {
   discoverMyTasks(

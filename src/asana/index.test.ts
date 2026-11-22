@@ -70,6 +70,8 @@ describe("CLI reporting for ambiguous Asana writes", () => {
         message: "Asana may have applied the write",
         retryable: false,
         hint: expect.stringContaining(check),
+        hints: [expect.stringContaining(check)],
+        details: { status: 503 },
       },
     });
     expect(posts).toBe(1);
@@ -249,7 +251,7 @@ describe("AsanaHttpClient", () => {
     expect(attempts).toBe(2);
   });
 
-  test("returns rate-limit failure after the maximum retry count", async () => {
+  test("returns upstream unavailable after the maximum retry count", async () => {
     let attempts = 0;
     const baseUrl = serverFor(() => {
       attempts += 1;
@@ -264,9 +266,9 @@ describe("AsanaHttpClient", () => {
     expect(result).toEqual({
       ok: false,
       error: {
-        kind: "rate_limit",
+        kind: "upstream_unavailable",
         status: 503,
-        message: "Asana request retries exhausted",
+        message: "Asana is temporarily unavailable",
       },
     });
   });
@@ -322,8 +324,109 @@ describe("AsanaHttpClient", () => {
     expect(attempts).toBe(2);
     expect(result.exitCode).toBe(5);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain('"code":"rate_limit"');
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      error: { code: "rate_limit", retryable: true, details: { status: 429 } },
+    });
     expect(result.stderr).not.toContain("secret");
+  });
+
+  test.each([
+    [401, 3, "authentication", false, 1],
+    [403, 3, "permission_denied", false, 1],
+    [404, 4, "not_found", false, 1],
+    [502, 5, "upstream_unavailable", true, 2],
+    [503, 5, "upstream_unavailable", true, 2],
+    [504, 5, "upstream_unavailable", true, 2],
+  ] as const)(
+    "reports HTTP %i with the right error code and retryability",
+    async (status, exitCode, code, retryable, calls) => {
+      let attempts = 0;
+      const baseUrl = serverFor(() => {
+        attempts += 1;
+        return Response.json(
+          { errors: [{ message: "Asana detail" }] },
+          { status },
+        );
+      });
+      const client = new AsanaHttpClient({
+        baseUrl,
+        maxRetries: 1,
+        sleep: async () => undefined,
+      });
+      const result = await execute(["tasks", "get", "123", "--json"], {
+        environment: { ASANA_CLI_TOKEN: "test-token" },
+        identity: client,
+        taskReader: client,
+      });
+      expect(attempts).toBe(calls);
+      expect(result).toMatchObject({ exitCode, stdout: "" });
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        error: {
+          code,
+          retryable,
+          details: { status, message: "Asana detail" },
+        },
+      });
+    },
+  );
+
+  test("reports a bounded and sanitized Asana field error in both output modes", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json(
+        {
+          errors: [
+            {
+              message:
+                "Unknown field: bogus.\n test-token Bearer other-secret https://example.org/?signature=hidden \u001b\r" +
+                "a".repeat(600),
+              phrase: "internal phrase",
+            },
+          ],
+        },
+        { status: 400 },
+      ),
+    );
+    const client = new AsanaHttpClient({ baseUrl });
+    const dependencies = {
+      environment: { ASANA_CLI_TOKEN: "test-token" },
+      identity: client,
+      taskReader: client,
+    };
+    const args = ["tasks", "get", "123", "--fields", "bogus"];
+    const result = await execute([...args, "--json"], dependencies);
+    expect(result).toMatchObject({ exitCode: 4, stdout: "" });
+    const detail = "Unknown field: bogus. [redacted] Bearer [redacted] [url] ";
+    const sanitized = detail + "a".repeat(511 - detail.length) + "…";
+    expect(JSON.parse(result.stderr)).toEqual({
+      error: {
+        code: "api",
+        message: "Asana API request failed",
+        retryable: false,
+        details: { status: 400, message: sanitized },
+      },
+    });
+    const human = await execute(args, dependencies);
+    expect(human.stderr).toBe(
+      "error: Asana API request failed\nAsana: " + sanitized + "\n",
+    );
+  });
+
+  test("keeps the HTTP status when the error body exceeds the diagnostic budget", async () => {
+    const baseUrl = serverFor(() =>
+      Response.json(
+        {
+          errors: [{ message: "a".repeat(17_000) }],
+        },
+        { status: 400 },
+      ),
+    );
+    const identity = new AsanaHttpClient({ baseUrl });
+    const result = await execute(["whoami", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "test-token" },
+      identity,
+    });
+    expect(result.exitCode).toBe(4);
+    expect(JSON.parse(result.stderr).error.details).toEqual({ status: 400 });
   });
 
   test("uses the default retry wait for a retryable GET response", async () => {
@@ -1645,9 +1748,9 @@ describe("AsanaHttpClient", () => {
     expect(exhausted).toEqual({
       ok: false,
       error: {
-        kind: "rate_limit",
+        kind: "upstream_unavailable",
         status: 503,
-        message: "Asana request retries exhausted",
+        message: "Asana is temporarily unavailable",
       },
     });
 
