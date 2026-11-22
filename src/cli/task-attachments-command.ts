@@ -16,7 +16,8 @@ export const registerTaskAttachmentsCommand = (
   context: TaskCommandContext,
 ): void => {
   const command = context.tasks
-    .command("attachments <id>")
+    .command("attachments")
+    .argument("<id>", "task GID or Asana task URL")
     .description("list attachments on a task, including inline images")
     .option("--max <n>", "cap attachments scanned; alone does not return all")
     .option("--offset <token>", "resume from an Asana offset")
@@ -62,6 +63,7 @@ export const registerTaskAttachmentsCommand = (
     });
   withCommandCapabilities(command, {
     operation: "read",
+    markers: { paginated: true },
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found"],
   });

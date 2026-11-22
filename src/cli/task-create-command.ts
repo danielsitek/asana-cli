@@ -140,6 +140,7 @@ export const registerTaskCreateCommand = (
     ],
     partial: true,
     options: { customField: { repeatable: true } },
+    markers: { transmits_local_files: { option: "--notes-file" } },
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

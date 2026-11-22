@@ -79,6 +79,7 @@ export const registerTaskListCommand = (context: TaskCommandContext): void => {
     });
   withCommandCapabilities(command, {
     operation: "read",
+    markers: { paginated: true },
     requirements: {
       authentication: "required",
       configuration: "conditional",

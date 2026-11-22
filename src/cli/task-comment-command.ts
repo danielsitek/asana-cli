@@ -66,7 +66,9 @@ export const registerTaskCommentCommand = (
   context: TaskCommandContext,
 ): void => {
   const command = context.tasks
-    .command("comment <id> [text]")
+    .command("comment")
+    .argument("<id>", "task GID or Asana task URL")
+    .argument("[text]", "comment text")
     .usage("[options] <id> (<text> | --file <path>)")
     .description("create a task comment")
     .option("--file <path>", "read comment text from a file or stdin with -")
@@ -90,6 +92,7 @@ export const registerTaskCommentCommand = (
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found", "outcome_unknown"],
+    markers: { transmits_local_files: { option: "--file" } },
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

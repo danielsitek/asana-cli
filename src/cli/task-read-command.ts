@@ -51,7 +51,8 @@ const runTaskGet = async (
 
 export const registerTaskReadCommand = (context: TaskCommandContext): void => {
   const command = context.tasks
-    .command("get <id>")
+    .command("get")
+    .argument("<id>", "task GID or Asana task URL")
     .description("read a task's details")
     .action(async (idArg: string) => {
       context.complete(

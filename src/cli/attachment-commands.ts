@@ -30,7 +30,8 @@ export const registerAttachmentCommands = (
   attachments.configureOutput(context.outputConfiguration);
 
   const download = attachments
-    .command("download <attachment-gid>")
+    .command("download")
+    .argument("<attachment-gid>", "attachment GID")
     .usage("--out <path> [options] <attachment-gid>")
     .description("save an attachment to a file or directory")
     .requiredOption("--out <path>", "output file or existing directory")
@@ -74,6 +75,7 @@ export const registerAttachmentCommands = (
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found"],
+    markers: { overwrites_local_files: { option: "--force" } },
   });
   download.exitOverride();
   download.configureOutput(context.outputConfiguration);
