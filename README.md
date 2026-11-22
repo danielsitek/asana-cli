@@ -55,7 +55,9 @@ Replace `<target>` with the value from the table above (e.g. `darwin-arm64`).
 To upgrade, repeat these steps with the newer archive.
 
 When stderr is an interactive terminal, the CLI checks GitHub Releases at
-most once every 24 hours and prints a notice when an update is available.
+most once every 24 hours after eligible commands and prints a notice when an
+update is available. The CLI skips this check for help, version, completion,
+`capabilities`, `skill list`, and any command run with `--json`.
 The cached result is stored under `${XDG_CACHE_HOME:-~/.cache}/asana-cli`.
 Set `ASANA_CLI_DISABLE_UPDATE_CHECK=1` to disable the check.
 
