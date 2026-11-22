@@ -57,7 +57,7 @@ To upgrade, repeat these steps with the newer archive.
 When stderr is an interactive terminal, the CLI checks GitHub Releases at
 most once every 24 hours after eligible commands and prints a notice when an
 update is available. The CLI skips this check for help, version, completion,
-`capabilities`, `skill list`, and any command run with `--json`.
+`capabilities`, `skill` commands, and any command run with `--json`.
 The cached result is stored under `${XDG_CACHE_HOME:-~/.cache}/asana-cli`.
 Set `ASANA_CLI_DISABLE_UPDATE_CHECK=1` to disable the check.
 
@@ -446,15 +446,36 @@ Inspect the installed CLI contract without authentication or configuration:
 
 ```sh
 asana-cli capabilities --json
+asana-cli capabilities tasks --json
+asana-cli capabilities tasks attach --json
 ```
+
+Omit the path to list every command. A group path lists the group and its
+descendants. A leaf path lists one command. Use command names relative to
+`asana-cli`. An unknown path returns `invalid_usage` with exit 2.
+Discovery runs locally without reading credentials, configuration, files,
+stdin, or the Asana API.
 
 The compact JSON `data` document contains an explicit schema version, the CLI
 version, and a deterministic list of command paths, arguments, local and
-inherited options, operational requirements, and read/write classification.
-Each command lists its possible `error_codes` and `exit_codes`. The top-level
+inherited options, operational requirements, and operation classification.
+Arguments with a fixed set of choices include `allowed_values`. The `local`
+operation includes filesystem changes from `skill install`, `skill update`,
+and `skill uninstall`.
+
+Each command lists its possible `error_codes` and numeric `exit_codes`.
+Its `exit_categories` object maps those exit codes to names. The top-level
 `data.errors` object maps each symbolic error code to its `exit_code` and
-`retryable` value. The command runs locally and does not read credentials,
-configuration, files, stdin, or the Asana API.
+`retryable` value.
+
+Each command has a `markers` object. The following keys appear where applicable.
+
+| Key                      | Meaning                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `paginated`              | The command supports resuming from an offset. Use `meta.next_offset` when `meta.has_more` is true.                    |
+| `transmits_local_files`  | `option` identifies the flag that sends file contents to Asana. `max_bytes`, when present, gives its byte limit.      |
+| `overwrites_local_files` | `option` identifies the download flag that permits replacing an existing output file.                                 |
+| `partial_result`         | `exit_code` and `output` identify how the command reports a partial result. Inspect stdout on exit 1 before retrying. |
 
 ## Errors and exit codes
 
