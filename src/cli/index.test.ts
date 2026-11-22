@@ -636,7 +636,7 @@ describe("execute", () => {
   });
 
   test("adds an update notice to stderr without changing command output", async () => {
-    const result = await execute(["whoami", "--json"], {
+    const result = await execute(["whoami"], {
       environment: { ASANA_CLI_TOKEN: "secret" },
       identity,
       checkForUpdate: async () => ({
@@ -647,7 +647,7 @@ describe("execute", () => {
     });
 
     expect(result).toEqual({
-      stdout: '{"data":{"gid":"123","name":"Ada Lovelace"},"meta":{}}\n',
+      stdout: "gid: 123\nname: Ada Lovelace\n",
       stderr:
         "\nUpdate available: 0.5.0 → 0.6.0\n" +
         "Run `brew upgrade asana-cli` or visit https://example.com/releases/v0.6.0\n",
@@ -656,28 +656,44 @@ describe("execute", () => {
   });
 
   test.each([
+    ["no arguments", [], "Usage: asana-cli"],
     ["short help", ["-h"], "Usage: asana-cli"],
     ["long help", ["--help"], "Usage: asana-cli"],
+    ["help command", ["tasks", "help", "get"], "Usage: asana-cli tasks get"],
+    ["bare parent", ["tasks"], "Usage: asana-cli tasks"],
     ["short version", ["-v"], "0.13.0\n"],
     ["long version", ["--version"], "0.13.0\n"],
-  ])("adds an update notice after %s", async (_label, argv, expectedStdout) => {
-    const result = await execute(argv, {
-      environment: {},
-      identity,
-      checkForUpdate: async () => ({
-        currentVersion: "0.10.0",
-        latestVersion: "0.10.1",
-        releaseUrl: "https://example.com/releases/v0.10.1",
-      }),
-    });
+    ["subcommand version", ["whoami", "--version"], "0.13.0\n"],
+    ["completion", ["completion", "zsh"], "#compdef asana-cli"],
+    ["discovery", ["capabilities", "--json"], '"schema_version":1'],
+    ["skill list", ["skill", "list"], "Codex"],
+    ["JSON before command", ["--json", "whoami"], '"gid":"123"'],
+    ["JSON after command", ["whoami", "--json"], '"gid":"123"'],
+  ])(
+    "skips the update check after %s",
+    async (_label, argv, expectedStdout) => {
+      const root = await mkdtemp(join(tmpdir(), "asana-cli-update-check-"));
+      let checked = false;
+      try {
+        const result = await execute(argv, {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          configuration: { cwd: root, home: root, environment: {} },
+          checkForUpdate: async () => {
+            checked = true;
+            return undefined;
+          },
+        });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(expectedStdout);
-    expect(result.stderr).toBe(
-      "\nUpdate available: 0.10.0 → 0.10.1\n" +
-        "Run `brew upgrade asana-cli` or visit https://example.com/releases/v0.10.1\n",
-    );
-  });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(expectedStdout);
+        expect(result.stderr).toBe("");
+        expect(checked).toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("ignores update-check failures and skips the check after command errors", async () => {
     const successful = await execute(["whoami"], {

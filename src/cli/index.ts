@@ -21,6 +21,7 @@ import { registerAttachmentCommands } from "./attachment-commands.ts";
 import {
   capabilitiesForProgram,
   commandPath,
+  isLocalCommand,
   withCommandCapabilities,
 } from "./capabilities.ts";
 import { registerConfigCommands } from "./config-commands.ts";
@@ -96,13 +97,8 @@ const formatCommandResult = (
 const appendUpdateNotice = async (
   execution: Execution,
   dependencies: ExecuteDependencies,
-  skipUpdateCheck: boolean,
 ): Promise<Execution> => {
-  if (
-    execution.exitCode !== 0 ||
-    skipUpdateCheck ||
-    !dependencies.checkForUpdate
-  ) {
+  if (execution.exitCode !== 0 || !dependencies.checkForUpdate) {
     return execution;
   }
 
@@ -172,7 +168,6 @@ export const execute = async (
   let failedParserCommand = program;
   let parserStdout = "";
   let parserStderr = "";
-  let skipUpdateCheck = false;
 
   const stopWith = (execution: CommandResult): void => {
     result = execution;
@@ -400,7 +395,6 @@ export const execute = async (
     .description("describe the CLI contract for automation")
     .action(() => {
       invokedState.value = true;
-      skipUpdateCheck = true;
       result = json
         ? {
             stdout: renderJson(capabilitiesForProgram(program, version)),
@@ -447,18 +441,14 @@ export const execute = async (
         error.code === "commander.helpDisplayed" ||
         error.code === "commander.version"
       ) {
-        return appendUpdateNotice(
-          { stdout: parserStdout, stderr: "", exitCode: 0 },
-          dependencies,
-          skipUpdateCheck,
-        );
+        return { stdout: parserStdout, stderr: "", exitCode: 0 };
       }
       if (error.code === "commander.help") {
-        return appendUpdateNotice(
-          { stdout: parserStdout || parserStderr, stderr: "", exitCode: 0 },
-          dependencies,
-          skipUpdateCheck,
-        );
+        return {
+          stdout: parserStdout || parserStderr,
+          stderr: "",
+          exitCode: 0,
+        };
       }
       if (error.code === "commander.fieldsNotSupported") {
         return formatCommandResult(
@@ -491,9 +481,7 @@ export const execute = async (
     (invokedState.value
       ? usageError("Command did not complete")
       : usageError("A command is required"));
-  return appendUpdateNotice(
-    formatCommandResult(execution, json, activeCommand),
-    dependencies,
-    skipUpdateCheck,
-  );
+  const formatted = formatCommandResult(execution, json, activeCommand);
+  if (json || isLocalCommand(activeCommand)) return formatted;
+  return appendUpdateNotice(formatted, dependencies);
 };
