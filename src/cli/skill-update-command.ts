@@ -10,6 +10,8 @@ import {
   configureSkillMutationCommand,
 } from "./skill-mutation-command.ts";
 
+const ALL_AGENTS = "all";
+
 export const registerSkillUpdateCommand = (
   context: SkillCommandContext,
 ): void => {
@@ -27,7 +29,7 @@ export const registerSkillUpdateCommand = (
         const invocation = context.beginCommand();
         if (!invocation) return;
         const scope = scopeFrom(options.local);
-        if (agent === "all") {
+        if (agent === ALL_AGENTS) {
           const updated = await updateAllSkills(
             invocation.context,
             scope,
@@ -46,8 +48,8 @@ export const registerSkillUpdateCommand = (
           scope,
           options.force,
         );
-        completeSkillMutation(context, updated, invocation.json, ["all"]);
+        completeSkillMutation(context, updated, invocation.json, [ALL_AGENTS]);
       },
     );
-  configureSkillMutationCommand(command, true);
+  configureSkillMutationCommand(command, true, [ALL_AGENTS]);
 };

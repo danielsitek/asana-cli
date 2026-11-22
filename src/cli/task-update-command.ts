@@ -161,7 +161,8 @@ export const registerTaskUpdateCommand = (
 ): void => {
   const command = withTaskMutationOptions(
     context.tasks
-      .command("update <id>")
+      .command("update")
+      .argument("<id>", "task GID or Asana task URL")
       .usage("[options] <id> <mutation-options>")
       .description("update a task's fields"),
   )
@@ -193,6 +194,7 @@ export const registerTaskUpdateCommand = (
       "outcome_unknown",
     ],
     options: { customField: { repeatable: true } },
+    markers: { transmits_local_files: { option: "--notes-file" } },
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

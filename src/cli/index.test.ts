@@ -50,6 +50,7 @@ import {
 } from "../tasks/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import { bundledInstallationContents, SKILL_AGENTS } from "../skill/index.ts";
+import type { CapabilityDocument } from "./capabilities.ts";
 import { execute, type ExecuteDependencies } from "./index.ts";
 
 describe("attachment commands", () => {
@@ -1153,6 +1154,7 @@ describe("execute", () => {
             description: string;
             required: boolean;
             repeatable: boolean;
+            allowed_values?: string[];
           }>;
           options: {
             local: Array<{
@@ -1173,7 +1175,9 @@ describe("execute", () => {
             configuration: string;
           };
           exit_codes: number[];
+          exit_categories: Record<string, string>;
           error_codes: string[];
+          markers: Record<string, unknown>;
         }>;
       };
       meta: Record<string, never>;
@@ -1222,6 +1226,9 @@ describe("execute", () => {
 
     for (const command of envelope.data.commands) {
       expect(command.description).not.toBe("");
+      for (const argument of command.arguments) {
+        expect(argument.description).not.toBe("");
+      }
       expect(command.operation).toMatch(/^(local|read|write|mixed)$/);
       expect(command.requirements.authentication).toMatch(
         /^(never|conditional|required)$/,
@@ -1231,6 +1238,14 @@ describe("execute", () => {
       );
       expect(command.exit_codes).toEqual(
         [...command.exit_codes].sort((left, right) => left - right),
+      );
+      expect(Object.keys(command.exit_categories).map(Number)).toEqual(
+        command.exit_codes,
+      );
+      expect(command.markers.partial_result).toEqual(
+        command.exit_codes.includes(1)
+          ? { exit_code: 1, output: "stdout" }
+          : undefined,
       );
       expect(command.error_codes).toEqual(
         [...new Set(command.error_codes)].sort(),
@@ -1266,7 +1281,50 @@ describe("execute", () => {
     );
     expect(byPath.get("asana-cli skill list")).toMatchObject({
       exit_codes: [0, 2, 6],
+      exit_categories: {
+        0: "success",
+        2: "usage_or_configuration",
+        6: "internal_error",
+      },
       error_codes: ["internal_error", "invalid_usage"],
+      markers: {},
+    });
+    const agents = SKILL_AGENTS.map(({ name }) => name);
+    for (const action of ["install", "update", "uninstall"]) {
+      expect(byPath.get(`asana-cli skill ${action}`)).toMatchObject({
+        operation: "local",
+        requirements: { authentication: "never", configuration: "never" },
+        arguments: [
+          {
+            name: "agent",
+            allowed_values: action === "update" ? [...agents, "all"] : agents,
+          },
+        ],
+      });
+    }
+    expect(byPath.get("asana-cli completion")?.arguments).toMatchObject([
+      { name: "shell", allowed_values: ["bash", "zsh", "fish"] },
+    ]);
+    expect(
+      envelope.data.commands
+        .filter(({ markers }) => markers.paginated)
+        .map(({ path }) => path),
+    ).toEqual([
+      "asana-cli projects custom-fields",
+      "asana-cli projects list",
+      "asana-cli projects sections",
+      "asana-cli tasks attachments",
+      "asana-cli tasks comments",
+      "asana-cli tasks list",
+    ]);
+    expect(byPath.get("asana-cli tasks attach")).toMatchObject({
+      exit_categories: { 1: "partial_result" },
+      markers: {
+        transmits_local_files: { option: "--file", max_bytes: 100_000_000 },
+      },
+    });
+    expect(byPath.get("asana-cli attachments download")?.markers).toEqual({
+      overwrites_local_files: { option: "--force" },
     });
     expect(byPath.get("asana-cli tasks comments")?.error_codes).toContain(
       "scan_limit",
@@ -1315,7 +1373,7 @@ describe("execute", () => {
       ).toBe(false);
     }
     expect(byPath.get("asana-cli capabilities")).toMatchObject({
-      arguments: [],
+      arguments: [{ name: "path", required: false, repeatable: true }],
       options: {
         local: expect.arrayContaining([
           {
@@ -1345,7 +1403,7 @@ describe("execute", () => {
       arguments: [
         {
           name: "id",
-          description: "",
+          description: "task GID or Asana task URL",
           required: true,
           repeatable: false,
         },
@@ -1390,6 +1448,49 @@ describe("execute", () => {
       );
     }
   });
+
+  test.each([
+    [["capabilities", "tasks", "--json"], "asana-cli tasks"],
+    [["--json", "capabilities", "tasks", "get"], "asana-cli tasks get"],
+    [["capabilities", "config resolve", "--json"], "asana-cli config resolve"],
+  ])("scopes capabilities for %j", async (argv, scope) => {
+    const dependencies = { environment: {}, identity };
+    const full = await execute(["capabilities", "--json"], dependencies);
+    const result = await execute(argv, dependencies);
+    const { data, meta } = JSON.parse(full.stdout) as {
+      data: CapabilityDocument;
+      meta: Record<string, never>;
+    };
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      data: {
+        ...data,
+        commands: data.commands.filter(
+          ({ path }) => path === scope || path.startsWith(`${scope} `),
+        ),
+      },
+      meta,
+    });
+  });
+
+  test.each(["task", "tasks unknown", "tasks get unexpected"])(
+    "rejects unknown capability path %s",
+    async (path) => {
+      const result = await execute(["capabilities", path, "--json"], {
+        environment: {},
+        identity,
+      });
+      expect(result).toMatchObject({ stdout: "", exitCode: 2 });
+      expect(JSON.parse(result.stderr)).toEqual({
+        error: {
+          code: "invalid_usage",
+          message: `Unknown command path: "${path}"`,
+          retryable: false,
+          usage: "asana-cli capabilities [path...] --json",
+        },
+      });
+    },
+  );
 
   test("requires JSON when reporting capabilities", async () => {
     const dependencies = { environment: {}, identity };
@@ -6067,7 +6168,14 @@ describe("skill commands", () => {
   });
 
   test("updates and uninstalls one skill with human and JSON output", async () => {
-    const commandDependencies = await dependencies();
+    let updateChecks = 0;
+    const commandDependencies = {
+      ...(await dependencies()),
+      checkForUpdate: async () => {
+        updateChecks += 1;
+        return undefined;
+      },
+    };
     const path = join(
       commandDependencies.configuration?.cwd ?? "",
       ".agents",
@@ -6112,6 +6220,13 @@ describe("skill commands", () => {
     });
     expect(await readFile(path, "utf8")).toBe(bundledInstallationContents());
 
+    expect(
+      await execute(
+        ["skill", "update", "universal", "--local"],
+        commandDependencies,
+      ),
+    ).toMatchObject({ exitCode: 0, stderr: "" });
+
     await writeFile(path, "customized skill\n");
     const removed = await execute(
       ["skill", "uninstall", "universal", "--local", "--force"],
@@ -6122,6 +6237,7 @@ describe("skill commands", () => {
       stderr: "",
       exitCode: 0,
     });
+    expect(updateChecks).toBe(0);
   });
 
   test.each([false, true])(

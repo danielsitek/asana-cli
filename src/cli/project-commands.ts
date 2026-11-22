@@ -294,6 +294,7 @@ const registerProjectSections = (
     });
   withCommandCapabilities(command, {
     operation: "read",
+    markers: { paginated: true },
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found"],
   });
@@ -330,6 +331,7 @@ const registerProjectCustomFields = (
     });
   withCommandCapabilities(command, {
     operation: "read",
+    markers: { paginated: true },
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found"],
   });
@@ -357,6 +359,7 @@ const registerProjectList = (
     });
   withCommandCapabilities(command, {
     operation: "read",
+    markers: { paginated: true },
     requirements: {
       authentication: "required",
       configuration: "conditional",

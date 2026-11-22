@@ -6,6 +6,26 @@ import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 export type CapabilityOperation = "local" | "read" | "write" | "mixed";
 export type CapabilityRequirement = "never" | "conditional" | "required";
 
+const EXIT_CATEGORIES = {
+  0: "success",
+  1: "partial_result",
+  2: "usage_or_configuration",
+  3: "authentication_or_permission",
+  4: "api_or_network",
+  5: "transient_or_scan_limit",
+  6: "internal_error",
+} as const;
+
+const PARTIAL_RESULT = { exit_code: 1, output: "stdout" } as const;
+
+type ExitCode = keyof typeof EXIT_CATEGORIES;
+
+type CapabilityMarkers = Readonly<{
+  paginated?: true;
+  transmits_local_files?: Readonly<{ option: string; max_bytes?: number }>;
+  overwrites_local_files?: Readonly<{ option: string }>;
+}>;
+
 type CommandCapabilityMetadata = Readonly<{
   operation: CapabilityOperation;
   requirements: Readonly<{
@@ -14,6 +34,8 @@ type CommandCapabilityMetadata = Readonly<{
   }>;
   errors?: readonly ErrorCode[];
   partial?: boolean;
+  markers?: CapabilityMarkers;
+  argumentChoices?: Readonly<Record<string, readonly string[]>>;
   options?: Readonly<
     Record<
       string,
@@ -30,6 +52,7 @@ export type CapabilityArgument = Readonly<{
   description: string;
   required: boolean;
   repeatable: boolean;
+  allowed_values?: readonly string[];
 }>;
 
 export type CapabilityOption = Readonly<{
@@ -58,8 +81,11 @@ export type CommandCapability = Readonly<{
     authentication: CapabilityRequirement;
     configuration: CapabilityRequirement;
   }>;
-  exit_codes: readonly number[];
+  exit_codes: readonly ExitCode[];
+  exit_categories: Readonly<Partial<typeof EXIT_CATEGORIES>>;
   error_codes: readonly ErrorCode[];
+  markers: CapabilityMarkers &
+    Readonly<{ partial_result?: typeof PARTIAL_RESULT }>;
 }>;
 
 export type CapabilityDocument = Readonly<{
@@ -186,11 +212,15 @@ const inheritedOptions = (
   });
 };
 
-const toArgument = (argument: Argument): CapabilityArgument => ({
+const toArgument = (
+  argument: Argument,
+  allowedValues: readonly string[] | undefined,
+): CapabilityArgument => ({
   name: argument.name(),
   description: argument.description,
   required: argument.required,
   repeatable: argument.variadic,
+  ...(allowedValues ? { allowed_values: allowedValues } : {}),
 });
 
 const toCommandCapability = (command: Command): CommandCapability => {
@@ -206,23 +236,33 @@ const toCommandCapability = (command: Command): CommandCapability => {
       ...(metadata.errors ?? []),
     ]),
   ].sort(compareText);
-  const exitCodes = new Set([
+  const exitCodes = new Set<ExitCode>([
     0,
     ...errors.map((code) => ERROR_CONTRACT[code].exit_code),
   ]);
-  if (metadata.partial) exitCodes.add(1);
+  if (metadata.partial) exitCodes.add(PARTIAL_RESULT.exit_code);
+  const sortedExitCodes = [...exitCodes].sort((left, right) => left - right);
   return {
     path: commandPath(command),
     description: command.description(),
-    arguments: command.registeredArguments.map(toArgument),
+    arguments: command.registeredArguments.map((argument) =>
+      toArgument(argument, metadata.argumentChoices?.[argument.name()]),
+    ),
     options: {
       local,
       inherited: inheritedOptions(command, local),
     },
     operation: metadata.operation,
     requirements: metadata.requirements,
-    exit_codes: [...exitCodes].sort((left, right) => left - right),
+    exit_codes: sortedExitCodes,
+    exit_categories: Object.fromEntries(
+      sortedExitCodes.map((code) => [code, EXIT_CATEGORIES[code]]),
+    ),
     error_codes: errors,
+    markers: {
+      ...metadata.markers,
+      ...(metadata.partial ? { partial_result: PARTIAL_RESULT } : {}),
+    },
   };
 };
 
@@ -241,11 +281,23 @@ const registeredCommands = (program: Command): readonly Command[] => {
 export const capabilitiesForProgram = (
   program: Command,
   version: string,
-): CapabilityDocument => ({
-  schema_version: 1,
-  cli_version: version,
-  errors: ERROR_CONTRACT,
-  commands: registeredCommands(program)
-    .map(toCommandCapability)
-    .sort((left, right) => compareText(left.path, right.path)),
-});
+  path: readonly string[],
+): CapabilityDocument | undefined => {
+  let scope = program;
+  for (const part of path) {
+    const child = scope.commands.find((command) => command.name() === part);
+    if (!child) return undefined;
+    scope = child;
+  }
+
+  const descendants = registeredCommands(scope);
+  const commands = scope === program ? descendants : [scope, ...descendants];
+  return {
+    schema_version: 1,
+    cli_version: version,
+    errors: ERROR_CONTRACT,
+    commands: commands
+      .map(toCommandCapability)
+      .sort((left, right) => compareText(left.path, right.path)),
+  };
+};

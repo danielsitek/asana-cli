@@ -366,7 +366,8 @@ export const execute = async (
   workspacesList.configureOutput(captureOutput);
 
   const completion = program
-    .command("completion <shell>")
+    .command("completion")
+    .argument("<shell>", "shell to generate completion for")
     .description("generate shell completion script")
     .action((shell: string) => {
       invokedState.value = true;
@@ -386,24 +387,35 @@ export const execute = async (
   withCommandCapabilities(completion, {
     operation: "local",
     requirements: { authentication: "never", configuration: "never" },
+    argumentChoices: { shell: COMPLETION_SHELLS },
   });
   completion.exitOverride();
   completion.configureOutput(captureOutput);
 
   const capabilities = program
     .command("capabilities")
+    .argument("[path...]", "command or group path to inspect")
     .description("describe the CLI contract for automation")
-    .action(() => {
+    .action((path: string[]) => {
       invokedState.value = true;
-      result = json
-        ? {
-            stdout: renderJson(capabilitiesForProgram(program, version)),
-            stderr: "",
-            exitCode: 0,
-          }
-        : usageError("capabilities requires --json", {
-            usage: "asana-cli capabilities --json",
-          });
+      const usage = "asana-cli capabilities [path...] --json";
+      if (!json) {
+        result = usageError("capabilities requires --json", { usage });
+        return;
+      }
+      const document = capabilitiesForProgram(
+        program,
+        version,
+        path.flatMap((part) => part.trim().split(/\s+/)),
+      );
+      result = document
+        ? { stdout: renderJson(document), stderr: "", exitCode: 0 }
+        : usageError(
+            `Unknown command path: ${JSON.stringify(path.join(" "))}`,
+            {
+              usage,
+            },
+          );
     });
   withCommandCapabilities(capabilities, {
     operation: "local",

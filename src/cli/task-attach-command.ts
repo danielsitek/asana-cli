@@ -1,6 +1,7 @@
 import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
 import {
   executeAttachmentUpload,
+  MAX_ATTACHMENT_BYTES,
   prepareAttachmentUpload,
 } from "../attachments/upload.ts";
 import { renderJson, renderTaskDetail } from "../output/index.ts";
@@ -72,7 +73,8 @@ export const registerTaskAttachCommand = (
   context: TaskCommandContext,
 ): void => {
   const command = context.tasks
-    .command("attach <id>")
+    .command("attach")
+    .argument("<id>", "task GID or Asana task URL")
     .usage("--file <path> [options] <id>")
     .description(
       "upload a file to a task and optionally insert an inline image",
@@ -91,6 +93,12 @@ export const registerTaskAttachCommand = (
     requirements: { authentication: "required", configuration: "never" },
     errors: [...ASANA_ERROR_CODES, "not_found", "outcome_unknown"],
     partial: true,
+    markers: {
+      transmits_local_files: {
+        option: "--file",
+        max_bytes: MAX_ATTACHMENT_BYTES,
+      },
+    },
   });
   command.exitOverride();
   command.configureOutput(context.outputConfiguration);

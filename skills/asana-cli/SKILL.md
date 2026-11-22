@@ -39,7 +39,10 @@ Use file input for multiline text or text containing `$` followed by digits. A d
 Every task `<id>` below must be a digit-only GID or a URL of the exact form `https://app.asana.com/0/<project>/<task>[/f]` — other Asana URL shapes fail with exit 2. Resource arguments written as `<gid>`, including `projects get <gid>`, accept digit-only GIDs.
 
 Run `asana-cli capabilities --json` to inspect the installed CLI's versioned,
-machine-readable command contract. It is local-only and does not read
+machine-readable command contract. For a group or a single command, use
+`asana-cli capabilities tasks --json` or `asana-cli capabilities tasks attach --json`.
+Check `markers` for pagination, local file transmission, download overwrites,
+and partial results. The command runs locally and does not read
 credentials, configuration, files, stdin, or the Asana API.
 
 | Goal                                               | Command                                                                                                                                                                                                                                                             |

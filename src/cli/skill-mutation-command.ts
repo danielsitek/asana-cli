@@ -1,7 +1,11 @@
 import type { Command } from "commander";
 
 import type { Result } from "../shared/result.ts";
-import type { SkillError, SkillMutation } from "../skill/index.ts";
+import {
+  SKILL_AGENTS,
+  type SkillError,
+  type SkillMutation,
+} from "../skill/index.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   renderMutation,
@@ -25,12 +29,16 @@ export const completeSkillMutation = (
 export const configureSkillMutationCommand = (
   command: Command,
   partial = false,
+  additionalAgents: readonly string[] = [],
 ): void => {
   withCommandCapabilities(command, {
-    operation: "write",
+    operation: "local",
     requirements: { authentication: "never", configuration: "never" },
     errors: ["invalid_state"],
     partial,
+    argumentChoices: {
+      agent: [...SKILL_AGENTS.map(({ name }) => name), ...additionalAgents],
+    },
   });
   command.exitOverride();
 };
