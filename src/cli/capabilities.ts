@@ -71,6 +71,9 @@ export type CapabilityDocument = Readonly<{
 
 const metadataByCommand = new WeakMap<Command, CommandCapabilityMetadata>();
 
+export const isLocalCommand = (command: Command): boolean =>
+  metadataByCommand.get(command)?.operation === "local";
+
 export const withCommandCapabilities = (
   command: Command,
   metadata: CommandCapabilityMetadata,
