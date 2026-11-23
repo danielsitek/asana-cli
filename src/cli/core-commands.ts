@@ -1,5 +1,3 @@
-import type { Command } from "commander";
-
 import {
   COMPLETION_SHELLS,
   isCompletionShell,
@@ -16,7 +14,11 @@ import {
   capabilitiesForProgram,
   withCommandCapabilities,
 } from "./capabilities.ts";
-import type { CommandResult, ExecuteDependencies } from "./contracts.ts";
+import type {
+  CommandRegistration,
+  CommandResult,
+  ExecuteDependencies,
+} from "./contracts.ts";
 import {
   ASANA_ERROR_CODES,
   asanaFailure,
@@ -24,20 +26,20 @@ import {
   usageError,
 } from "./errors.ts";
 
-type CoreCommandRegistration = Readonly<{
-  program: Command;
-  beginCommand: () => { json: boolean };
-  complete: (execution: CommandResult) => void;
-}>;
-
-type AuthenticatedRegistration = CoreCommandRegistration &
+type AuthenticatedRegistration = CommandRegistration &
   Readonly<{
+    dependencies: Pick<ExecuteDependencies, "identity" | "workspaceReader">;
     requireToken: () => Result<string, CommandResult>;
   }>;
 
 export const registerWhoamiCommand = (
-  { program, beginCommand, complete, requireToken }: AuthenticatedRegistration,
-  dependencies: Pick<ExecuteDependencies, "identity">,
+  {
+    program,
+    beginCommand,
+    complete,
+    dependencies,
+    requireToken,
+  }: AuthenticatedRegistration,
   version: string,
 ): void => {
   const whoami = program
@@ -70,10 +72,13 @@ export const registerWhoamiCommand = (
   whoami.version(version, "-v, --version");
 };
 
-export const registerWorkspaceCommands = (
-  { program, beginCommand, complete, requireToken }: AuthenticatedRegistration,
-  dependencies: Pick<ExecuteDependencies, "workspaceReader">,
-): void => {
+export const registerWorkspaceCommands = ({
+  program,
+  beginCommand,
+  complete,
+  dependencies,
+  requireToken,
+}: AuthenticatedRegistration): void => {
   const workspaces = program
     .command("workspaces")
     .description("inspect workspaces");
@@ -125,7 +130,7 @@ export const registerCompletionCommand = ({
   program,
   beginCommand,
   complete,
-}: CoreCommandRegistration): void => {
+}: CommandRegistration): void => {
   const completion = program
     .command("completion")
     .argument("<shell>", "shell to generate completion for")
@@ -154,7 +159,7 @@ export const registerCompletionCommand = ({
 };
 
 export const registerCapabilitiesCommand = (
-  { program, beginCommand, complete }: CoreCommandRegistration,
+  { program, beginCommand, complete }: CommandRegistration,
   version: string,
 ): void => {
   const capabilities = program
