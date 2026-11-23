@@ -6,6 +6,7 @@ export const ERROR_CONTRACT = {
   permission_denied: { exit_code: 3, retryable: false },
   api: { exit_code: 4, retryable: false },
   not_found: { exit_code: 4, retryable: false },
+  timeout: { exit_code: 4, retryable: false },
   network: { exit_code: 4, retryable: true },
   invalid_response: { exit_code: 4, retryable: false },
   outcome_unknown: { exit_code: 4, retryable: false },
