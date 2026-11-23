@@ -57,7 +57,8 @@ To upgrade, repeat these steps with the newer archive.
 When stderr is an interactive terminal, the CLI checks GitHub Releases at
 most once every 24 hours after eligible commands and prints a notice when an
 update is available. The CLI skips this check for help, version, completion,
-`capabilities`, `skill` commands, and any command run with `--json`.
+`capabilities`, `skill` commands, and invocations with `--json`, `--dry-run`,
+or an explicit `--timeout`.
 The cached result is stored under `${XDG_CACHE_HOME:-~/.cache}/asana-cli`.
 Set `ASANA_CLI_DISABLE_UPDATE_CHECK=1` to disable the check.
 
@@ -205,8 +206,11 @@ asana-cli config set defaultAssignee me
 asana-cli config set defaultAssignee 1201947864389005 --local
 ```
 
-Value must be `me` or a digit-only user GID; an explicit `--assignee`
-(including `--assignee=null`) always overrides it.
+The default assignee must be `me` or a digit-only user GID. An explicit
+`--assignee`, including `--assignee=null`, always overrides it.
+
+`config set` checks the key and value before looking up the repository. For
+an unknown key, the error lists valid keys for the selected configuration layer.
 
 ## Usage
 
@@ -375,7 +379,7 @@ of the story stream and has no continuation.
 
 - `tasks attachments <id>` lists task files and inline images. It defaults to `gid,name,resource_subtype,size,created_at,parent.gid`; `size` may be absent. `--fields=download_url` explicitly selects a signed URL.
 - Reads are bounded: scan cap 100, result cap 20 by default. Use `--all --max=<n>` to return all attachments within the cap.
-- `attachments download <attachment-gid> --out=<path-or-directory>` obtains a fresh URL and saves the file. It refuses to replace an existing file unless `--force` is given. `--json` returns `gid`, absolute `path`, `bytes`, and `content_type`.
+- `attachments download <attachment-gid> --out=<path-or-directory>` obtains a fresh URL and saves the file. It checks an explicit output filename before authentication and returns `already_exists` if it would replace a file without `--force`. For directory output, it checks the final filename after resolving the attachment name. `--json` returns `gid`, absolute `path`, `bytes`, and `content_type`.
 - Attachments on comments are not included.
 - `tasks attach <id> --file=<path> [--name=<name>]` uploads a readable file up to 100 MB. `--json` returns `gid`, `name`, `size`, and `content_type`.
 - Add `--inline` to append an image to the existing rich text description, or `--inline=prepend` to place it first. Inline accepts image MIME types only. The CLI reads the current `html_notes` and uploads before writing the updated description.
@@ -509,12 +513,14 @@ spaces and caps this message at 512 characters.
 | Error code             | Exit | Retryable | Meaning                                                                    |
 | ---------------------- | ---- | --------- | -------------------------------------------------------------------------- |
 | `invalid_usage`        | 2    | No        | Command syntax or input validation failed.                                 |
+| `already_exists`       | 2    | No        | The attachment download would overwrite an existing path.                  |
 | `configuration`        | 2    | No        | Configuration is missing or invalid.                                       |
 | `invalid_state`        | 2    | No        | Current state prevents the requested operation.                            |
 | `authentication`       | 3    | No        | The token is missing or Asana returned HTTP 401.                           |
 | `permission_denied`    | 3    | No        | Asana denied access with HTTP 403.                                         |
 | `api`                  | 4    | No        | An API request failed. Inspect `details` when present.                     |
 | `not_found`            | 4    | No        | The requested resource was not found.                                      |
+| `timeout`              | 4    | No        | The command reached its total network deadline.                            |
 | `network`              | 4    | Yes       | A network failure prevented the request from completing.                   |
 | `invalid_response`     | 4    | No        | The response failed validation.                                            |
 | `outcome_unknown`      | 4    | No        | Asana may have applied a write. Check its effect before retrying.          |
@@ -580,7 +586,17 @@ credentials, or the Asana API.
   exclusive with `--all` and `--offset`. If the cap is reached before the
   source is fully scanned, it fails and returns no data — rerun with a higher
   `--max`.
-- An ambiguous `POST` timeout, network error, or 5xx returns exit 4 with
+- Use `--dry-run` on `tasks create`, `tasks update`, and `tasks attach` to
+  resolve targets and preview the planned changes without writing. The CLI
+  authenticates and reads Asana when resolving targets. JSON previews include
+  `meta.preview: true`. For example, preview a full notes replacement with
+  `asana-cli tasks update 123 --notes-file=notes.md --dry-run --json`.
+- `--timeout <seconds>` sets a single network deadline for the command, with a
+  default of 120 seconds. It covers all stages, retry waits, and signed
+  attachment downloads. Fractional seconds are supported. Each
+  `Retry-After` wait is capped at 10 seconds. Deadline expiry reports
+  `timeout`. If a write was in flight, check its effect before retrying.
+- An ambiguous per-request `POST` timeout, network error, or 5xx returns exit 4 with
   `outcome_unknown`. JSON errors include `retryable: false` and an
   operation-specific `hint`. Check the resulting state in Asana before
   retrying.
