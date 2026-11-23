@@ -1,30 +1,14 @@
 import { Command, CommanderError } from "commander";
 
 import { resolveToken } from "../auth/index.ts";
-import {
-  COMPLETION_SHELLS,
-  isCompletionShell,
-  renderCompletion,
-} from "../completion/index.ts";
 import { withNetworkDeadline } from "../shared/network-deadline.ts";
-import type { ErrorAdvice } from "../shared/errors.ts";
-import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
-import {
-  renderError,
-  renderIdentity,
-  renderJson,
-  renderWorkspaceList,
-} from "../output/index.ts";
+import { commandError, usageError } from "./errors.ts";
+import { renderError } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { renderUpdateNotice } from "../update/index.ts";
 import { acceptsFieldsOptionAtPath } from "./field-selection.ts";
 import { registerAttachmentCommands } from "./attachment-commands.ts";
-import {
-  capabilitiesForProgram,
-  commandPath,
-  isLocalCommand,
-  withCommandCapabilities,
-} from "./capabilities.ts";
+import { commandPath, isLocalCommand } from "./capabilities.ts";
 import { registerConfigCommands } from "./config-commands.ts";
 import type {
   CommandResult,
@@ -35,7 +19,12 @@ import { registerProjectCommands } from "./project-commands.ts";
 import { registerSkillCommands } from "./skill-commands.ts";
 import { terminalColorsEnabled } from "./skill-list-output.ts";
 import { registerTaskCommands } from "./task-commands.ts";
-import { executeWorkspacesList } from "../workspaces/index.ts";
+import {
+  registerCapabilitiesCommand,
+  registerCompletionCommand,
+  registerWhoamiCommand,
+  registerWorkspaceCommands,
+} from "./core-commands.ts";
 
 export type { ExecuteDependencies, Execution } from "./contracts.ts";
 
@@ -58,9 +47,6 @@ const timeoutMilliseconds = (seconds: string | undefined): number => {
   }
   return milliseconds;
 };
-
-const usageError = (message: string, advice?: ErrorAdvice): CommandResult =>
-  commandError("invalid_usage", message, advice);
 
 const requireToken = (
   dependencies: Pick<ExecuteDependencies, "environment">,
@@ -239,37 +225,16 @@ export const execute = async (
     }
   });
 
-  const whoami = program
-    .command("whoami")
-    .description("show the authenticated Asana user")
-    .action(async () => {
-      invokedState.value = true;
-      const token = requireToken(dependencies);
-      if (!token.ok) {
-        stopWith(token.error);
-        return;
-      }
-      const identity = await dependencies.identity.getAuthenticatedUser(
-        token.value,
-      );
-      if (!identity.ok) {
-        result = asanaFailure(identity.error);
-        return;
-      }
-      result = {
-        stdout: json
-          ? renderJson(identity.value)
-          : renderIdentity(identity.value),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
-  withCommandCapabilities(whoami, {
-    operation: "read",
-    requirements: { authentication: "required", configuration: "never" },
-    errors: [...ASANA_ERROR_CODES],
-  });
-  whoami.version(version, "-v, --version");
+  const beginCommand = () => {
+    invokedState.value = true;
+    return { json };
+  };
+  const coreRegistration = { program, beginCommand, complete: stopWith };
+  const authenticatedRegistration = {
+    ...coreRegistration,
+    requireToken: () => requireToken(dependencies),
+  };
+  registerWhoamiCommand(authenticatedRegistration, dependencies, version);
 
   registerConfigCommands({
     program,
@@ -327,10 +292,7 @@ export const execute = async (
   registerAttachmentCommands({
     program,
     dependencies,
-    beginCommand: () => {
-      invokedState.value = true;
-      return { json };
-    },
+    beginCommand,
     complete: stopWith,
     requireToken: () => requireToken(dependencies),
     usageError,
@@ -339,117 +301,9 @@ export const execute = async (
 
   registerProjectCommands(fieldCommandRegistration);
 
-  const workspaces = program
-    .command("workspaces")
-    .description("inspect workspaces");
-  withCommandCapabilities(workspaces, {
-    operation: "read",
-    requirements: { authentication: "required", configuration: "never" },
-  });
-  workspaces.exitOverride();
-  workspaces.configureOutput(captureOutput);
-
-  const workspacesList = workspaces
-    .command("list")
-    .description("list workspaces visible to the authenticated user")
-    .action(async () => {
-      invokedState.value = true;
-
-      const tokenResult = requireToken(dependencies);
-      if (!tokenResult.ok) {
-        stopWith(tokenResult.error);
-        return;
-      }
-
-      if (!dependencies.workspaceReader) {
-        result = commandError("internal_error", "Workspace reader is required");
-        return;
-      }
-
-      const listed = await executeWorkspacesList(tokenResult.value, {
-        reader: dependencies.workspaceReader,
-      });
-      if (!listed.ok) {
-        result = asanaFailure(listed.error);
-        return;
-      }
-
-      result = {
-        stdout: json
-          ? renderJson(listed.value)
-          : renderWorkspaceList(listed.value),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
-  withCommandCapabilities(workspacesList, {
-    operation: "read",
-    requirements: { authentication: "required", configuration: "never" },
-    errors: [...ASANA_ERROR_CODES],
-  });
-
-  workspacesList.exitOverride();
-  workspacesList.configureOutput(captureOutput);
-
-  const completion = program
-    .command("completion")
-    .argument("<shell>", "shell to generate completion for")
-    .description("generate shell completion script")
-    .action((shell: string) => {
-      invokedState.value = true;
-      if (!isCompletionShell(shell)) {
-        result = usageError(
-          `Unsupported shell: ${shell}; expected ${COMPLETION_SHELLS.join(", ")}`,
-          { allowed_values: COMPLETION_SHELLS },
-        );
-        return;
-      }
-      result = {
-        stdout: renderCompletion(program, shell),
-        stderr: "",
-        exitCode: 0,
-      };
-    });
-  withCommandCapabilities(completion, {
-    operation: "local",
-    requirements: { authentication: "never", configuration: "never" },
-    argumentChoices: { shell: COMPLETION_SHELLS },
-  });
-  completion.exitOverride();
-  completion.configureOutput(captureOutput);
-
-  const capabilities = program
-    .command("capabilities")
-    .argument("[path...]", "command or group path to inspect")
-    .description("describe the CLI contract for automation")
-    .action((path: string[]) => {
-      invokedState.value = true;
-      const usage = "asana-cli capabilities [path...] --json";
-      if (!json) {
-        result = usageError("capabilities requires --json", { usage });
-        return;
-      }
-      const document = capabilitiesForProgram(
-        program,
-        version,
-        path.flatMap((part) => part.trim().split(/\s+/)),
-      );
-      result = document
-        ? { stdout: renderJson(document), stderr: "", exitCode: 0 }
-        : usageError(
-            `Unknown command path: ${JSON.stringify(path.join(" "))}`,
-            {
-              usage,
-            },
-          );
-    });
-  withCommandCapabilities(capabilities, {
-    operation: "local",
-    requirements: { authentication: "never", configuration: "never" },
-    options: { json: { required: true } },
-  });
-  capabilities.exitOverride();
-  capabilities.configureOutput(captureOutput);
+  registerWorkspaceCommands(authenticatedRegistration, dependencies);
+  registerCompletionCommand(coreRegistration);
+  registerCapabilitiesCommand(coreRegistration, version);
 
   const configureParser = (command: Command): void => {
     command.exitOverride();
