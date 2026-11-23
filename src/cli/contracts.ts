@@ -1,3 +1,5 @@
+import type { Command } from "commander";
+
 import type {
   MyTaskSectionsDiscoveryGateway,
   MyTasksDiscoveryGateway,
@@ -40,6 +42,12 @@ export type Execution = Readonly<{
 export type CommandResult =
   | Execution
   | Readonly<{ error: CliError; exitCode: number }>;
+
+export type CommandRegistration = Readonly<{
+  program: Command;
+  beginCommand: () => { json: boolean };
+  complete: (execution: CommandResult) => void;
+}>;
 
 export type ExecuteDependencies = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;

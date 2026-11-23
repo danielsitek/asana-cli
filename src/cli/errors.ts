@@ -5,6 +5,7 @@ import {
 import {
   ERROR_CONTRACT,
   type CliError,
+  type ErrorAdvice,
   type ErrorCode,
 } from "../shared/errors.ts";
 import type { WriteOutcomeUnknown } from "../tasks/index.ts";
@@ -21,6 +22,9 @@ export const commandError = (
   const { exit_code, retryable } = ERROR_CONTRACT[code];
   return { error: { code, message, retryable, ...extra }, exitCode: exit_code };
 };
+
+export const usageError = (message: string, advice?: ErrorAdvice) =>
+  commandError("invalid_usage", message, advice);
 
 export const asanaFailure = (
   error: IdentityError<"not_found"> | WriteOutcomeUnknown,
