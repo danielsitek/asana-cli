@@ -127,14 +127,15 @@ describe("attachment commands", () => {
         content_type: "image/png",
       });
       expect(await readFile(out, "utf8")).toBe("binary");
-      expect(
-        (
-          await execute(
-            ["attachments", "download", "7", "--out", out, "--json"],
-            dependencies,
-          )
-        ).exitCode,
-      ).toBe(2);
+      const refused = await execute(
+        ["attachments", "download", "7", "--out", out, "--json"],
+        { environment: {}, identity },
+      );
+      expect(refused.exitCode).toBe(2);
+      expect(JSON.parse(refused.stderr).error).toMatchObject({
+        code: "already_exists",
+        retryable: false,
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ok } from "../shared/result.ts";
-import { downloadAttachment, type FetchAttachment } from "./download.ts";
+import {
+  downloadAttachment as executeDownload,
+  prepareAttachmentDownload,
+  type FetchAttachment,
+} from "./download.ts";
 import type { AttachmentGateway } from "./index.ts";
 
 const directories: string[] = [];
@@ -32,6 +36,20 @@ const reader: AttachmentGateway = {
       name: "../image.png",
       download_url: "https://example.com/signed",
     }),
+};
+
+const downloadAttachment = async (
+  token: string,
+  gid: string,
+  out: string,
+  force: boolean,
+  gateway: AttachmentGateway,
+  fetchBinary?: FetchAttachment,
+) => {
+  const target = await prepareAttachmentDownload(gid, out, force);
+  return target.ok
+    ? executeDownload(token, target.value, gateway, fetchBinary)
+    : target;
 };
 
 describe("attachment download", () => {
@@ -71,9 +89,20 @@ describe("attachment download", () => {
       return new Response("new");
     };
     expect(
-      (await downloadAttachment("secret", "7", out, false, reader, fetchBinary))
-        .ok,
-    ).toBe(false);
+      await downloadAttachment(
+        "secret",
+        "7",
+        out,
+        false,
+        {
+          ...reader,
+          getAttachment: async () => {
+            throw new Error("unexpected metadata request");
+          },
+        },
+        fetchBinary,
+      ),
+    ).toMatchObject({ ok: false, error: { kind: "already_exists" } });
     expect(requests).toBe(0);
     expect(await readFile(out, "utf8")).toBe("old");
     expect(

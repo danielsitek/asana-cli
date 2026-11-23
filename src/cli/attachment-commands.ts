@@ -1,7 +1,11 @@
-import { ASANA_ERROR_CODES, asanaFailure } from "./errors.ts";
+import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import type { Command, OutputConfiguration } from "commander";
 
-import { downloadAttachment } from "../attachments/download.ts";
+import {
+  downloadAttachment,
+  prepareAttachmentDownload,
+  type AttachmentDownloadError,
+} from "../attachments/download.ts";
 import { renderJson } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
@@ -29,6 +33,13 @@ export const registerAttachmentCommands = (
   attachments.exitOverride();
   attachments.configureOutput(context.outputConfiguration);
 
+  const downloadFailure = (error: AttachmentDownloadError) =>
+    error.kind === "invalid_usage"
+      ? context.usageError(error.message)
+      : error.kind === "already_exists"
+        ? commandError(error.kind, error.message)
+        : asanaFailure(error, "Attachment not found");
+
   const download = attachments
     .command("download")
     .argument("<attachment-gid>", "attachment GID")
@@ -42,6 +53,13 @@ export const registerAttachmentCommands = (
         options: Readonly<{ out: string; force?: boolean }>,
       ) => {
         const invocation = context.beginCommand();
+        const prepared = await prepareAttachmentDownload(
+          gid,
+          options.out,
+          options.force === true,
+        );
+        if (!prepared.ok)
+          return context.complete(downloadFailure(prepared.error));
         const token = context.requireToken();
         if (!token.ok) return context.complete(token.error);
         const reader = context.dependencies.attachmentReader;
@@ -51,17 +69,11 @@ export const registerAttachmentCommands = (
           );
         const result = await downloadAttachment(
           token.value,
-          gid,
-          options.out,
-          options.force === true,
+          prepared.value,
           reader,
           context.dependencies.fetchAttachment,
         );
-        if (!result.ok) {
-          if (result.error.kind === "invalid_usage")
-            return context.complete(context.usageError(result.error.message));
-          return context.complete(asanaFailure(result.error));
-        }
+        if (!result.ok) return context.complete(downloadFailure(result.error));
         context.complete({
           stdout: invocation.json
             ? renderJson(result.value)
@@ -74,7 +86,7 @@ export const registerAttachmentCommands = (
   withCommandCapabilities(download, {
     operation: "write",
     requirements: { authentication: "required", configuration: "never" },
-    errors: [...ASANA_ERROR_CODES, "not_found"],
+    errors: [...ASANA_ERROR_CODES, "not_found", "already_exists"],
     markers: { overwrites_local_files: { option: "--force" } },
   });
   download.exitOverride();

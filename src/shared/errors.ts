@@ -1,5 +1,6 @@
 export const ERROR_CONTRACT = {
   invalid_usage: { exit_code: 2, retryable: false },
+  already_exists: { exit_code: 2, retryable: false },
   configuration: { exit_code: 2, retryable: false },
   authentication: { exit_code: 3, retryable: false },
   permission_denied: { exit_code: 3, retryable: false },
