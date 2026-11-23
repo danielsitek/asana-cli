@@ -4,6 +4,7 @@ import {
   executeTaskCreation,
   prepareTaskCreateWithConfig,
 } from "../tasks/index.ts";
+import { previewTaskCreation } from "../tasks/mutation-workflow.ts";
 import { renderJson, renderTaskCreation } from "../output/index.ts";
 import { renderConfigFailure } from "./config-error.ts";
 import type { CommandResult } from "./contracts.ts";
@@ -11,11 +12,11 @@ import {
   internalError,
   myTasksMutationResolverFor,
   renderTaskWorkflowFailure,
+  renderTaskPreview,
   resolveAuthenticatedUserGid,
   taskFileReader,
   taskStdinReader,
   type TaskCommandContext,
-  type TaskInvocation,
   type TaskMutationCliOptions,
 } from "./task-command-context.ts";
 import { withTaskMutationOptions } from "./task-mutation-options.ts";
@@ -46,7 +47,6 @@ const taskCreationDependencies = (
     needsMyTasks,
   );
   return {
-    creator: dependencies.taskCreator!,
     ...(dependencies.taskWriter ? { writer: dependencies.taskWriter } : {}),
     ...(myTasksMutationResolver ? { myTasksMutationResolver } : {}),
     resolveAuthenticatedUserGid: (token: string) =>
@@ -56,28 +56,18 @@ const taskCreationDependencies = (
   };
 };
 
-const prepareTaskCreation = async (
-  context: TaskCommandContext,
-  options: TaskMutationCliOptions &
-    Readonly<{ parent?: string; project?: string }>,
-  invocation: TaskInvocation,
-) =>
-  prepareTaskCreateWithConfig(
-    {
-      ...options,
-      ...(options.customField ? { customFields: options.customField } : {}),
-    },
-    () => resolveCreationDefaults(context),
-    invocation.fields,
-  );
-
 const runTaskCreate = async (
   context: TaskCommandContext,
   options: TaskMutationCliOptions &
     Readonly<{ parent?: string; project?: string }>,
 ): Promise<CommandResult> => {
   const invocation = context.beginCommand();
-  const prepared = await prepareTaskCreation(context, options, invocation);
+  const { dryRun, customField, ...mutation } = options;
+  const prepared = await prepareTaskCreateWithConfig(
+    { ...mutation, ...(customField ? { customFields: customField } : {}) },
+    () => resolveCreationDefaults(context),
+    invocation.fields,
+  );
   if (!prepared.ok) {
     return prepared.error.kind === "configuration"
       ? renderConfigFailure(prepared.error)
@@ -85,17 +75,30 @@ const runTaskCreate = async (
   }
   const token = context.requireToken();
   if (!token.ok) return token.error;
-  if (!context.dependencies.taskCreator) {
-    return internalError("Task creator is required");
-  }
   const needsMyTasks =
     prepared.value.mySection !== undefined ||
     prepared.value.customFields.length > 0;
-  const created = await executeTaskCreation(
-    token.value,
-    prepared.value,
-    taskCreationDependencies(context, needsMyTasks),
-  );
+  const dependencies = taskCreationDependencies(context, needsMyTasks);
+  if (dryRun) {
+    const reader = context.dependencies.taskTargetReader;
+    if (!reader) return internalError("Task target reader is required");
+    return renderTaskPreview(
+      invocation.json,
+      await previewTaskCreation(
+        token.value,
+        prepared.value,
+        dependencies,
+        reader,
+      ),
+      context.usageError,
+    );
+  }
+  const creator = context.dependencies.taskCreator;
+  if (!creator) return internalError("Task creator is required");
+  const created = await executeTaskCreation(token.value, prepared.value, {
+    ...dependencies,
+    creator,
+  });
   if (!created.ok) {
     return renderTaskWorkflowFailure(created.error, context.usageError);
   }

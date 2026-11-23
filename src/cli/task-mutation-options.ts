@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 export const withTaskMutationOptions = (command: Command): Command =>
   command
+    .option("--dry-run", "preview the resolved changes without writing")
     .option("--name <text>", "set the task name")
     .option("--notes <text>", "replace task notes")
     .option("--notes-file <path>", "replace notes from a file or stdin with -")

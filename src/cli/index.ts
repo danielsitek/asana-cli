@@ -494,6 +494,11 @@ export const execute = async (
       ? usageError("Command did not complete")
       : usageError("A command is required"));
   const formatted = formatCommandResult(execution, json, activeCommand);
-  if (json || isLocalCommand(activeCommand)) return formatted;
+  if (
+    json ||
+    isLocalCommand(activeCommand) ||
+    activeCommand.opts().dryRun === true
+  )
+    return formatted;
   return appendUpdateNotice(formatted, dependencies);
 };

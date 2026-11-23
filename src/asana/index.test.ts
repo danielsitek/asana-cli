@@ -15,6 +15,109 @@ const serverFor = (
   return `http://127.0.0.1:${server.port}/api/1.0`;
 };
 
+describe("CLI task dry runs", () => {
+  test.each([
+    {
+      args: ["create", "--name=New task", "--section=456", "--assignee=me"],
+      paths: ["users/me", "sections/456"],
+      data: {
+        target: { kind: "section", sectionGid: "456", projectGid: "789" },
+        stages: [
+          { stage: "create", mutation: { name: "New task" } },
+          { stage: "assignee", mutation: { assignee: "321" } },
+        ],
+      },
+    },
+    {
+      args: ["update", "123", "--notes-file=-"],
+      paths: ["tasks/123"],
+      data: { task_gid: "123", mutation: { notes: "Replacement text" } },
+    },
+    {
+      args: ["update", "123", "--parent=456"],
+      paths: ["tasks/123", "tasks/456"],
+      data: { task_gid: "123", mutation: { parent: "456" } },
+    },
+    {
+      args: ["update", "123", "--section=456"],
+      paths: ["tasks/123", "sections/456"],
+      data: {
+        task_gid: "123",
+        target: { kind: "section", sectionGid: "456", projectGid: "789" },
+      },
+    },
+    {
+      args: ["attach", "123", `--file=${import.meta.path}`],
+      paths: ["tasks/123"],
+      data: {
+        task_gid: "123",
+        file: {
+          name: "index.test.ts",
+          size: expect.any(Number),
+          content_type: expect.any(String),
+        },
+      },
+    },
+  ])("resolves $args using reads only", async ({ args, paths, data }) => {
+    const requests: string[] = [];
+    const baseUrl = serverFor((request) => {
+      const path = new URL(request.url).pathname.replace("/api/1.0/", "");
+      requests.push(`${request.method} ${path}`);
+      return Response.json({
+        data:
+          path === "sections/456"
+            ? { project: { gid: "789" } }
+            : path === "users/me"
+              ? { gid: "321", name: "Ada" }
+              : { gid: path.split("/").at(-1) },
+      });
+    });
+    const client = new AsanaHttpClient({ baseUrl });
+    const result = await execute(["tasks", ...args, "--dry-run", "--json"], {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity: client,
+      taskReader: client,
+      taskTargetReader: client,
+      readStdin: async () => "Replacement text",
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      data,
+      meta: { preview: true },
+    });
+    expect(requests).toEqual(paths.map((path) => `GET ${path}`));
+  });
+
+  test("validates required mutations and reports missing targets", async () => {
+    let requests = 0;
+    const client = new AsanaHttpClient({
+      baseUrl: serverFor(() => {
+        requests++;
+        return new Response(null, { status: 404 });
+      }),
+    });
+    const dependencies = {
+      environment: { ASANA_CLI_TOKEN: "token" },
+      identity: client,
+      taskReader: client,
+    };
+    const invalid = await execute(
+      ["tasks", "update", "123", "--dry-run", "--json"],
+      dependencies,
+    );
+    expect(JSON.parse(invalid.stderr).error.code).toBe("invalid_usage");
+    expect(requests).toBe(0);
+    const missing = await execute(
+      ["tasks", "update", "123", "--name=Name", "--dry-run", "--json"],
+      dependencies,
+    );
+    expect(JSON.parse(missing.stderr).error.code).toBe("not_found");
+    expect(requests).toBe(1);
+  });
+});
+
 describe("CLI reporting for ambiguous Asana writes", () => {
   test.each([
     {

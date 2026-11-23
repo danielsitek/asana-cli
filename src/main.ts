@@ -20,6 +20,7 @@ const result = await execute(Bun.argv.slice(2), {
   stdoutIsTTY: process.stdout.isTTY === true,
   identity: client,
   taskReader: client,
+  taskTargetReader: client,
   taskCreator: client,
   taskWriter: client,
   taskParentWriter: client,

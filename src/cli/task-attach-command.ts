@@ -3,17 +3,20 @@ import {
   executeAttachmentUpload,
   MAX_ATTACHMENT_BYTES,
   prepareAttachmentUpload,
+  previewAttachmentUpload,
 } from "../attachments/upload.ts";
 import { renderJson, renderTaskDetail } from "../output/index.ts";
 import type { CommandResult } from "./contracts.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import {
   internalError,
+  renderTaskPreview,
   type TaskCommandContext,
 } from "./task-command-context.ts";
 
 type Options = Readonly<{
   file: string;
+  dryRun?: boolean;
   name?: string;
   inline?: string | boolean;
 }>;
@@ -34,6 +37,14 @@ const runTaskAttach = async (
   if (!token.ok) return token.error;
   const writer = context.dependencies.attachmentWriter;
   const reader = context.dependencies.taskReader;
+  if (options.dryRun) {
+    if (!reader) return internalError("Task reader is required");
+    return renderTaskPreview(
+      invocation.json,
+      await previewAttachmentUpload(token.value, prepared.value, reader),
+      context.usageError,
+    );
+  }
   if (!writer) return internalError("Attachment writer is required");
   const attached = await executeAttachmentUpload(
     token.value,
@@ -80,6 +91,7 @@ export const registerTaskAttachCommand = (
       "upload a file to a task and optionally insert an inline image",
     )
     .requiredOption("--file <path>", "local file to upload")
+    .option("--dry-run", "preview the upload without writing")
     .option("--name <name>", "attachment filename")
     .option(
       "--inline [position]",
