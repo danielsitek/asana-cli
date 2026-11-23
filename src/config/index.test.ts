@@ -446,6 +446,30 @@ describe("configuration writes", () => {
     if (resolved.ok) expect(resolved.value.value.defaultAssignee).toBe("123");
   });
 
+  test("validates keys and values outside a repository", async () => {
+    const root = await temporaryDirectory();
+    const configuration = context(root, join(root, "home"));
+    const unknown = await setConfigValue(configuration, "network.nope", "1");
+    expect(unknown).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("network.maxRetries") },
+    });
+    const invalid = await setConfigValue(configuration, "workspace.gid", "bad");
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("must be a digit-only GID") },
+    });
+    const local = await setConfigValue(
+      configuration,
+      "myTasks.sections.review",
+      "123",
+    );
+    expect(local).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("git repository") },
+    });
+  });
+
   test("rejects invalid defaultAssignee values without writing", async () => {
     const root = await temporaryDirectory();
     const home = join(root, "home");

@@ -397,6 +397,18 @@ const configWriteLayer = (
     ? "local"
     : "shared");
 
+const configKeyPaths = (schema: z.core.$ZodType): string[] => {
+  if (schema instanceof z.ZodOptional) return configKeyPaths(schema.unwrap());
+  if (schema instanceof z.ZodRecord) return ["<alias>"];
+  if (!(schema instanceof z.ZodObject)) return [];
+  return Object.entries(schema.shape as Record<string, z.ZodType>).flatMap(
+    ([key, value]) => [
+      key,
+      ...configKeyPaths(value).map((child) => `${key}.${child}`),
+    ],
+  );
+};
+
 export const setConfigValue = async (
   context: ConfigContext,
   key: string,
@@ -404,13 +416,38 @@ export const setConfigValue = async (
   requestedLayer?: ConfigLayer,
 ): Promise<Result<ConfigSource, ConfigError>> => {
   const segments = pathSegments(key);
-  if (!segments.ok) return segments;
-  const layer = configWriteLayer(segments.value, requestedLayer);
+  const layer = configWriteLayer(key.split("."), requestedLayer);
+  const schema = schemaForLayer(layer);
+  const allowed = configKeyPaths(schema);
+  const supported =
+    segments.ok &&
+    allowed.some((path) => {
+      const parts = path.split(".");
+      return (
+        parts.length === segments.value.length &&
+        parts.every(
+          (part, index) => part === "<alias>" || part === segments.value[index],
+        )
+      );
+    });
+  if (!segments.ok || !supported) {
+    return err({
+      kind: "configuration",
+      message: `${key}: invalid configuration key for ${layer}; allowed keys: ${allowed.join(", ")}`,
+    });
+  }
+  const validated = selectValidConfigMutation(
+    "config set",
+    {},
+    segments.value,
+    value,
+    schema,
+  );
+  if (!validated.ok) return validated;
   const resolvedConfig = await resolveConfig(context);
   if (!resolvedConfig.ok) return resolvedConfig;
   const path = targetPath(resolvedConfig.value, layer);
   if (!path.ok) return path;
-  const schema = schemaForLayer(layer);
   const existing = await readLayer(path.value, schema);
   if (!existing.ok) return existing;
   const updated = selectValidConfigMutation(
