@@ -309,7 +309,7 @@ export const execute = async (
     complete: stopWith,
   });
 
-  registerTaskCommands({
+  const fieldCommandRegistration = {
     program,
     dependencies,
     beginCommand: () => {
@@ -321,7 +321,8 @@ export const execute = async (
     requireToken: () => requireToken(dependencies),
     usageError,
     outputConfiguration: captureOutput,
-  });
+  };
+  registerTaskCommands(fieldCommandRegistration);
 
   registerAttachmentCommands({
     program,
@@ -336,19 +337,7 @@ export const execute = async (
     outputConfiguration: captureOutput,
   });
 
-  registerProjectCommands({
-    program,
-    dependencies,
-    beginCommand: () => {
-      invokedState.value = true;
-      const fields = program.opts<{ fields?: string }>().fields;
-      return { json, ...(fields === undefined ? {} : { fields }) };
-    },
-    complete: stopWith,
-    requireToken: () => requireToken(dependencies),
-    usageError,
-    outputConfiguration: captureOutput,
-  });
+  registerProjectCommands(fieldCommandRegistration);
 
   const workspaces = program
     .command("workspaces")
