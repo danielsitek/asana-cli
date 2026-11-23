@@ -11,9 +11,11 @@ export type IdentityError<Kind extends string = never> = Readonly<{
     | "api"
     | "rate_limit"
     | "network"
+    | "timeout"
     | "invalid_response";
   message: string;
   status?: number;
+  hint?: string;
   asanaMessage?: string;
 }>;
 
@@ -28,5 +30,6 @@ export const ASANA_FAILURE_MESSAGES: Record<IdentityError["kind"], string> = {
   rate_limit: "Asana request retries exhausted",
   upstream_unavailable: "Asana is temporarily unavailable",
   network: "Unable to reach Asana",
+  timeout: "Command network deadline exceeded",
   invalid_response: "Asana returned an invalid response",
 };

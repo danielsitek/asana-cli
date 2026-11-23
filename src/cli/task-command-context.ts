@@ -5,6 +5,7 @@ import {
   createMySectionResolver,
   createMyTasksMutationResolver,
 } from "../my-tasks/index.ts";
+import { renderJson } from "../output/index.ts";
 import type { Result } from "../shared/result.ts";
 import type { TaskUpdateError } from "../tasks/index.ts";
 import type { ErrorAdvice } from "../shared/errors.ts";
@@ -16,6 +17,7 @@ export type TaskCommandDependencies = Pick<
   ExecuteDependencies,
   | "identity"
   | "taskReader"
+  | "taskTargetReader"
   | "taskCreator"
   | "taskWriter"
   | "taskParentWriter"
@@ -60,6 +62,7 @@ export type TaskCommandRegistration = Readonly<{
 }>;
 
 export type TaskMutationCliOptions = Readonly<{
+  dryRun?: boolean;
   name?: string;
   notes?: string;
   notesFile?: string;
@@ -81,6 +84,23 @@ export const renderTaskWorkflowFailure = (
   if (error.kind !== "internal_error") return asanaFailure(error);
   return internalError(error.message);
 };
+
+export const renderTaskPreview = (
+  json: boolean,
+  result: Result<unknown, TaskUpdateError>,
+  usageError: TaskCommandContext["usageError"],
+): CommandResult =>
+  result.ok
+    ? {
+        stdout: json
+          ? renderJson(result.value, { preview: true })
+          : `Dry-run preview
+${JSON.stringify(result.value, null, 2)}
+`,
+        stderr: "",
+        exitCode: 0,
+      }
+    : renderTaskWorkflowFailure(result.error, usageError);
 
 export const internalError = (message: string): CommandResult =>
   commandError("internal_error", message);

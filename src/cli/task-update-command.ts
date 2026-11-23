@@ -6,6 +6,10 @@ import {
   prepareTaskUpdate,
   type TaskUpdateOptions,
 } from "../tasks/index.ts";
+import {
+  previewTaskParentUpdate,
+  previewTaskUpdate,
+} from "../tasks/mutation-workflow.ts";
 import { renderJson, renderTaskUpdate } from "../output/index.ts";
 import type { CommandResult } from "./contracts.ts";
 import { shellTextSafetyHelp } from "./shell-text-help.ts";
@@ -13,6 +17,7 @@ import {
   internalError,
   myTasksMutationResolverFor,
   renderTaskWorkflowFailure,
+  renderTaskPreview,
   resolveAuthenticatedUserGid,
   taskFileReader,
   taskStdinReader,
@@ -39,13 +44,23 @@ const renderUpdatedTask = (
 const runTaskParentUpdate = async (
   context: TaskCommandContext,
   idArg: string,
-  options: TaskUpdateOptions & Readonly<{ parent: string }>,
+  options: TaskUpdateOptions & Readonly<{ parent: string; dryRun?: boolean }>,
   invocation: TaskInvocation,
 ): Promise<CommandResult> => {
-  const prepared = prepareTaskParentUpdate(idArg, options, invocation.fields);
+  const { dryRun, ...mutation } = options;
+  const prepared = prepareTaskParentUpdate(idArg, mutation, invocation.fields);
   if (!prepared.ok) return context.usageError(prepared.error.message);
   const token = context.requireToken();
   if (!token.ok) return token.error;
+  if (dryRun) {
+    const reader = context.dependencies.taskReader;
+    if (!reader) return internalError("Task reader is required");
+    return renderTaskPreview(
+      invocation.json,
+      await previewTaskParentUpdate(token.value, prepared.value, reader),
+      context.usageError,
+    );
+  }
   const writer = context.dependencies.taskParentWriter;
   if (!writer) return internalError("Task parent writer is required");
   const updated = await executeTaskParentUpdate(token.value, prepared.value, {
@@ -71,7 +86,6 @@ const taskUpdateDependencies = (
     needsMyTasks,
   );
   return {
-    writer: dependencies.taskWriter!,
     ...(dependencies.taskSectionWriter
       ? { sectionWriter: dependencies.taskSectionWriter }
       : {}),
@@ -102,7 +116,7 @@ const runTaskUpdate = async (
   options: TaskMutationCliOptions,
   invocation: TaskInvocation,
 ): Promise<CommandResult> => {
-  const { customField, ...rest } = options;
+  const { customField, dryRun, ...rest } = options;
   const prepared = prepareTaskUpdate(
     idArg,
     { ...rest, ...(customField ? { customFields: customField } : {}) },
@@ -111,20 +125,38 @@ const runTaskUpdate = async (
   if (!prepared.ok) return context.usageError(prepared.error.message);
   const token = context.requireToken();
   if (!token.ok) return token.error;
-  if (!context.dependencies.taskWriter) {
-    return internalError("Task writer is required");
-  }
   const needsMyTasks =
     prepared.value.mySection !== undefined ||
     prepared.value.customFields.length > 0;
   const needsProjectFields = prepared.value.customFields.some(
     (field) => field.field.kind === "gid",
   );
-  const updated = await executeTaskUpdate(
-    token.value,
-    prepared.value,
-    taskUpdateDependencies(context, needsMyTasks, needsProjectFields),
+  const dependencies = taskUpdateDependencies(
+    context,
+    needsMyTasks,
+    needsProjectFields,
   );
+  if (dryRun) {
+    const reader = context.dependencies.taskReader;
+    if (!reader) return internalError("Task reader is required");
+    return renderTaskPreview(
+      invocation.json,
+      await previewTaskUpdate(
+        token.value,
+        prepared.value,
+        dependencies,
+        reader,
+        context.dependencies.taskTargetReader,
+      ),
+      context.usageError,
+    );
+  }
+  const writer = context.dependencies.taskWriter;
+  if (!writer) return internalError("Task writer is required");
+  const updated = await executeTaskUpdate(token.value, prepared.value, {
+    ...dependencies,
+    writer,
+  });
   return updated.ok
     ? renderUpdatedTask(
         invocation.json,

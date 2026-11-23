@@ -4,6 +4,9 @@ import type {
   PreparedCustomField,
   PreparedTaskCreate,
   PreparedTaskUpdate,
+  PreparedTaskParentUpdate,
+  TaskGateway,
+  TaskTargetReader,
   ResourceSelector,
   Task,
   TaskCreationDependencies,
@@ -324,11 +327,19 @@ const applyCreationStages = async (
   return { task, stages, complete: !stopped };
 };
 
-export const executeTaskCreation = async (
+const planTaskCreation = async (
   token: string,
   prepared: PreparedTaskCreate,
-  dependencies: TaskCreationDependencies,
-): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
+  dependencies: TaskMaterializationDependencies,
+): Promise<
+  Result<
+    {
+      createMutation: TaskMutation;
+      requestedStages: readonly RequestedCreationStage[];
+    },
+    TaskUpdateError
+  >
+> => {
   const materialized = await materializeTaskMutation(
     token,
     { ...prepared, workflow: "creation" },
@@ -340,6 +351,39 @@ export const executeTaskCreation = async (
     materialized.value,
   );
   const requestedStages = buildRequestedCreationStages(materialized.value);
+  return ok({ createMutation, requestedStages });
+};
+
+export const previewTaskCreation = async (
+  token: string,
+  prepared: PreparedTaskCreate,
+  dependencies: TaskMaterializationDependencies,
+  reader: TaskTargetReader,
+) => {
+  const plan = await planTaskCreation(token, prepared, dependencies);
+  if (!plan.ok) return plan;
+  const target = await reader.inspectTaskTarget(token, prepared.target);
+  if (!target.ok) return target;
+  const { createMutation, requestedStages } = plan.value;
+  return ok({
+    target: target.value,
+    stages: [
+      { stage: "create", mutation: createMutation },
+      ...requestedStages.flatMap(([stage, mutation]) =>
+        mutation === undefined ? [] : [{ stage, mutation }],
+      ),
+    ],
+  });
+};
+
+export const executeTaskCreation = async (
+  token: string,
+  prepared: PreparedTaskCreate,
+  dependencies: TaskCreationDependencies,
+): Promise<Result<TaskCreationResult, TaskUpdateError>> => {
+  const plan = await planTaskCreation(token, prepared, dependencies);
+  if (!plan.ok) return plan;
+  const { createMutation, requestedStages } = plan.value;
   const validWriter = validateCreationWriter(
     requestedStages,
     dependencies.writer,
@@ -455,6 +499,62 @@ const applyTaskUpdate = async (
     prepared.fields,
   );
   return updated.ok ? ok({ task: updated.value, applied }) : updated;
+};
+
+export const previewTaskParentUpdate = async (
+  token: string,
+  prepared: PreparedTaskParentUpdate,
+  reader: TaskGateway,
+) => {
+  const task = await reader.getTask(token, prepared.taskId, ["gid"]);
+  if (!task.ok) return task;
+  if (prepared.parentId !== null) {
+    const parent = await reader.getTask(token, prepared.parentId, ["gid"]);
+    if (!parent.ok) return parent;
+  }
+  return ok({
+    task_gid: prepared.taskId,
+    mutation: { parent: prepared.parentId },
+  });
+};
+
+export const previewTaskUpdate = async (
+  token: string,
+  prepared: PreparedTaskUpdate,
+  dependencies: TaskMaterializationDependencies,
+  reader: TaskGateway,
+  targetReader: TaskTargetReader | undefined,
+) => {
+  const materialized = await materializeTaskMutation(
+    token,
+    { ...prepared, workflow: "update" },
+    dependencies,
+  );
+  if (!materialized.ok) return materialized;
+  const task = await reader.getTask(token, prepared.taskId, ["gid"]);
+  if (!task.ok) return task;
+
+  const { projectGid, sectionGid } = prepared;
+  if (projectGid !== undefined || sectionGid !== undefined) {
+    if (!targetReader) {
+      return err({
+        kind: "internal_error" as const,
+        message: "Task target reader is required",
+      });
+    }
+    const target = await targetReader.inspectTaskTarget(
+      token,
+      sectionGid !== undefined
+        ? { kind: "section", sectionGid }
+        : { kind: "project", projectGid: projectGid! },
+    );
+    if (!target.ok) return target;
+    return ok({ task_gid: prepared.taskId, target: target.value });
+  }
+  return ok({
+    task_gid: prepared.taskId,
+    mutation: orderMutation(materialized.value),
+  });
 };
 
 export const executeTaskUpdate = async (

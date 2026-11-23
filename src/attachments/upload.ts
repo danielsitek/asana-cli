@@ -156,7 +156,12 @@ const readInlineNotes = async (
   token: string,
   prepared: PreparedUpload,
   reader: TaskGateway | undefined,
-): Promise<Result<string | undefined, AttachmentUploadError>> => {
+): Promise<
+  Result<
+    string | undefined,
+    TaskReadError | Readonly<{ kind: "internal_error"; message: string }>
+  >
+> => {
   if (!prepared.inline) return ok(undefined);
   if (!reader)
     return err({
@@ -177,6 +182,26 @@ const readInlineNotes = async (
     prepared.inline,
   );
   return checked.ok ? ok(task.value.html_notes) : checked;
+};
+
+export const previewAttachmentUpload = async (
+  token: string,
+  prepared: PreparedUpload,
+  reader: TaskGateway,
+) => {
+  const checked = prepared.inline
+    ? await readInlineNotes(token, prepared, reader)
+    : await reader.getTask(token, prepared.taskId, ["gid"]);
+  if (!checked.ok) return checked;
+  return ok({
+    task_gid: prepared.taskId,
+    file: {
+      name: prepared.name,
+      size: prepared.bytes.byteLength,
+      content_type: prepared.contentType,
+    },
+    ...(prepared.inline === undefined ? {} : { inline: prepared.inline }),
+  });
 };
 
 export const executeAttachmentUpload = async (

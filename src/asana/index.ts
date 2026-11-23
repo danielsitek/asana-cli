@@ -46,6 +46,7 @@ import {
   type TaskMutationGateway,
   type TaskParentMutationGateway,
   type TaskReadError,
+  type ResolvedTaskCreationTarget,
   type TaskWriteError,
   type WriteOutcomeUnknown,
 } from "../tasks/index.ts";
@@ -204,10 +205,6 @@ const mutationFieldSelection = (
     fields: selected,
   };
 };
-
-type ResolvedTaskCreationTarget =
-  | Exclude<TaskCreationTarget, { kind: "section" }>
-  | Readonly<{ kind: "section"; sectionGid: string; projectGid: string }>;
 
 const validateTaskCreationTargetGid = (
   target: TaskCreationTarget,
@@ -1217,27 +1214,61 @@ export class AsanaHttpClient
       : err(mapTaskReadError(added.error, "Task or project not found"));
   }
 
+  async inspectTaskTarget(
+    token: string,
+    target: TaskCreationTarget,
+  ): Promise<Result<ResolvedTaskCreationTarget, TaskReadError>> {
+    const resolved = await this.#resolveTaskCreationTarget(token, target);
+    if (!resolved.ok || resolved.value.kind === "section") return resolved;
+    const { value } = resolved;
+    const fields = ["gid"];
+    if (value.kind === "subtask") {
+      const parent = await this.getTask(token, value.parentId, fields);
+      return parent.ok ? resolved : parent;
+    }
+    if (value.kind === "project") {
+      const project = await this.getProject({
+        token,
+        projectGid: value.projectGid,
+        fields,
+      });
+      return project.ok ? resolved : project;
+    }
+    const workspace = await this.#request(
+      token,
+      `workspaces/${value.workspaceGid}`,
+      { method: "GET", searchParams: { opt_fields: "gid" } },
+      z.object({ data: z.object({ gid: z.string().regex(/^\d+$/) }) }),
+    );
+    return workspace.ok
+      ? resolved
+      : err(mapTaskReadError(workspace.error, "Workspace not found"));
+  }
+
+  async #resolveTaskCreationTarget(
+    token: string,
+    target: TaskCreationTarget,
+  ): Promise<Result<ResolvedTaskCreationTarget, TaskReadError>> {
+    const validated = validateTaskCreationTargetGid(target);
+    if (!validated.ok) return validated;
+    if (target.kind !== "section") return ok(target);
+    const project = await this.#sectionProjectGid(token, target.sectionGid);
+    return project.ok ? ok({ ...target, projectGid: project.value }) : project;
+  }
+
   async createTask(
     token: string,
     target: TaskCreationTarget,
     mutation: TaskMutation,
     fields?: readonly string[],
   ): Promise<Result<Task & Readonly<{ gid: string }>, TaskWriteError>> {
-    const validated = validateTaskCreationTargetGid(target);
-    if (!validated.ok) return validated;
-
-    let resolvedTarget: ResolvedTaskCreationTarget;
-    if (target.kind === "section") {
-      const sectionProject = await this.#sectionProjectGid(
-        token,
-        target.sectionGid,
-      );
-      if (!sectionProject.ok) return sectionProject;
-      resolvedTarget = { ...target, projectGid: sectionProject.value };
-    } else {
-      resolvedTarget = target;
-    }
-    const planned = planTaskCreationWrite(resolvedTarget, mutation, fields);
+    const resolvedTarget = await this.#resolveTaskCreationTarget(token, target);
+    if (!resolvedTarget.ok) return resolvedTarget;
+    const planned = planTaskCreationWrite(
+      resolvedTarget.value,
+      mutation,
+      fields,
+    );
     const result = await this.#transport.request(
       token,
       planned.path,

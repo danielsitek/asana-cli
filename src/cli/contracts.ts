@@ -20,6 +20,7 @@ import type {
 import type {
   TaskCreationGateway,
   TaskGateway,
+  TaskTargetReader,
   TaskListGateway,
   TaskMutationGateway,
   TaskParentMutationGateway,
@@ -45,6 +46,7 @@ export type ExecuteDependencies = Readonly<{
   stdoutIsTTY?: boolean;
   identity: IdentityGateway;
   taskReader?: TaskGateway;
+  taskTargetReader?: TaskTargetReader;
   taskCreator?: TaskCreationGateway;
   taskWriter?: TaskMutationGateway;
   taskParentWriter?: TaskParentMutationGateway;

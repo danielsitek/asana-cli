@@ -6,6 +6,7 @@ import {
   isCompletionShell,
   renderCompletion,
 } from "../completion/index.ts";
+import { withNetworkDeadline } from "../shared/network-deadline.ts";
 import type { ErrorAdvice } from "../shared/errors.ts";
 import { ASANA_ERROR_CODES, asanaFailure, commandError } from "./errors.ts";
 import {
@@ -37,6 +38,26 @@ import { registerTaskCommands } from "./task-commands.ts";
 import { executeWorkspacesList } from "../workspaces/index.ts";
 
 export type { ExecuteDependencies, Execution } from "./contracts.ts";
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+const timeoutMilliseconds = (seconds: string | undefined): number => {
+  if (seconds === undefined) return DEFAULT_TIMEOUT_MS;
+  const milliseconds = Math.ceil(Number(seconds) * 1000);
+  if (
+    !/^\d+(?:\.\d+)?$/.test(seconds) ||
+    milliseconds < 1 ||
+    milliseconds > MAX_TIMEOUT_MS
+  ) {
+    throw new CommanderError(
+      2,
+      "commander.invalidTimeout",
+      "--timeout must be a positive number of seconds within the supported timer range",
+    );
+  }
+  return milliseconds;
+};
 
 const usageError = (message: string, advice?: ErrorAdvice): CommandResult =>
   commandError("invalid_usage", message, advice);
@@ -119,11 +140,16 @@ function* helpPathArguments(argv: readonly string[]): Iterable<string> {
       yield* args;
       return;
     }
-    if (arg === "--fields") {
+    if (arg === "--fields" || arg === "--timeout") {
       args.next();
       continue;
     }
-    if (arg !== "--json" && !arg.startsWith("--fields=")) yield arg;
+    if (
+      arg !== "--json" &&
+      !arg.startsWith("--fields=") &&
+      !arg.startsWith("--timeout=")
+    )
+      yield arg;
   }
 }
 
@@ -162,6 +188,8 @@ export const execute = async (
     .version(dependencies.version ?? "0.13.0", "-v, --version");
   const version = dependencies.version ?? "0.13.0";
   let json = false;
+  const deadline = new AbortController();
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const invokedState = { value: false };
   let result: CommandResult | undefined;
   let activeCommand = program;
@@ -183,11 +211,20 @@ export const execute = async (
   };
 
   program.option("--json", "output JSON");
+  program.option(
+    "--timeout <seconds>",
+    "total network deadline in seconds (default: 120)",
+  );
   program.option("--fields <fields>", "select explicit Asana fields");
 
   program.hook("preAction", (thisCommand, actionCommand) => {
     activeCommand = actionCommand;
-    json = program.opts<{ json?: boolean }>().json ?? false;
+    const options = program.opts<{ json?: boolean; timeout?: string }>();
+    json = options.json ?? false;
+    deadlineTimer = setTimeout(
+      () => deadline.abort(),
+      timeoutMilliseconds(options.timeout),
+    );
     if (thisCommand.opts<{ fields?: string }>().fields !== undefined) {
       const commandPath = [actionCommand.parent?.name(), actionCommand.name()]
         .filter((part): part is string => part !== undefined)
@@ -444,9 +481,11 @@ export const execute = async (
     // Commander's implicit help accepts only one command name.
     showHelpCommand(program, argv);
     const effectiveArgv = argv.length === 0 ? ["--help"] : argv;
-    await program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
-      from: "node",
-    });
+    await withNetworkDeadline(deadline.signal, () =>
+      program.parseAsync(["bun", "asana-cli", ...effectiveArgv], {
+        from: "node",
+      }),
+    );
   } catch (error) {
     if (error instanceof CommanderError) {
       if (
@@ -462,7 +501,10 @@ export const execute = async (
           exitCode: 0,
         };
       }
-      if (error.code === "commander.fieldsNotSupported") {
+      if (
+        error.code === "commander.fieldsNotSupported" ||
+        error.code === "commander.invalidTimeout"
+      ) {
         return formatCommandResult(
           usageError(error.message),
           json,
@@ -487,6 +529,8 @@ export const execute = async (
       json,
       activeCommand,
     );
+  } finally {
+    clearTimeout(deadlineTimer);
   }
   const execution =
     result ??
@@ -494,6 +538,12 @@ export const execute = async (
       ? usageError("Command did not complete")
       : usageError("A command is required"));
   const formatted = formatCommandResult(execution, json, activeCommand);
-  if (json || isLocalCommand(activeCommand)) return formatted;
+  if (
+    json ||
+    isLocalCommand(activeCommand) ||
+    activeCommand.opts().dryRun === true ||
+    program.opts().timeout !== undefined
+  )
+    return formatted;
   return appendUpdateNotice(formatted, dependencies);
 };

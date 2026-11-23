@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AttachmentGateway } from "../attachments/index.ts";
@@ -127,14 +134,62 @@ describe("attachment commands", () => {
         content_type: "image/png",
       });
       expect(await readFile(out, "utf8")).toBe("binary");
-      expect(
-        (
-          await execute(
-            ["attachments", "download", "7", "--out", out, "--json"],
-            dependencies,
-          )
-        ).exitCode,
-      ).toBe(2);
+      const refused = await execute(
+        ["attachments", "download", "7", "--out", out, "--json"],
+        { environment: {}, identity },
+      );
+      expect(refused.exitCode).toBe(2);
+      expect(JSON.parse(refused.stderr).error).toMatchObject({
+        code: "already_exists",
+        retryable: false,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("times out a signed download and leaves the existing file intact", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asana-cli-cli-download-"));
+    try {
+      const out = join(directory, "image.png");
+      await writeFile(out, "original");
+      const result = await execute(
+        [
+          "attachments",
+          "download",
+          "7",
+          "--out",
+          out,
+          "--force",
+          "--timeout=0.1",
+          "--json",
+        ],
+        {
+          environment: { ASANA_CLI_TOKEN: "secret" },
+          identity,
+          attachmentReader,
+          fetchAttachment: async (_url, init) => {
+            const signal = init?.signal;
+            expect(signal).toBeDefined();
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode("replacement"));
+                  signal!.addEventListener(
+                    "abort",
+                    () => controller.error(signal!.reason),
+                    { once: true },
+                  );
+                },
+              }),
+            );
+          },
+        },
+      );
+      expect(result.exitCode).toBe(4);
+      expect(JSON.parse(result.stderr).error.code).toBe("timeout");
+      expect(await readFile(out, "utf8")).toBe("original");
+      expect(await readdir(directory)).toEqual(["image.png"]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -1108,10 +1163,10 @@ describe("execute", () => {
       "'tasks') candidates='get update create comments comment list attachments attach",
     );
     expect(bash.stdout).toContain(
-      "'tasks/get') candidates='-v --version --json --fields",
+      "'tasks/get') candidates='-v --version --json --timeout --fields",
     );
     expect(bash.stdout).toContain(
-      "'whoami') candidates='-v --version --json -h --help'",
+      "'whoami') candidates='-v --version --json --timeout -h --help'",
     );
     expect(bash.stdout).toContain(
       "'root') candidates='whoami config skill tasks attachments projects workspaces completion capabilities",
@@ -2642,6 +2697,7 @@ describe("tasks get command", () => {
       ["not_found", 4],
       ["rate_limit", 5],
       ["network", 4],
+      ["timeout", 4],
       ["invalid_response", 4],
     ]);
 
@@ -2889,6 +2945,7 @@ describe("tasks update --parent", () => {
       ["not_found", 4],
       ["rate_limit", 5],
       ["network", 4],
+      ["timeout", 4],
       ["invalid_response", 4],
     ]),
   )("maps %s parent failures to exit code %i", async (kind, exitCode) => {

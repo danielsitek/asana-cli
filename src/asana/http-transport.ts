@@ -1,9 +1,11 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import {
   ASANA_FAILURE_MESSAGES,
   type IdentityError,
 } from "../identity/index.ts";
+import { networkDeadlineSignal } from "../shared/network-deadline.ts";
 import { err, ok, type Result } from "../shared/result.ts";
 import type { WriteOutcomeUnknown } from "../tasks/index.ts";
 
@@ -25,7 +27,7 @@ export type HttpTransportOptions = Readonly<{
   baseUrl?: string;
   maxRetries?: number;
   requestTimeoutMs?: number;
-  sleep?: (milliseconds: number) => Promise<void>;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
   now?: () => number;
 }>;
@@ -39,8 +41,10 @@ type AttemptOutcome<T> =
   | Readonly<{ kind: "complete"; result: Result<T, RequestError> }>
   | RetryOutcome;
 
-const wait = (milliseconds: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
+const MAX_RETRY_AFTER_MS = 10_000;
+
+const wait = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
+  delay(milliseconds, undefined, signal === undefined ? {} : { signal });
 
 const defaultTo = <T>(value: T | undefined, fallback: T): T =>
   value ?? fallback;
@@ -53,6 +57,20 @@ const invalidResponse = (): IdentityError => ({
 const networkError = (): IdentityError => ({
   kind: "network",
   message: "Unable to reach Asana",
+});
+
+const deadlineError = (inFlight?: RequestOptions): IdentityError => ({
+  kind: "timeout",
+  message: ASANA_FAILURE_MESSAGES.timeout,
+  ...(inFlight === undefined || inFlight.method === "GET"
+    ? {}
+    : {
+        hint: `Asana may have applied the write. ${
+          inFlight.method === "POST"
+            ? inFlight.outcomeUnknownHint
+            : "Check the affected resource before retrying."
+        }`,
+      }),
 });
 
 const unknownWriteOutcome = (
@@ -257,7 +275,7 @@ export class AsanaHttpTransport {
   readonly #baseUrl: string;
   readonly #maxRetries: number;
   readonly #requestTimeoutMs: number;
-  readonly #sleep: (milliseconds: number) => Promise<void>;
+  readonly #sleep: NonNullable<HttpTransportOptions["sleep"]>;
   readonly #random: () => number;
   readonly #now: () => number;
 
@@ -289,17 +307,28 @@ export class AsanaHttpTransport {
     schema: z.ZodType<T>,
   ): Promise<Result<T, RequestError>> {
     const url = requestUrl(this.#baseUrl, path, options.searchParams);
+    const deadline = networkDeadlineSignal();
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
+      if (deadline?.aborted) return err(deadlineError());
       const outcome = await this.executeAttempt(
         token,
         url,
         options,
         schema,
         attempt === this.#maxRetries,
+        deadline,
       );
       if (outcome.kind === "complete") return outcome.result;
       if (attempt === this.#maxRetries) return err(networkError());
-      await this.#sleep(this.retryDelay(attempt, outcome.retryAfter));
+      try {
+        await this.#sleep(
+          this.retryDelay(attempt, outcome.retryAfter),
+          deadline,
+        );
+      } catch (error) {
+        if (deadline?.aborted) return err(deadlineError());
+        throw error;
+      }
     }
     return err(networkError());
   }
@@ -310,32 +339,41 @@ export class AsanaHttpTransport {
     options: RequestOptions,
     schema: z.ZodType<T>,
     lastAttempt: boolean,
+    deadline: AbortSignal | undefined,
   ): Promise<AttemptOutcome<T>> {
     const controller = new AbortController();
-    const init = requestInit(token, options, controller.signal);
+    const signal = deadline
+      ? AbortSignal.any([controller.signal, deadline])
+      : controller.signal;
+    const init = requestInit(token, options, signal);
     const timeout = setTimeout(
       () => controller.abort(),
       this.#requestTimeoutMs,
     );
     try {
       const response = await fetch(url, init);
-      return response.ok
+      const outcome: AttemptOutcome<T> = response.ok
         ? {
             kind: "complete",
             result: await parseResponse(response, schema, options),
           }
         : await failedResponseOutcome(options, response, token, lastAttempt);
+      return deadline?.aborted
+        ? { kind: "complete", result: err(deadlineError(options)) }
+        : outcome;
     } catch {
-      return networkFailureOutcome(options);
+      return deadline?.aborted
+        ? { kind: "complete", result: err(deadlineError(options)) }
+        : networkFailureOutcome(options);
     } finally {
       clearTimeout(timeout);
     }
   }
 
   private retryDelay(attempt: number, retryAfter: string | null): number {
-    return (
-      retryAfterMs(retryAfter, this.#now()) ??
-      1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000)
-    );
+    const retryAfterDelay = retryAfterMs(retryAfter, this.#now());
+    return retryAfterDelay === undefined
+      ? 1_000 * 2 ** attempt + Math.floor(this.#random() * 1_000)
+      : Math.min(retryAfterDelay, MAX_RETRY_AFTER_MS);
   }
 }

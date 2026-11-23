@@ -45,8 +45,8 @@ export const asanaFailure = (
   };
   return commandError(kind, message, {
     ...(Object.keys(details).length === 0 ? {} : { details }),
-    ...(kind === "outcome_unknown"
-      ? { hint: error.hint, hints: [error.hint] }
-      : {}),
+    ...(error.hint === undefined
+      ? {}
+      : { hint: error.hint, hints: [error.hint] }),
   });
 };

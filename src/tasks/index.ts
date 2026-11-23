@@ -152,6 +152,17 @@ export type TaskCreationTarget = Readonly<
   | { kind: "section"; sectionGid: string }
 >;
 
+export type ResolvedTaskCreationTarget =
+  | Exclude<TaskCreationTarget, { kind: "section" }>
+  | Readonly<{ kind: "section"; sectionGid: string; projectGid: string }>;
+
+export interface TaskTargetReader {
+  inspectTaskTarget(
+    token: string,
+    target: TaskCreationTarget,
+  ): Promise<Result<ResolvedTaskCreationTarget, TaskReadError>>;
+}
+
 type TaskMaterializationDependencies = Readonly<{
   myTasksMutationResolver?: MyTasksMutationResolver;
   resolveAuthenticatedUserGid: (
