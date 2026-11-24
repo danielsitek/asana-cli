@@ -17,11 +17,11 @@ import type {
   TaskMutation,
   TaskMutationGateway,
   TaskProjectMutationGateway,
-  TaskReadError,
   TaskSectionMutationGateway,
   TaskUpdateDependencies,
   TaskUpdateError,
   TaskUpdateResult,
+  TaskWriteError,
   MyTasksMutationResult,
 } from "./index.ts";
 
@@ -278,14 +278,16 @@ const validateCreationWriter = (
     : ok(undefined);
 
 const publicTaskError = (
-  error: TaskReadError,
+  error: TaskWriteError,
 ): NonNullable<TaskCreationStage["error"]> => {
   return {
     kind: error.kind,
     message:
       error.kind === "not_found"
         ? "Task not found"
-        : ASANA_FAILURE_MESSAGES[error.kind],
+        : error.kind === "outcome_unknown"
+          ? error.message
+          : ASANA_FAILURE_MESSAGES[error.kind],
   };
 };
 

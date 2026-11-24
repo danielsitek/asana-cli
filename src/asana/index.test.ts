@@ -274,6 +274,52 @@ describe("CLI task notes append", () => {
       expect(methods).toEqual([...requests]);
     },
   );
+
+  test.each([200, 503])(
+    "reports an unknown outcome after a PUT with status %i and an unreadable response",
+    async (status) => {
+      let description = `<body>${existing}</body>`;
+      const methods: string[] = [];
+      const client = new AsanaHttpClient({
+        baseUrl: serverFor(async (request) => {
+          methods.push(request.method);
+          if (request.method === "GET") {
+            return Response.json({ data: { html_notes: description } });
+          }
+          const { data } = (await request.json()) as {
+            data: { html_notes: string };
+          };
+          description = data.html_notes;
+          return new Response("invalid response", { status });
+        }),
+        sleep: async () => {},
+      });
+      const result = await execute(
+        [
+          "tasks",
+          "update",
+          "123",
+          "--append-notes",
+          "--notes=Addition",
+          "--json",
+        ],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity: client,
+          taskReader: client,
+          taskWriter: client,
+        },
+      );
+      expect(description).toBe(`<body>${existing}\n\nAddition</body>`);
+      expect(methods).toEqual(["GET", "PUT"]);
+      expect(result.exitCode).toBe(4);
+      expect(JSON.parse(result.stderr).error).toMatchObject({
+        code: "outcome_unknown",
+        retryable: false,
+        hint: expect.stringContaining("tasks get 123 --fields=html_notes"),
+      });
+    },
+  );
 });
 
 describe("CLI network deadlines", () => {

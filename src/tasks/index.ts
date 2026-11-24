@@ -93,7 +93,7 @@ export interface TaskMutationGateway {
     taskId: string,
     mutation: TaskMutation,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>>;
+  ): Promise<Result<Task, TaskWriteError>>;
 }
 
 export interface TaskCreationGateway {
@@ -234,7 +234,7 @@ export type TaskCreationStage = Readonly<{
   stage: TaskCreationStageName;
   status: "completed" | "failed" | "not_run";
   applied?: TaskMutation;
-  error?: Readonly<{ kind: TaskReadError["kind"]; message: string }>;
+  error?: Readonly<{ kind: TaskWriteError["kind"]; message: string }>;
   reason?: "not_requested" | "stopped_after_failure";
 }>;
 
