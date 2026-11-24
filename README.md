@@ -308,7 +308,7 @@ Both commands accept the same mutation flags:
 
 - `--name=<text>`
 - `--notes=<text>` / `--notes-file=<path|->` — mutually exclusive; both
-  replace the entire description, never append. `-` reads from stdin.
+  replace the entire description by default. `-` reads from stdin.
 - `--assignee=me|<gid>|null`
 - `--due-on=<YYYY-MM-DD>|null`
 - `--completed=true|false`
@@ -316,6 +316,17 @@ Both commands accept the same mutation flags:
 - `--section=<gid>` — place or move in any project section
 - `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
   [Custom fields](#custom-fields---custom-field) below
+
+Use `tasks update --append-notes` with either notes input to append non-empty
+plain text while keeping existing inline images. Pass only the new text.
+
+```sh
+asana-cli tasks update 1215978111726134 --append-notes --notes-file=addition.txt
+```
+
+The CLI reads and updates `html_notes`. An edit made between the two requests
+can be overwritten. Add `--dry-run --json` to preview the resulting
+`mutation.html_notes`.
 
 `--my-section` and My Tasks custom fields require the final assignee to be
 the authenticated user, checked after all other flags are applied: on `tasks
