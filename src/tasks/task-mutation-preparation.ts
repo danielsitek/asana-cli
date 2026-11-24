@@ -95,7 +95,7 @@ export const prepareTaskUpdate = (
         return (
           key !== placementFlag.slice(2) &&
           value !== undefined &&
-          (key !== "customFields" || value.length > 0)
+          (key !== "customFields" || (options.customFields?.length ?? 0) > 0)
         );
       },
     );
@@ -107,10 +107,22 @@ export const prepareTaskUpdate = (
     }
   }
 
-  const prepared = prepareTaskMutation(options);
+  const { appendNotes, ...mutationOptions } = options;
+  if (
+    appendNotes &&
+    mutationOptions.notes === undefined &&
+    mutationOptions.notesFile === undefined
+  ) {
+    return err({
+      kind: "invalid_usage",
+      message: "--append-notes requires --notes or --notes-file",
+    });
+  }
+  const prepared = prepareTaskMutation(mutationOptions);
   if (!prepared.ok) return prepared;
   return ok({
     taskId: taskId.value,
+    ...(appendNotes ? { appendNotes } : {}),
     ...prepared.value,
     ...(fields.value === undefined ? {} : { fields: fields.value }),
   });
@@ -137,7 +149,7 @@ export const prepareTaskParentUpdate = (
       return (
         key !== "parent" &&
         value !== undefined &&
-        (key !== "customFields" || value.length > 0)
+        (key !== "customFields" || (options.customFields?.length ?? 0) > 0)
       );
     },
   );
@@ -172,14 +184,16 @@ type TaskMutationPreparationError = Readonly<{
   message: string;
 }>;
 
-const hasTaskMutation = (options: TaskUpdateOptions): boolean =>
+type TaskMutationOptions = Omit<TaskUpdateOptions, "appendNotes">;
+
+const hasTaskMutation = (options: TaskMutationOptions): boolean =>
   (Object.keys(options) as (keyof typeof options)[]).some((key) => {
     const value = options[key];
     return value !== undefined && (key !== "customFields" || value.length > 0);
   });
 
 const validateNotesOptions = (
-  options: TaskUpdateOptions,
+  options: TaskMutationOptions,
 ): Result<void, TaskMutationPreparationError> =>
   options.notes !== undefined && options.notesFile !== undefined
     ? err({
@@ -313,7 +327,7 @@ type PreparedTaskMutationParts = Readonly<{
 }>;
 
 const assembleTaskMutation = (
-  options: TaskUpdateOptions,
+  options: TaskMutationOptions,
   parts: PreparedTaskMutationParts,
 ): PreparedTaskMutation => ({
   mutation: {
@@ -331,7 +345,7 @@ const assembleTaskMutation = (
 });
 
 const prepareTaskMutation = (
-  options: TaskUpdateOptions,
+  options: TaskMutationOptions,
 ): Result<PreparedTaskMutation, TaskMutationPreparationError> => {
   // See prepareTaskParentUpdate: index via keys, not Object.entries(), to
   // keep the `| undefined` that optional properties actually carry.

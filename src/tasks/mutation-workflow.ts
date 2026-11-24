@@ -1,5 +1,6 @@
 import { ASANA_FAILURE_MESSAGES } from "../identity/index.ts";
 import { err, ok, type Result } from "../shared/result.ts";
+import { appendTaskNotesText, readTaskHtmlNotes } from "./task-html-notes.ts";
 import type {
   PreparedCustomField,
   PreparedTaskCreate,
@@ -208,6 +209,9 @@ const materializeTaskMutation = async (
 const orderMutation = (mutation: TaskMutation): TaskMutation => ({
   ...(mutation.name === undefined ? {} : { name: mutation.name }),
   ...(mutation.notes === undefined ? {} : { notes: mutation.notes }),
+  ...(mutation.html_notes === undefined
+    ? {}
+    : { html_notes: mutation.html_notes }),
   ...(mutation.assignee === undefined ? {} : { assignee: mutation.assignee }),
   ...(mutation.due_on === undefined ? {} : { due_on: mutation.due_on }),
   ...(mutation.completed === undefined
@@ -518,6 +522,37 @@ export const previewTaskParentUpdate = async (
   });
 };
 
+const materializeTaskUpdate = async (
+  token: string,
+  prepared: PreparedTaskUpdate,
+  dependencies: TaskMaterializationDependencies,
+  reader: TaskGateway | undefined,
+): Promise<Result<TaskMutation, TaskUpdateError>> => {
+  const materialized = await materializeTaskMutation(
+    token,
+    { ...prepared, workflow: "update" },
+    dependencies,
+  );
+  if (!materialized.ok || !prepared.appendNotes) return materialized;
+
+  const { notes, ...mutation } = materialized.value;
+  if (notes === undefined || notes === "") {
+    return err({
+      kind: "invalid_usage",
+      message: "--append-notes requires non-empty text",
+    });
+  }
+  if (!reader) {
+    return err({ kind: "internal_error", message: "Task reader is required" });
+  }
+  const existing = await readTaskHtmlNotes(reader, token, prepared.taskId);
+  if (!existing.ok) return existing;
+  const appended = appendTaskNotesText(existing.value, notes);
+  return appended.ok
+    ? ok({ ...mutation, html_notes: appended.value })
+    : appended;
+};
+
 export const previewTaskUpdate = async (
   token: string,
   prepared: PreparedTaskUpdate,
@@ -525,14 +560,17 @@ export const previewTaskUpdate = async (
   reader: TaskGateway,
   targetReader: TaskTargetReader | undefined,
 ) => {
-  const materialized = await materializeTaskMutation(
+  const materialized = await materializeTaskUpdate(
     token,
-    { ...prepared, workflow: "update" },
+    prepared,
     dependencies,
+    reader,
   );
   if (!materialized.ok) return materialized;
-  const task = await reader.getTask(token, prepared.taskId, ["gid"]);
-  if (!task.ok) return task;
+  if (!prepared.appendNotes) {
+    const task = await reader.getTask(token, prepared.taskId, ["gid"]);
+    if (!task.ok) return task;
+  }
 
   const { projectGid, sectionGid } = prepared;
   if (projectGid !== undefined || sectionGid !== undefined) {
@@ -564,10 +602,11 @@ export const executeTaskUpdate = async (
 ): Promise<Result<TaskUpdateResult, TaskUpdateError>> => {
   const placement = resolveTaskUpdatePlacement(prepared, dependencies);
   if (!placement.ok) return placement;
-  const materialized = await materializeTaskMutation(
+  const materialized = await materializeTaskUpdate(
     token,
-    { ...prepared, workflow: "update" },
+    prepared,
     dependencies,
+    dependencies.reader,
   );
   if (!materialized.ok) return materialized;
   return applyTaskUpdate(

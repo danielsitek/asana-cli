@@ -29,6 +29,9 @@ import { withTaskMutationOptions } from "./task-mutation-options.ts";
 import { withCommandCapabilities } from "./capabilities.ts";
 import { createProjectCustomFieldResolver } from "../tasks/project-custom-fields.ts";
 
+type TaskUpdateCliOptions = TaskMutationCliOptions &
+  Readonly<{ parent?: string; appendNotes?: boolean }>;
+
 const renderUpdatedTask = (
   json: boolean,
   task: Parameters<typeof renderTaskUpdate>[0],
@@ -113,7 +116,7 @@ const taskUpdateDependencies = (
 const runTaskUpdate = async (
   context: TaskCommandContext,
   idArg: string,
-  options: TaskMutationCliOptions,
+  options: Omit<TaskUpdateCliOptions, "parent">,
   invocation: TaskInvocation,
 ): Promise<CommandResult> => {
   const { customField, dryRun, ...rest } = options;
@@ -153,9 +156,13 @@ const runTaskUpdate = async (
   }
   const writer = context.dependencies.taskWriter;
   if (!writer) return internalError("Task writer is required");
+  const reader = prepared.value.appendNotes
+    ? context.dependencies.taskReader
+    : undefined;
   const updated = await executeTaskUpdate(token.value, prepared.value, {
     ...dependencies,
     writer,
+    ...(reader ? { reader } : {}),
   });
   return updated.ok
     ? renderUpdatedTask(
@@ -169,7 +176,7 @@ const runTaskUpdate = async (
 const runSelectedUpdate = async (
   context: TaskCommandContext,
   idArg: string,
-  options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
+  options: TaskUpdateCliOptions,
 ): Promise<CommandResult> => {
   const invocation = context.beginCommand();
   const { customField, parent, ...rest } = options;
@@ -199,6 +206,10 @@ export const registerTaskUpdateCommand = (
       .description("update a task's fields"),
   )
     .option(
+      "--append-notes",
+      "append --notes or --notes-file text and preserve inline images",
+    )
+    .option(
       "--project <gid>",
       "add to a project by GID; exclusive with other flags",
     )
@@ -207,11 +218,8 @@ export const registerTaskUpdateCommand = (
       "reparent to a task GID or URL, or null to promote; exclusive with other flags",
     )
     .addHelpText("after", shellTextSafetyHelp("--notes-file <path>"))
-    .action(
-      async (
-        idArg: string,
-        options: TaskMutationCliOptions & Readonly<{ parent?: string }>,
-      ) => context.complete(await runSelectedUpdate(context, idArg, options)),
+    .action(async (idArg: string, options: TaskUpdateCliOptions) =>
+      context.complete(await runSelectedUpdate(context, idArg, options)),
     );
   withCommandCapabilities(command, {
     operation: "write",

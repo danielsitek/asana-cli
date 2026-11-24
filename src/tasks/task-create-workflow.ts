@@ -32,7 +32,10 @@ export type TaskCreateConfigResolver = () => Promise<
   Result<TaskCreateConfig, TaskCreateConfigError>
 >;
 
-export type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;
+export type PreparedTaskMutation = Omit<
+  PreparedTaskUpdate,
+  "taskId" | "appendNotes"
+>;
 
 export type ParsedTaskCreate = Readonly<{
   target?: TaskCreationTarget;

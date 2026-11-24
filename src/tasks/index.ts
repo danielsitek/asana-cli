@@ -63,6 +63,7 @@ export interface TaskGateway {
 export type TaskMutation = Readonly<{
   name?: string;
   notes?: string;
+  html_notes?: string;
   assignee?: string | null;
   due_on?: string | null;
   completed?: boolean;
@@ -70,7 +71,7 @@ export type TaskMutation = Readonly<{
   custom_fields?: Readonly<Record<string, number | string | null>>;
 }>;
 
-export type TaskUpdateOptions = Readonly<{
+type TaskMutationOptions = Readonly<{
   name?: string;
   notes?: string;
   notesFile?: string;
@@ -82,6 +83,9 @@ export type TaskUpdateOptions = Readonly<{
   project?: string;
   customFields?: readonly string[];
 }>;
+
+export type TaskUpdateOptions = TaskMutationOptions &
+  Readonly<{ appendNotes?: boolean }>;
 
 export interface TaskMutationGateway {
   updateTask(
@@ -175,6 +179,7 @@ type TaskMaterializationDependencies = Readonly<{
 export type TaskUpdateDependencies = TaskMaterializationDependencies &
   Readonly<{
     writer: TaskMutationGateway;
+    reader?: TaskGateway;
     sectionWriter?: TaskSectionMutationGateway;
     projectWriter?: TaskProjectMutationGateway;
     projectCustomFieldResolver?: ProjectCustomFieldResolver;
@@ -195,6 +200,7 @@ export type TaskUpdateResult = Readonly<{
 
 export type PreparedTaskUpdate = Readonly<{
   taskId: string;
+  appendNotes?: boolean;
   mutation: TaskMutation;
   notesFile?: string;
   resolveAssigneeMe: boolean;
@@ -205,7 +211,7 @@ export type PreparedTaskUpdate = Readonly<{
   fields?: readonly string[];
 }>;
 
-export type TaskCreateOptions = TaskUpdateOptions &
+export type TaskCreateOptions = TaskMutationOptions &
   Readonly<{ parent?: string; project?: string }>;
 
 export type PreparedTaskCreate = Readonly<{

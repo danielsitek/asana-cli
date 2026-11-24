@@ -118,6 +118,157 @@ describe("CLI task dry runs", () => {
   });
 });
 
+describe("CLI task notes append", () => {
+  const existing =
+    '<strong>Existing</strong><img data-asana-gid="700" data-asana-type="attachment" src="https://example.com/image?a=1&amp;b=2"/>';
+  const text = 'First & <example>\nSecond > "example"\n';
+  const escaped = 'First &amp; &lt;example&gt;\nSecond &gt; "example"\n';
+
+  test.each([
+    {
+      args: ["--notes-file=addition.txt", "--name=Updated"],
+      current: `<body>${existing}</body>`,
+      mutation: {
+        name: "Updated",
+        html_notes: `<body>${existing}\n\n${escaped}</body>`,
+      },
+      preview: false,
+    },
+    {
+      args: ["--notes-file=-", "--dry-run"],
+      current: `<body>${existing}</body>`,
+      mutation: { html_notes: `<body>${existing}\n\n${escaped}</body>` },
+      preview: true,
+    },
+    {
+      args: [`--notes=${text}`],
+      current: "<body/>",
+      mutation: { html_notes: `<body>${escaped}</body>` },
+      preview: false,
+    },
+  ])(
+    "preserves rich notes with $args",
+    async ({ args, current, mutation, preview }) => {
+      const requests: string[] = [];
+      let payload: unknown;
+      const client = new AsanaHttpClient({
+        baseUrl: serverFor(async (request) => {
+          const url = new URL(request.url);
+          requests.push(
+            `${request.method} ${url.pathname}?${url.searchParams.get("opt_fields")}`,
+          );
+          if (request.method === "GET") {
+            return Response.json({ data: { html_notes: current } });
+          }
+          payload = await request.json();
+          return Response.json({ data: { gid: "123", notes: "unselected" } });
+        }),
+      });
+      const result = await execute(
+        [
+          "tasks",
+          "update",
+          "123",
+          "--append-notes",
+          ...args,
+          "--fields=gid",
+          "--json",
+        ],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity: client,
+          taskReader: client,
+          ...(preview ? {} : { taskWriter: client }),
+          readFile: async (path) => {
+            expect(path).toBe("addition.txt");
+            return text;
+          },
+          readStdin: async () => text,
+        },
+      );
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const read = "GET /api/1.0/tasks/123?html_notes";
+      if (preview) {
+        expect(requests).toEqual([read]);
+        expect(JSON.parse(result.stdout)).toEqual({
+          data: { task_gid: "123", mutation },
+          meta: { preview: true },
+        });
+      } else {
+        expect(requests).toEqual([read, "PUT /api/1.0/tasks/123?gid"]);
+        expect(payload).toEqual({ data: mutation });
+        expect(JSON.parse(result.stdout)).toEqual({
+          data: { gid: "123" },
+          meta: { applied: mutation },
+        });
+      }
+    },
+  );
+
+  test.each([
+    { args: [], html: undefined, requests: [], error: "invalid_usage" },
+    {
+      args: ["--notes="],
+      html: undefined,
+      requests: [],
+      error: "invalid_usage",
+    },
+    {
+      args: ["--notes=text", "--notes-file=-"],
+      html: undefined,
+      requests: [],
+      error: "invalid_usage",
+    },
+    {
+      args: ["--notes=text", "--parent=456"],
+      html: undefined,
+      requests: [],
+      error: "invalid_usage",
+    },
+    {
+      args: ["--notes=text", "--section=456"],
+      html: undefined,
+      requests: [],
+      error: "invalid_usage",
+    },
+    {
+      args: ["--notes=text"],
+      html: undefined,
+      requests: ["GET"],
+      error: "invalid_response",
+    },
+    {
+      args: ["--notes=text"],
+      html: "<strong>Missing body</strong>",
+      requests: ["GET"],
+      error: "invalid_response",
+    },
+  ])(
+    "does not write on $error for $args",
+    async ({ args, html, requests, error }) => {
+      const methods: string[] = [];
+      const client = new AsanaHttpClient({
+        baseUrl: serverFor((request) => {
+          methods.push(request.method);
+          return Response.json({ data: { html_notes: html } });
+        }),
+      });
+      const result = await execute(
+        ["tasks", "update", "123", "--append-notes", ...args, "--json"],
+        {
+          environment: { ASANA_CLI_TOKEN: "token" },
+          identity: client,
+          taskReader: client,
+          taskWriter: client,
+        },
+      );
+      expect(JSON.parse(result.stderr).error.code).toBe(error);
+      expect(methods).toEqual([...requests]);
+    },
+  );
+});
+
 describe("CLI network deadlines", () => {
   test.each(["0", "-1", "Infinity", "999999999"])(
     "rejects --timeout=%s before authentication or network access",
