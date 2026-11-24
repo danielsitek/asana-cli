@@ -63,6 +63,7 @@ export interface TaskGateway {
 export type TaskMutation = Readonly<{
   name?: string;
   notes?: string;
+  html_notes?: string;
   assignee?: string | null;
   due_on?: string | null;
   completed?: boolean;
@@ -70,7 +71,7 @@ export type TaskMutation = Readonly<{
   custom_fields?: Readonly<Record<string, number | string | null>>;
 }>;
 
-export type TaskUpdateOptions = Readonly<{
+export type TaskMutationOptions = Readonly<{
   name?: string;
   notes?: string;
   notesFile?: string;
@@ -83,13 +84,16 @@ export type TaskUpdateOptions = Readonly<{
   customFields?: readonly string[];
 }>;
 
+export type TaskUpdateOptions = TaskMutationOptions &
+  Readonly<{ appendNotes?: boolean }>;
+
 export interface TaskMutationGateway {
   updateTask(
     token: string,
     taskId: string,
     mutation: TaskMutation,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>>;
+  ): Promise<Result<Task, TaskWriteError>>;
 }
 
 export interface TaskCreationGateway {
@@ -175,6 +179,7 @@ type TaskMaterializationDependencies = Readonly<{
 export type TaskUpdateDependencies = TaskMaterializationDependencies &
   Readonly<{
     writer: TaskMutationGateway;
+    reader?: TaskGateway;
     sectionWriter?: TaskSectionMutationGateway;
     projectWriter?: TaskProjectMutationGateway;
     projectCustomFieldResolver?: ProjectCustomFieldResolver;
@@ -193,30 +198,31 @@ export type TaskUpdateResult = Readonly<{
   applied: TaskMutation & Readonly<{ section?: string; project?: string }>;
 }>;
 
-export type PreparedTaskUpdate = Readonly<{
-  taskId: string;
+export type PreparedTaskMutation = Readonly<{
   mutation: TaskMutation;
   notesFile?: string;
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
-  sectionGid?: string;
-  projectGid?: string;
   customFields: readonly PreparedCustomField[];
   fields?: readonly string[];
 }>;
 
-export type TaskCreateOptions = TaskUpdateOptions &
+export type PreparedTaskUpdate = PreparedTaskMutation &
+  Readonly<{
+    taskId: string;
+    appendNotes?: boolean;
+    sectionGid?: string;
+    projectGid?: string;
+  }>;
+
+export type TaskCreateOptions = TaskMutationOptions &
   Readonly<{ parent?: string; project?: string }>;
 
-export type PreparedTaskCreate = Readonly<{
-  target: TaskCreationTarget;
-  mutation: TaskMutation & Readonly<{ name: string }>;
-  notesFile?: string;
-  resolveAssigneeMe: boolean;
-  mySection?: ResourceSelector;
-  customFields: readonly PreparedCustomField[];
-  fields?: readonly string[];
-}>;
+export type PreparedTaskCreate = PreparedTaskMutation &
+  Readonly<{
+    target: TaskCreationTarget;
+    mutation: TaskMutation & Readonly<{ name: string }>;
+  }>;
 
 export type TaskCreationStageName =
   | "create"
@@ -228,7 +234,7 @@ export type TaskCreationStage = Readonly<{
   stage: TaskCreationStageName;
   status: "completed" | "failed" | "not_run";
   applied?: TaskMutation;
-  error?: Readonly<{ kind: TaskReadError["kind"]; message: string }>;
+  error?: Readonly<{ kind: TaskWriteError["kind"]; message: string }>;
   reason?: "not_requested" | "stopped_after_failure";
 }>;
 

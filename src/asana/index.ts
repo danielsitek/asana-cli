@@ -1055,7 +1055,7 @@ export class AsanaHttpClient
     taskId: string,
     mutation: TaskMutation,
     fields?: readonly string[],
-  ): Promise<Result<Task, TaskReadError>> {
+  ): Promise<Result<Task, TaskWriteError>> {
     if (!/^\d+$/.test(taskId)) {
       return err({
         kind: "invalid_response",
@@ -1065,18 +1065,26 @@ export class AsanaHttpClient
 
     const selection = mutationFieldSelection(fields);
     const schema = z.object({ data: buildMutatedTaskSchema(selection.fields) });
-    const result = await this.#request(
-      token,
-      `tasks/${taskId}`,
-      {
-        method: "PUT",
-        ...(selection.searchParams === undefined
-          ? {}
-          : { searchParams: selection.searchParams }),
-        body: { data: mutation },
-      },
-      schema,
-    );
+    const path = `tasks/${taskId}`;
+    const options = {
+      method: "PUT",
+      ...(selection.searchParams === undefined
+        ? {}
+        : { searchParams: selection.searchParams }),
+      body: { data: mutation },
+    } as const satisfies HttpRequestOptions;
+    const result =
+      mutation.html_notes === undefined
+        ? await this.#request(token, path, options, schema)
+        : await this.#transport.request(
+            token,
+            path,
+            {
+              ...options,
+              outcomeUnknownHint: `Check the task description with tasks get ${taskId} --fields=html_notes before retrying.`,
+            },
+            schema,
+          );
     if (!result.ok) {
       return err(mapTaskReadError(result.error, "Task not found"));
     }

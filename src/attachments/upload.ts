@@ -8,6 +8,10 @@ import {
   type TaskReadError,
   type TaskWriteError,
 } from "../tasks/index.ts";
+import {
+  readTaskHtmlNotes,
+  splitTaskHtmlNotes,
+} from "../tasks/task-html-notes.ts";
 
 export const MAX_ATTACHMENT_BYTES = 100_000_000;
 
@@ -138,18 +142,15 @@ export const insertInlineImage = (
   attachmentGid: string,
   position: "append" | "prepend",
 ): Result<string, TaskReadError> => {
-  const html = htmlNotes === "" ? "<body></body>" : htmlNotes;
-  const open = /^<body(?:\s[^>]*)?>/.exec(html);
-  const close = /<\/body>$/.exec(html);
-  if (!open || !close) {
-    return err({
-      kind: "invalid_response",
-      message: "Task html_notes has no body wrapper",
-    });
-  }
-  const insertion = position === "prepend" ? open[0].length : close.index;
+  const body = splitTaskHtmlNotes(htmlNotes);
+  if (!body.ok) return body;
+  const { opening, content, closing } = body.value;
   const image = `<img data-asana-gid="${attachmentGid}">`;
-  return ok(html.slice(0, insertion) + image + html.slice(insertion));
+  return ok(
+    opening +
+      (position === "prepend" ? image + content : content + image) +
+      closing,
+  );
 };
 
 const readInlineNotes = async (
@@ -168,20 +169,10 @@ const readInlineNotes = async (
       kind: "internal_error",
       message: "Task reader is required for inline uploads",
     });
-  const task = await reader.getTask(token, prepared.taskId, ["html_notes"]);
-  if (!task.ok) return task;
-  if (typeof task.value.html_notes !== "string") {
-    return err({
-      kind: "invalid_response",
-      message: "Task html_notes is missing",
-    });
-  }
-  const checked = insertInlineImage(
-    task.value.html_notes,
-    "1",
-    prepared.inline,
-  );
-  return checked.ok ? ok(task.value.html_notes) : checked;
+  const notes = await readTaskHtmlNotes(reader, token, prepared.taskId);
+  if (!notes.ok) return notes;
+  const checked = splitTaskHtmlNotes(notes.value);
+  return checked.ok ? notes : checked;
 };
 
 export const previewAttachmentUpload = async (

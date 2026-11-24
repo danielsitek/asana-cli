@@ -308,7 +308,8 @@ Both commands accept the same mutation flags:
 
 - `--name=<text>`
 - `--notes=<text>` / `--notes-file=<path|->` — mutually exclusive; both
-  replace the entire description, never append. `-` reads from stdin.
+  replace the entire description by default, including any inline images.
+  `-` reads from stdin.
 - `--assignee=me|<gid>|null`
 - `--due-on=<YYYY-MM-DD>|null`
 - `--completed=true|false`
@@ -316,6 +317,21 @@ Both commands accept the same mutation flags:
 - `--section=<gid>` — place or move in any project section
 - `--custom-field=(<field-gid>|@<alias>):<value>` — repeatable, see
   [Custom fields](#custom-fields---custom-field) below
+
+Use `tasks update --append-notes` with either notes input to append non-empty
+plain text while keeping existing inline images. Pass only the new text.
+
+```sh
+asana-cli tasks update 1215978111726134 --append-notes --notes-file=addition.txt
+```
+
+The CLI reads and updates `html_notes`. An edit made between the two requests
+can be overwritten. Add `--dry-run --json` to preview the resulting
+`mutation.html_notes`.
+
+Asana API compatibility settings can flatten block quotes and code blocks
+during a read. Appending preserves the markup the API returns. See
+[Asana's rich-text compatibility documentation](https://developers.asana.com/docs/rich-text#compatibility-representations-of-quotes-and-code-blocks).
 
 `--my-section` and My Tasks custom fields require the final assignee to be
 the authenticated user, checked after all other flags are applied: on `tasks
@@ -600,6 +616,9 @@ credentials, or the Asana API.
   `outcome_unknown`. JSON errors include `retryable: false` and an
   operation-specific `hint`. Check the resulting state in Asana before
   retrying.
+- An ambiguous `tasks update --append-notes` write also returns
+  `outcome_unknown`. Read the current description before retrying to avoid
+  appending the same text twice.
 - Multi-step writes (such as `tasks create` with My Tasks placement) validate
   every input before the first write, then report every completed and failed
   stage; a failure after the first write returns a partial result (exit 1) on

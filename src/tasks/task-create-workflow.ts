@@ -1,12 +1,9 @@
 import { err, ok, type Result } from "../shared/result.ts";
 import type {
-  PreparedCustomField,
   PreparedTaskCreate,
-  PreparedTaskUpdate,
-  ResourceSelector,
+  PreparedTaskMutation,
   TaskCreateOptions,
   TaskCreationTarget,
-  TaskMutation,
 } from "./index.ts";
 
 type InvalidTaskCreateUsage = Readonly<{
@@ -32,17 +29,8 @@ export type TaskCreateConfigResolver = () => Promise<
   Result<TaskCreateConfig, TaskCreateConfigError>
 >;
 
-export type PreparedTaskMutation = Omit<PreparedTaskUpdate, "taskId">;
-
-export type ParsedTaskCreate = Readonly<{
-  target?: TaskCreationTarget;
-  mutation: TaskMutation & Readonly<{ name: string }>;
-  notesFile?: string;
-  resolveAssigneeMe: boolean;
-  mySection?: ResourceSelector;
-  customFields: readonly PreparedCustomField[];
-  fields?: readonly string[];
-}>;
+export type ParsedTaskCreate = Omit<PreparedTaskCreate, "target"> &
+  Readonly<{ target?: TaskCreationTarget }>;
 
 const hasParentProjectConflict = (options: TaskCreateOptions): boolean =>
   options.parent !== undefined && options.project !== undefined;
