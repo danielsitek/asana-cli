@@ -209,7 +209,13 @@ describe("CLI task notes append", () => {
   test.each([
     { args: [], html: undefined, requests: [], error: "invalid_usage" },
     {
-      args: ["--notes="],
+      args: ["--notes=", "--assignee=me"],
+      html: undefined,
+      requests: [],
+      error: "invalid_usage",
+    },
+    {
+      args: ["--notes-file=-", "--assignee=me"],
       html: undefined,
       requests: [],
       error: "invalid_usage",
@@ -261,6 +267,7 @@ describe("CLI task notes append", () => {
           identity: client,
           taskReader: client,
           taskWriter: client,
+          readStdin: async () => "",
         },
       );
       expect(JSON.parse(result.stderr).error.code).toBe(error);

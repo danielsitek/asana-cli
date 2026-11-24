@@ -50,7 +50,7 @@ type MaterializedAssignee = Readonly<{
 }>;
 
 const materializeNotes = async (
-  prepared: PreparedTaskMaterialization,
+  prepared: Pick<PreparedTaskMaterialization, "mutation" | "notesFile">,
   dependencies: TaskMaterializationDependencies,
 ): Promise<Result<string | undefined, TaskUpdateError>> => {
   if (prepared.notesFile === undefined) return ok(prepared.mutation.notes);
@@ -184,14 +184,13 @@ const materializeTaskMutation = async (
   token: string,
   prepared: PreparedTaskMaterialization,
   dependencies: TaskMaterializationDependencies,
+  notes: string | undefined,
 ): Promise<Result<TaskMutation, TaskUpdateError>> => {
-  const notes = await materializeNotes(prepared, dependencies);
-  if (!notes.ok) return notes;
   const assignee = await materializeAssignee(token, prepared, dependencies);
   if (!assignee.ok) return assignee;
   const mutation: TaskMutation = {
     ...prepared.mutation,
-    ...(notes.value === undefined ? {} : { notes: notes.value }),
+    ...(notes === undefined ? {} : { notes }),
     ...(assignee.value.assignee === undefined
       ? {}
       : { assignee: assignee.value.assignee }),
@@ -344,10 +343,13 @@ const planTaskCreation = async (
     TaskUpdateError
   >
 > => {
+  const notes = await materializeNotes(prepared, dependencies);
+  if (!notes.ok) return notes;
   const materialized = await materializeTaskMutation(
     token,
     { ...prepared, workflow: "creation" },
     dependencies,
+    notes.value,
   );
   if (!materialized.ok) return materialized;
   const createMutation = buildCreationMutation(
@@ -528,20 +530,24 @@ const materializeTaskUpdate = async (
   dependencies: TaskMaterializationDependencies,
   reader: TaskGateway | undefined,
 ): Promise<Result<TaskMutation, TaskUpdateError>> => {
-  const materialized = await materializeTaskMutation(
-    token,
-    { ...prepared, workflow: "update" },
-    dependencies,
-  );
-  if (!materialized.ok || !prepared.appendNotes) return materialized;
-
-  const { notes, ...mutation } = materialized.value;
-  if (notes === undefined || notes === "") {
+  const input = await materializeNotes(prepared, dependencies);
+  if (!input.ok) return input;
+  const text = input.value;
+  if (prepared.appendNotes && !text) {
     return err({
       kind: "invalid_usage",
       message: "--append-notes requires non-empty text",
     });
   }
+  const materialized = await materializeTaskMutation(
+    token,
+    { ...prepared, workflow: "update" },
+    dependencies,
+    text,
+  );
+  if (!materialized.ok || !prepared.appendNotes) return materialized;
+  const { notes, ...mutation } = materialized.value;
+  if (notes === undefined) return materialized;
   if (!reader) {
     return err({ kind: "internal_error", message: "Task reader is required" });
   }

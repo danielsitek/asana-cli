@@ -2,12 +2,14 @@ import { err, ok, type Result } from "../shared/result.ts";
 import type {
   PreparedCustomField,
   PreparedTaskCreate,
+  PreparedTaskMutation,
   PreparedTaskParentUpdate,
   PreparedTaskUpdate,
   ResourceSelector,
   TaskCreationTarget,
   TaskCreateOptions,
   TaskMutation,
+  TaskMutationOptions,
   TaskParentUpdateOptions,
   TaskUpdateOptions,
 } from "./index.ts";
@@ -18,10 +20,21 @@ import {
   prepareConfiguredTaskCreate,
   validateTaskCreationTarget,
   type ParsedTaskCreate,
-  type PreparedTaskMutation,
   type TaskCreateConfigResolver,
   type TaskCreatePreparationError,
 } from "./task-create-workflow.ts";
+
+const hasTaskMutation = (
+  options: TaskUpdateOptions & Readonly<{ parent?: string }>,
+  except?: "section" | "project" | "parent",
+): boolean =>
+  (Object.keys(options) as (keyof typeof options)[]).some(
+    (key) =>
+      key !== except &&
+      (key === "customFields"
+        ? (options.customFields?.length ?? 0) > 0
+        : options[key] !== undefined),
+  );
 
 const parseResourceSelector = (
   input: string,
@@ -82,29 +95,17 @@ export const prepareTaskUpdate = (
   const taskId = parseTaskId(taskIdInput);
   if (!taskId.ok) return err({ kind: "invalid_usage", message: taskId.error });
 
-  const placementFlag =
+  const placement =
     options.section !== undefined
-      ? "--section"
+      ? "section"
       : options.project !== undefined
-        ? "--project"
+        ? "project"
         : undefined;
-  if (placementFlag !== undefined) {
-    const combined = (Object.keys(options) as (keyof typeof options)[]).some(
-      (key) => {
-        const value = options[key];
-        return (
-          key !== placementFlag.slice(2) &&
-          value !== undefined &&
-          (key !== "customFields" || (options.customFields?.length ?? 0) > 0)
-        );
-      },
-    );
-    if (combined) {
-      return err({
-        kind: "invalid_usage",
-        message: `${placementFlag} cannot be combined with other task update flags`,
-      });
-    }
+  if (placement !== undefined && hasTaskMutation(options, placement)) {
+    return err({
+      kind: "invalid_usage",
+      message: `--${placement} cannot be combined with other task update flags`,
+    });
   }
 
   const { appendNotes, ...mutationOptions } = options;
@@ -140,20 +141,7 @@ export const prepareTaskParentUpdate = (
   if (!fields.ok) return fields;
   const selected = fields.value === undefined ? {} : { fields: fields.value };
 
-  // Object.entries() loses the per-property `| undefined` from optional
-  // fields, so it can't tell us a flag was actually left unset; index via
-  // the original keys instead to keep that information.
-  const combined = (Object.keys(options) as (keyof typeof options)[]).some(
-    (key) => {
-      const value = options[key];
-      return (
-        key !== "parent" &&
-        value !== undefined &&
-        (key !== "customFields" || (options.customFields?.length ?? 0) > 0)
-      );
-    },
-  );
-  if (combined) {
+  if (hasTaskMutation(options, "parent")) {
     return err({
       kind: "invalid_usage",
       message: "--parent cannot be combined with other task update flags",
@@ -183,14 +171,6 @@ type TaskMutationPreparationError = Readonly<{
   kind: "invalid_usage";
   message: string;
 }>;
-
-type TaskMutationOptions = Omit<TaskUpdateOptions, "appendNotes">;
-
-const hasTaskMutation = (options: TaskMutationOptions): boolean =>
-  (Object.keys(options) as (keyof typeof options)[]).some((key) => {
-    const value = options[key];
-    return value !== undefined && (key !== "customFields" || value.length > 0);
-  });
 
 const validateNotesOptions = (
   options: TaskMutationOptions,
@@ -329,7 +309,7 @@ type PreparedTaskMutationParts = Readonly<{
 const assembleTaskMutation = (
   options: TaskMutationOptions,
   parts: PreparedTaskMutationParts,
-): PreparedTaskMutation => ({
+): PreparedTaskMutation & PreparedPlacement => ({
   mutation: {
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.notes === undefined ? {} : { notes: options.notes }),
@@ -346,9 +326,10 @@ const assembleTaskMutation = (
 
 const prepareTaskMutation = (
   options: TaskMutationOptions,
-): Result<PreparedTaskMutation, TaskMutationPreparationError> => {
-  // See prepareTaskParentUpdate: index via keys, not Object.entries(), to
-  // keep the `| undefined` that optional properties actually carry.
+): Result<
+  PreparedTaskMutation & PreparedPlacement,
+  TaskMutationPreparationError
+> => {
   if (!hasTaskMutation(options)) {
     return err({
       kind: "invalid_usage",

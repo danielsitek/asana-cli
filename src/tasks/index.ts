@@ -71,7 +71,7 @@ export type TaskMutation = Readonly<{
   custom_fields?: Readonly<Record<string, number | string | null>>;
 }>;
 
-type TaskMutationOptions = Readonly<{
+export type TaskMutationOptions = Readonly<{
   name?: string;
   notes?: string;
   notesFile?: string;
@@ -198,31 +198,31 @@ export type TaskUpdateResult = Readonly<{
   applied: TaskMutation & Readonly<{ section?: string; project?: string }>;
 }>;
 
-export type PreparedTaskUpdate = Readonly<{
-  taskId: string;
-  appendNotes?: boolean;
+export type PreparedTaskMutation = Readonly<{
   mutation: TaskMutation;
   notesFile?: string;
   resolveAssigneeMe: boolean;
   mySection?: ResourceSelector;
-  sectionGid?: string;
-  projectGid?: string;
   customFields: readonly PreparedCustomField[];
   fields?: readonly string[];
 }>;
+
+export type PreparedTaskUpdate = PreparedTaskMutation &
+  Readonly<{
+    taskId: string;
+    appendNotes?: boolean;
+    sectionGid?: string;
+    projectGid?: string;
+  }>;
 
 export type TaskCreateOptions = TaskMutationOptions &
   Readonly<{ parent?: string; project?: string }>;
 
-export type PreparedTaskCreate = Readonly<{
-  target: TaskCreationTarget;
-  mutation: TaskMutation & Readonly<{ name: string }>;
-  notesFile?: string;
-  resolveAssigneeMe: boolean;
-  mySection?: ResourceSelector;
-  customFields: readonly PreparedCustomField[];
-  fields?: readonly string[];
-}>;
+export type PreparedTaskCreate = PreparedTaskMutation &
+  Readonly<{
+    target: TaskCreationTarget;
+    mutation: TaskMutation & Readonly<{ name: string }>;
+  }>;
 
 export type TaskCreationStageName =
   | "create"
