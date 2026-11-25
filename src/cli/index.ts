@@ -130,7 +130,7 @@ export const execute = async (
   argv: readonly string[],
   dependencies: ExecuteDependencies,
 ): Promise<Execution> => {
-  const version = dependencies.version ?? "0.13.0";
+  const version = dependencies.version ?? "0.14.0";
   const program = new Command()
     .name("asana-cli")
     .version(version, "-v, --version");

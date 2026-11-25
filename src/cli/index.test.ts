@@ -717,9 +717,9 @@ describe("execute", () => {
     ["long help", ["--help"], "Usage: asana-cli"],
     ["help command", ["tasks", "help", "get"], "Usage: asana-cli tasks get"],
     ["bare parent", ["tasks"], "Usage: asana-cli tasks"],
-    ["short version", ["-v"], "0.13.0\n"],
-    ["long version", ["--version"], "0.13.0\n"],
-    ["subcommand version", ["whoami", "--version"], "0.13.0\n"],
+    ["short version", ["-v"], "0.14.0\n"],
+    ["long version", ["--version"], "0.14.0\n"],
+    ["subcommand version", ["whoami", "--version"], "0.14.0\n"],
     ["completion", ["completion", "zsh"], "#compdef asana-cli"],
     ["discovery", ["capabilities", "--json"], '"schema_version":1'],
     ["skill list", ["skill", "list"], "Codex"],
@@ -829,7 +829,7 @@ describe("execute", () => {
       ["whoami", "--version"],
     ]) {
       expect(await execute(argv, { environment: {}, identity })).toEqual({
-        stdout: "0.13.0\n",
+        stdout: "0.14.0\n",
         stderr: "",
         exitCode: 0,
       });

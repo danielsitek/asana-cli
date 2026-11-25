@@ -3,6 +3,22 @@
 All notable changes to this project are documented in this file. This project
 follows [Semantic Versioning](https://semver.org/).
 
+## 0.14.0
+
+- Append plain text to task notes with `tasks update --append-notes`, preserving
+  existing inline images. Ambiguous writes report `outcome_unknown` so callers
+  can verify the description before retrying.
+- Preview task creation, updates, and attachment uploads with `--dry-run`.
+- Bound network requests and retry waits with one configurable `--timeout`
+  per command, including signed attachment downloads.
+- Inspect capabilities for a command group or a single command. The JSON
+  contract describes choices, requirements, and operation behavior.
+- Make errors more actionable with command syntax, recovery hints, and retry
+  guidance. A bare `tasks list` now returns a usage error.
+- Skip update checks for local commands, JSON output, and write previews.
+- Validate configuration inputs and attachment download destinations earlier.
+- Separate CLI parsing and execution and simplify command registration.
+
 ## 0.13.0
 
 - Post threaded replies to task comments with `tasks comment --reply-to`.
