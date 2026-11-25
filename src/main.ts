@@ -9,7 +9,7 @@ import { checkForUpdate } from "./update/index.ts";
 declare const __APP_VERSION__: string | undefined;
 
 const version =
-  typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.13.0";
+  typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.14.0";
 const client = new AsanaHttpClient();
 const attachmentWriter = new AsanaAttachmentWriter();
 const updateChecksEnabled =
